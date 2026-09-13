@@ -11,11 +11,13 @@ import kotlin.math.sin
 
 /** A bone as authored: head and tail in canvas pixels, angles in degrees. */
 data class BoneSpec(
-    val name: String,
-    val parentName: String?,
-    // Mutable: the bone editor moves these and re-bakes the rig. Head and tail are in
-    // canvas coordinates, which is also exactly the rest pose, which is why editing works
-    // in canvas space and needs no pose to be undone first.
+    // All four are mutable: the bone editor moves a joint, reparents a limb and deletes a
+    // bone outright. Head and tail are in canvas coordinates, which is also exactly the
+    // rest pose, which is why editing works in canvas space and needs no pose to be undone
+    // first -- and why reparenting never moves anything. Nothing is re-derived from the
+    // parent until the rig is baked again.
+    var name: String,
+    var parentName: String?,
     var head: Vec2,
     var tail: Vec2,
     val minAngle: Float,
@@ -65,9 +67,11 @@ class CharacterSpec(
     val canvasWidth: Float,
     val canvasHeight: Float,
     val headHeight: Float,
-    val bones: List<BoneSpec>,
+    /** Mutable, and ordered parents-first: that is the order [buildSkeleton] requires. */
+    val bones: MutableList<BoneSpec>,
     val ikChains: List<IkChainSpec>,
-    val layers: List<LayerSpec>,
+    /** Mutable: a bone that is added or deleted changes the draw order with it. */
+    val layers: MutableList<LayerSpec>,
     val swaps: List<SwapRuleSpec>,
     /** Centre line of the figure in canvas coordinates. */
     val centreX: Float,
@@ -176,7 +180,7 @@ class CharacterSpec(
                     colliderType = col?.optString("type", "capsule") ?: "capsule",
                     colliderRadius = col?.optDouble("radius")?.toFloat() ?: 0f,
                 )
-            }
+            }.toMutableList()
 
             val chainsArr = o.optJSONArray("ikChains")
             val chains = (0 until (chainsArr?.length() ?: 0)).map { i ->
@@ -188,7 +192,7 @@ class CharacterSpec(
             val layers = (0 until (layersArr?.length() ?: 0)).map { i ->
                 val l = layersArr!!.getJSONObject(i)
                 LayerSpec(l.getString("bone"), l.getInt("z"))
-            }
+            }.toMutableList()
 
             val swapsArr = o.optJSONArray("layerSwaps")
             val swaps = (0 until (swapsArr?.length() ?: 0)).map { i ->

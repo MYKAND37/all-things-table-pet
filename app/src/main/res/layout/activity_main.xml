@@ -263,36 +263,56 @@
                 android:layout_height="match_parent"
                 android:visibility="gone" />
 
-            <LinearLayout
-                android:id="@+id/rigBar"
+            <HorizontalScrollView
+                android:id="@+id/rigBarScroll"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="bottom"
-                android:gravity="center"
-                android:orientation="horizontal"
-                android:padding="8dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:scrollbars="none"
                 android:visibility="gone">
 
-                <TextView
-                    android:id="@+id/rigMode"
-                    style="@style/AlignButton"
-                    android:text="@string/rig_mode_pose" />
+                <LinearLayout
+                    android:id="@+id/rigBar"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingTop="8dp"
+                    android:paddingBottom="8dp">
 
-                <TextView
-                    android:id="@+id/rigSaveBones"
-                    style="@style/AlignButton"
-                    android:text="@string/rig_save_bones" />
+                    <TextView
+                        android:id="@+id/rigMode"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_mode_pose" />
 
-                <TextView
-                    android:id="@+id/rigReset"
-                    style="@style/AlignButton"
-                    android:text="@string/rig_reset" />
+                    <TextView
+                        android:id="@+id/rigAddBone"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_add_bone" />
 
-                <TextView
-                    android:id="@+id/rigSavePose"
-                    style="@style/AlignButton"
-                    android:text="@string/rig_save_pose" />
-            </LinearLayout>
+                    <TextView
+                        android:id="@+id/rigBoneList"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_bone_list" />
+
+                    <TextView
+                        android:id="@+id/rigSaveBones"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_save_bones" />
+
+                    <TextView
+                        android:id="@+id/rigReset"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_reset" />
+
+                    <TextView
+                        android:id="@+id/rigSavePose"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_save_pose" />
+                </LinearLayout>
+            </HorizontalScrollView>
 
             <TextView
                 android:id="@+id/statusLine"

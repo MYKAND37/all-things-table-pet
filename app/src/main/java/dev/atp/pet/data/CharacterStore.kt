@@ -1,7 +1,8 @@
 package dev.atp.pet.data
 
 import android.content.Context
-import dev.atp.pet.engine.math.Vec2
+import dev.atp.pet.engine.skeleton.BoneSpec
+import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -184,29 +185,102 @@ class CharacterStore(private val context: Context) {
     }
 
     /**
-     * Write back the rig geometry after the bone editor moved it.
+     * Write the rig back after the bone editor changed it.
      *
-     * [geometry] maps a bone name to its head and tail in canvas coordinates. The version
-     * is bumped so the seeding pass — which refreshes the bundled spec whenever the app
-     * ships a newer one — leaves these edits alone instead of overwriting them on the
-     * next launch.
+     * [bones] is the whole rig rather than a diff, because the editor can add a bone,
+     * reparent one and delete one; a bone missing from the list has been deleted. Its
+     * artwork is deleted too — but only down at the bottom, after the spec is safely
+     * written. Until then a delete is an intention, and a session that is walked away from
+     * instead of saved has to leave the drawings alone.
+     *
+     * A bone the package has never seen gets the fields the runtime always reads, with
+     * defaults that mean "work it out from the figure". The version is bumped so the
+     * seeding pass — which refreshes the bundled spec whenever the app ships a newer one —
+     * leaves these edits alone instead of overwriting them on the next launch.
      */
-    fun saveBones(id: String, geometry: Map<String, Pair<Vec2, Vec2>>): Boolean {
+    fun saveRig(id: String, bones: List<BoneSpec>, backToFront: List<String>): Boolean {
+        if (bones.isEmpty()) return false
+        if (RigEdit.problem(bones) != null) return false
         val folder = folder(id) ?: return false
-        return try {
+        var orphaned: List<String> = emptyList()
+        val ok = try {
             val root = JSONObject(folder.specText())
-            val arr = root.getJSONArray("bones")
-            for (i in 0 until arr.length()) {
-                val b = arr.getJSONObject(i)
-                val g = geometry[b.getString("name")] ?: continue
-                b.put("head", JSONArray(listOf(g.first.x.toDouble(), g.first.y.toDouble())))
-                b.put("tail", JSONArray(listOf(g.second.x.toDouble(), g.second.y.toDouble())))
+            val old = root.optJSONArray("bones") ?: JSONArray()
+            val alive = bones.map { it.name }.toSet()
+            val kept = HashMap<String, JSONObject>()
+            val gone = mutableListOf<String>()
+            for (i in 0 until old.length()) {
+                val b = old.getJSONObject(i)
+                val name = b.getString("name")
+                if (name in alive) kept[name] = b else gone.add(name)
             }
+            orphaned = gone
+
+            val arr = JSONArray()
+            for (b in RigEdit.order(bones)) {
+                val o = kept[b.name] ?: JSONObject()
+                o.put("name", b.name)
+                if (b.parentName == null) o.put("parent", JSONObject.NULL) else o.put("parent", b.parentName)
+                o.put("head", JSONArray(listOf(b.head.x.toDouble(), b.head.y.toDouble())))
+                o.put("tail", JSONArray(listOf(b.tail.x.toDouble(), b.tail.y.toDouble())))
+                if (!kept.containsKey(b.name)) {
+                    o.put("limits", JSONArray(listOf(-180.0, 180.0)))
+                    o.put("collider", JSONObject().put("type", "capsule").put("radius", 0.0))
+                }
+                arr.put(o)
+            }
+            root.put("bones", arr)
+
+            val live = bones.map { it.name }.toSet()
+            val order = backToFront.filter { it in live } +
+                bones.map { it.name }.filter { it !in backToFront }
+            val layers = JSONArray()
+            order.forEachIndexed { index, bone ->
+                layers.put(JSONObject().put("bone", bone).put("z", 10 + index * 10))
+            }
+            root.put("layers", layers)
+
+            // A depth rule naming a bone that is gone can never fire again, and an IK chain
+            // naming one throws the moment it is dragged.
+            val rules = JSONArray()
+            val oldRules = root.optJSONArray("layerSwaps")
+            for (i in 0 until (oldRules?.length() ?: 0)) {
+                val r = oldRules!!.getJSONObject(i)
+                if (namesMissing(r, live)) continue
+                rules.put(r)
+            }
+            root.put("layerSwaps", rules)
+
+            val chains = JSONArray()
+            val oldChains = root.optJSONArray("ikChains")
+            for (i in 0 until (oldChains?.length() ?: 0)) {
+                val c = oldChains!!.getJSONObject(i)
+                if (c.optString("upper") !in live || c.optString("lower") !in live) continue
+                chains.put(c)
+            }
+            root.put("ikChains", chains)
+
             root.put("version", root.optInt("version", 0) + 1)
             writeSpec(folder, root)
         } catch (e: Exception) {
             false
         }
+        if (!ok) return false
+        for (name in orphaned) folder.partFile(name).delete()
+        return true
+    }
+
+    /** True when a depth rule refers to a bone that is no longer in the rig. */
+    private fun namesMissing(rule: JSONObject, live: Set<String>): Boolean {
+        rule.optJSONObject("trigger")?.let {
+            if (it.optString("bone") !in live) return true
+            if (it.optString("reference") !in live) return true
+        }
+        for (key in listOf("parts", "behind")) {
+            val a = rule.optJSONArray(key) ?: continue
+            for (i in 0 until a.length()) if (a.optString(i) !in live) return true
+        }
+        return false
     }
 
     // ── 动作预设 ────────────────────────────────────────────────────────────

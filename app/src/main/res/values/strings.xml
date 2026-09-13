@@ -65,9 +65,46 @@
     <string name="rig_save_bones">保存骨骼</string>
     <string name="rig_reset">复位</string>
     <string name="rig_save_pose">存为动作</string>
+    <string name="rig_hint_pose">拖关节摆姿势 · 双击复位</string>
+    <string name="rig_hint_bones">拖关节改骨骼 · 拖橙点改长度 · 加骨骼后点两下画出来</string>
     <string name="rig_bones_saved">骨骼已保存</string>
     <string name="rig_save_failed">保存失败</string>
     <string name="rig_pose_name">动作名称</string>
     <string name="rig_pose_saved">动作已保存</string>
+
+    <!-- 骨骼编辑器：加骨骼 / 改父级 / 删骨骼 -->
+    <string name="rig_add_bone">＋ 加骨骼</string>
+    <string name="rig_bone_list">骨骼列表</string>
+    <string name="rig_bone_list_hint">缩进表示父子关系，上排是下排的父级。</string>
+    <string name="rig_new_bone">新建骨骼</string>
+    <string name="rig_new_bone_hint">选一个父级，然后在画布上点两下画出这根骨骼。</string>
+    <string name="rig_bone_name">骨骼名字</string>
+    <string name="rig_bone_none">（无 · 作为根骨骼）</string>
+    <string name="rig_bone_root">根骨骼 · 没有父级</string>
+    <string name="rig_bone_parent">父级：</string>
+    <string name="rig_change_parent">改父级</string>
+    <string name="rig_change_parent_hint">点一个骨骼当它的新父级。它不会移动，只是从此跟着新的父级动。</string>
+    <string name="rig_name_needed">得给骨骼起个名字</string>
+    <string name="rig_name_taken">这个名字已经有了</string>
+    <string name="rig_one_root">一棵骨架只能有 1 根根骨骼</string>
+    <string name="rig_parent_loop">不能接到自己的下级上</string>
+    <string name="rig_root_undeletable">根骨骼不能删</string>
+    <string name="rig_bone_unfinished">还有一根骨骼只点了起点，再点一下定出末端</string>
+    <string name="rig_delete_kids">它有 %1$d 根子骨骼，会接到「%2$s」上。</string>
+    <string name="rig_delete_part">它导入的图片会在保存后一起删掉。</string>
+    <string name="rig_clear">清空骨骼</string>
+    <string name="rig_clear_button">清空（只留根）</string>
+    <string name="rig_clear_confirm">只保留根骨骼「%1$s」，其他骨骼全部删掉？\n它们的图片会在保存后一起删除，动作里的角度也会失效。</string>
     <string name="pose_none">不摆动作</string>
+
+    <!-- 测试场：动作列表 -->
+    <string name="sandbox_actions">动作</string>
+    <string name="action_list_title">动作列表</string>
+    <string name="action_close">关闭</string>
+    <string name="action_none_hint">松开动作，回到站姿</string>
+    <string name="action_joints">%1$d 个关节</string>
+    <string name="action_rename">改名</string>
+    <string name="action_delete">删除</string>
+    <string name="action_renamed">已改名</string>
+    <string name="action_empty">还没有动作。\n去「桌宠管理 → 打开一只桌宠 → 摆姿势 → 存为动作」存一个，这里就会出现。</string>
 </resources>

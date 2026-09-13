@@ -431,6 +431,19 @@ class Ragdoll(
         for (b in bones) target[b.name] = 0f
     }
 
+    /**
+     * Put the figure back on its feet where it started, keeping the joints as they are.
+     *
+     * Picking an action off the list has to be visible, and a pet that was thrown into a
+     * corner would otherwise strike the pose lying on its side where nobody can see it.
+     */
+    fun home() {
+        rootPos = rootHome
+        rootVel = Vec2.ZERO
+        pinLast = null
+        pinVel = Vec2.ZERO
+    }
+
     /** Let go: keep whatever speed the drag had. */
     fun release() {
         rootVel = pinVel
@@ -439,10 +452,7 @@ class Ragdoll(
     }
 
     fun reset() {
-        rootPos = rootHome
-        rootVel = Vec2.ZERO
-        pinLast = null
-        pinVel = Vec2.ZERO
+        home()
         for (b in bones) {
             angle[b.name] = 0f
             anglePrev[b.name] = 0f

@@ -97,7 +97,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** null clears back to limp. */
     fun applyPose(angles: Map<String, Float>?) {
         val rag = ragdoll ?: return
-        if (angles == null) rag.clearPose() else rag.applyPose(angles)
+        if (angles == null) {
+            rag.clearPose()
+        } else {
+            // Choosing an action is a request to watch it. A pet that has been thrown into
+            // a corner would otherwise strike the pose lying on its side, off screen.
+            rag.home()
+            rag.applyPose(angles)
+            framePet()
+        }
         stiffness = rag.stiffness
         invalidate()
     }

@@ -9,6 +9,7 @@ import android.os.Bundle
 import android.view.Gravity
 import android.view.View
 import android.widget.EditText
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -16,11 +17,15 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.CharacterStore
+import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.PhysicsSandboxView
+import dev.atp.pet.ui.PosePreview
 import dev.atp.pet.ui.SkeletonView
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -61,10 +66,21 @@ class MainActivity : AppCompatActivity() {
     /** Rig editor. */
     private lateinit var rigBar: View
     private lateinit var rigMode: TextView
+    private lateinit var rigAddBone: View
+    private lateinit var rigBoneList: View
+    private lateinit var rigSaveBones: View
+    private lateinit var rigSavePose: View
     private var rigBoneMode = false
 
-    /** Which saved pose the sandbox is holding, if any. */
+    /** The open bone list, so an edit can redraw it where it stands. */
+    private var boneDialog: AlertDialog? = null
+    private lateinit var boneListBox: LinearLayout
+
+    /** Which saved action the sandbox is holding, if any. */
     private var activePose: String? = null
+
+    /** The open action list, so a rename or a delete can redraw it in place. */
+    private var actionDialog: AlertDialog? = null
 
     private lateinit var sidebar: LinearLayout
     private lateinit var railHint: TextView
@@ -105,12 +121,21 @@ class MainActivity : AppCompatActivity() {
         partListScroll = findViewById(R.id.partListScroll)
         partList = findViewById(R.id.partList)
         skeletonView = findViewById(R.id.skeletonView)
-        rigBar = findViewById(R.id.rigBar)
+        rigBar = findViewById(R.id.rigBarScroll)
         rigMode = findViewById(R.id.rigMode)
+        rigAddBone = findViewById(R.id.rigAddBone)
+        rigBoneList = findViewById(R.id.rigBoneList)
+        rigSaveBones = findViewById(R.id.rigSaveBones)
+        rigSavePose = findViewById(R.id.rigSavePose)
         findViewById<View>(R.id.rigMode).setOnClickListener { toggleRigMode() }
+        findViewById<View>(R.id.rigAddBone).setOnClickListener { askNewBone() }
+        findViewById<View>(R.id.rigBoneList).setOnClickListener { showBoneList() }
         findViewById<View>(R.id.rigSaveBones).setOnClickListener { saveBones() }
         findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
         findViewById<View>(R.id.rigSavePose).setOnClickListener { askPoseName() }
+        // Adding, deleting or reparenting a bone redraws the list it was done from.
+        skeletonView.onRigChanged = { refreshBoneList() }
+        applyRigMode()
 
         depthScroll = findViewById(R.id.depthScroll)
         depthList = findViewById(R.id.depthList)
@@ -185,7 +210,7 @@ class MainActivity : AppCompatActivity() {
         if (pane != Pane.PET_RIG && rigBoneMode) {
             rigBoneMode = false
             skeletonView.setBoneEditMode(false)
-            rigMode.text = getString(R.string.rig_mode_pose)
+            applyRigMode()
         }
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN)
@@ -196,7 +221,7 @@ class MainActivity : AppCompatActivity() {
             Pane.SANDBOX -> statusLine.text = "拖起来甩出去 · 双击复位 · 上面选桌宠"
             Pane.PET_LIST -> statusLine.text = ""
             Pane.PET_PARTS -> statusLine.text = ""
-            Pane.PET_RIG -> statusLine.text = "拖关节摆姿势 · 双击复位"
+            Pane.PET_RIG -> rigHint()
             Pane.PART_ALIGN -> Unit
             Pane.PET_DEPTH -> statusLine.text = getString(R.string.depth_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
@@ -243,47 +268,24 @@ class MainActivity : AppCompatActivity() {
         }
         petChooser.addView(stiffChip)
 
+        // Actions live behind one button rather than a row of chips: a character can have
+        // any number of them, and the list needs room to show what each one looks like.
         val poses = summoned?.let { store.loadPoses(it.id) } ?: emptyList()
-        if (poses.isNotEmpty()) {
-            val none = label(getString(R.string.pose_none), 12f, if (activePose == null) INK else MUTED)
-            none.background = getDrawable(
-                if (activePose == null) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-            )
-            none.setPadding(dp(12), dp(6), dp(12), dp(6))
-            val np = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            )
-            np.marginEnd = dp(6)
-            none.layoutParams = np
-            none.setOnClickListener {
-                activePose = null
-                sandboxView.applyPose(null)
-                buildPetChooser()
-            }
-            petChooser.addView(none)
-
-            for (pose in poses) {
-                val on = activePose == pose.name
-                val chip = label(pose.name, 12f, if (on) INK else MUTED)
-                chip.background = getDrawable(
-                    if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-                )
-                chip.setPadding(dp(12), dp(6), dp(12), dp(6))
-                val lp = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                )
-                lp.marginEnd = dp(6)
-                chip.layoutParams = lp
-                chip.setOnClickListener {
-                    activePose = pose.name
-                    sandboxView.applyPose(pose.angles)
-                    buildPetChooser()
-                }
-                petChooser.addView(chip)
-            }
-        }
+        val action = label(
+            if (activePose == null) getString(R.string.sandbox_actions) + " (" + poses.size + ")"
+            else getString(R.string.sandbox_actions) + " · " + activePose,
+            12f, INK,
+        )
+        action.background = getDrawable(R.drawable.menu_item_selected)
+        action.setPadding(dp(12), dp(6), dp(12), dp(6))
+        val ap = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        ap.marginEnd = dp(10)
+        action.layoutParams = ap
+        action.setOnClickListener { showActionList() }
+        petChooser.addView(action)
 
         for (folder in characters) {
             val chip = label(folder.id, 12f, if (folder == summoned) INK else MUTED)
@@ -305,6 +307,183 @@ class MainActivity : AppCompatActivity() {
             }
             petChooser.addView(chip)
         }
+    }
+
+    /**
+     * The action list.
+     *
+     * 摆姿势 saves actions; this is where they get used. Every row is one tap from the pet
+     * doing it, and renaming and deleting live here too: this is where a name stops meaning
+     * anything, three weeks after it was saved.
+     */
+    private fun showActionList() {
+        val folder = summoned ?: return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.action_list_title))
+            .setView(box)
+            .setNegativeButton(R.string.action_close, null)
+            .setOnDismissListener { actionDialog = null }
+            .create()
+        actionDialog = dialog
+        fillActionList(box, folder)
+        dialog.show()
+    }
+
+    private fun fillActionList(box: LinearLayout, folder: CharacterFolder) {
+        box.removeAllViews()
+        val poses = store.loadPoses(folder.id)
+        // The preview is drawn from the skeleton alone; a spec that will not parse just
+        // means the list comes up without pictures.
+        val spec = try {
+            CharacterSpec.parse(folder.specText())
+        } catch (e: Exception) {
+            null
+        }
+        actionDialog?.setTitle(getString(R.string.action_list_title) + " (" + poses.size + ")")
+
+        box.addView(
+            actionRow(
+                folder, box, null, emptyMap(),
+                getString(R.string.action_none_hint), spec, activePose == null,
+            )
+        )
+        for (pose in poses) {
+            box.addView(
+                actionRow(
+                    folder, box, pose.name, pose.angles,
+                    getString(R.string.action_joints, pose.angles.size), spec,
+                    activePose == pose.name,
+                )
+            )
+        }
+        if (poses.isEmpty()) {
+            box.addView(label(getString(R.string.action_empty), 11f, MUTED, top = 14))
+        }
+    }
+
+    /** One row of the action list: a picture, a name, and the two things you can do to it. */
+    private fun actionRow(
+        folder: CharacterFolder,
+        box: LinearLayout,
+        name: String?,
+        angles: Map<String, Float>,
+        detail: String,
+        spec: CharacterSpec?,
+        selected: Boolean,
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = getDrawable(
+                if (selected) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            isClickable = true
+            isFocusable = true
+        }
+        val params = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        params.bottomMargin = dp(6)
+        row.layoutParams = params
+
+        val side = dp(46)
+        val picture = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            spec?.let {
+                setImageBitmap(
+                    PosePreview.render(
+                        it, angles, (side * 2).coerceAtMost(160),
+                        if (selected) FIGURE_ON else FIGURE_OFF,
+                    )
+                )
+            }
+        }
+        picture.layoutParams = LinearLayout.LayoutParams(side, side).apply { marginEnd = dp(10) }
+        row.addView(picture)
+
+        val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        text.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+        )
+        text.addView(label(name ?: getString(R.string.pose_none), 14f, INK))
+        text.addView(label(detail, 10f, MUTED))
+        row.addView(text)
+
+        if (name == null) {
+            row.addView(label(if (selected) "✓" else "", 15f, INK))
+        } else {
+            val rename = label(getString(R.string.action_rename), 11f, MUTED)
+            rename.setPadding(dp(8), dp(6), dp(8), dp(6))
+            rename.setOnClickListener { askRenameAction(folder, box, name, angles) }
+            row.addView(rename)
+
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+            remove.setOnClickListener { confirmDeleteAction(folder, box, name) }
+            row.addView(remove)
+        }
+
+        row.setOnClickListener {
+            activePose = name
+            sandboxView.applyPose(if (name == null) null else angles)
+            // Holding an action drives the springs to a strength of its own, so the chip
+            // has to move with it instead of going on claiming the old setting.
+            stiffnessStep = STIFFNESS_VALUES.indices
+                .minByOrNull { abs(STIFFNESS_VALUES[it] - sandboxView.stiffness) } ?: 0
+            buildPetChooser()
+            // Picking is the point of the list; closing it lets the pet be watched.
+            actionDialog?.dismiss()
+        }
+        return row
+    }
+
+    private fun askRenameAction(
+        folder: CharacterFolder,
+        box: LinearLayout,
+        name: String,
+        angles: Map<String, Float>,
+    ) {
+        val input = EditText(this).apply {
+            setText(name)
+            setSelection(name.length)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.action_rename)
+            .setView(input)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val next = input.text.toString().trim()
+                if (next.isEmpty() || next == name) return@setPositiveButton
+                // Written under the new name first, so a failure cannot lose the action.
+                if (store.savePose(folder.id, next, angles)) {
+                    store.deletePose(folder.id, name)
+                    if (activePose == name) activePose = next
+                    Toast.makeText(this, getString(R.string.action_renamed), Toast.LENGTH_SHORT).show()
+                }
+                fillActionList(box, folder)
+                if (summoned?.id == folder.id) buildPetChooser()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    private fun confirmDeleteAction(folder: CharacterFolder, box: LinearLayout, name: String) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.action_delete) + " · " + name)
+            .setPositiveButton(R.string.depth_remove) { _, _ ->
+                store.deletePose(folder.id, name)
+                if (activePose == name) {
+                    activePose = null
+                    sandboxView.applyPose(null)
+                }
+                fillActionList(box, folder)
+                buildPetChooser()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
     }
 
     // ── 桌宠管理 ────────────────────────────────────────────────────────────
@@ -372,7 +551,7 @@ class MainActivity : AppCompatActivity() {
             skeletonView.load(folder)
             rigBoneMode = false
             skeletonView.setBoneEditMode(false)
-            rigMode.text = getString(R.string.rig_mode_pose)
+            applyRigMode()
             show(Pane.PET_RIG)
         }
         partList.addView(rig)
@@ -799,17 +978,51 @@ class MainActivity : AppCompatActivity() {
 
     // ── 骨骼编辑器 ──────────────────────────────────────────────────────────
 
-    private fun toggleRigMode() {
-        rigBoneMode = !rigBoneMode
-        skeletonView.setBoneEditMode(rigBoneMode)
+    /**
+     * Each mode shows only what it can use: posing has no bones to edit, and saving the
+     * bones while posing would only write back what is already there.
+     */
+    private fun applyRigMode() {
         rigMode.text = getString(
             if (rigBoneMode) R.string.rig_mode_bones else R.string.rig_mode_pose
         )
+        val editing = if (rigBoneMode) View.VISIBLE else View.GONE
+        rigAddBone.visibility = editing
+        rigBoneList.visibility = editing
+        rigSaveBones.visibility = editing
+        rigSavePose.visibility = if (rigBoneMode) View.GONE else View.VISIBLE
+    }
+
+    private fun rigHint() {
+        statusLine.text = getString(
+            if (rigBoneMode) R.string.rig_hint_bones else R.string.rig_hint_pose
+        )
+    }
+
+    private fun toggleRigMode() {
+        rigBoneMode = !rigBoneMode
+        skeletonView.setBoneEditMode(rigBoneMode)
+        applyRigMode()
+        rigHint()
     }
 
     private fun saveBones() {
         val folder = opened ?: return
-        val ok = store.saveBones(folder.id, skeletonView.editedBones())
+        // Half a bone is not a bone: the first tap is only a marker until the second one
+        // gives it a direction, and saving now would drop it without saying so.
+        if (skeletonView.addingBone) {
+            Toast.makeText(this, R.string.rig_bone_unfinished, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val bones = skeletonView.rigBones()
+        // The editor refuses to build a rig it cannot bake, so this is the last net rather
+        // than the first: if it fires, something got past the editor.
+        val problem = RigEdit.problem(bones)
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
+            return
+        }
+        val ok = store.saveRig(folder.id, bones, skeletonView.rigLayers())
         Toast.makeText(
             this,
             getString(if (ok) R.string.rig_bones_saved else R.string.rig_save_failed),
@@ -820,8 +1033,276 @@ class MainActivity : AppCompatActivity() {
         skeletonView.load(folder)
         rigBoneMode = false
         skeletonView.setBoneEditMode(false)
-        rigMode.text = getString(R.string.rig_mode_pose)
+        applyRigMode()
         if (summoned?.id == folder.id) summoned?.let { sandboxView.load(it) }
+    }
+
+    // ── 加骨骼 / 改父级 / 删骨骼 ────────────────────────────────────────────
+
+    /** A new bone: a name, a parent, then two taps on the canvas to draw it. */
+    private fun askNewBone() {
+        val bones = skeletonView.rigBones()
+        if (bones.isEmpty()) return
+        val input = EditText(this).apply {
+            setText(RigEdit.freeName(bones))
+            setSelection(text.length)
+            hint = getString(R.string.rig_bone_name)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        pickBone(
+            title = getString(R.string.rig_new_bone),
+            bones = bones,
+            hint = getString(R.string.rig_new_bone_hint),
+            current = null,
+            blocked = emptySet(),
+            // A rig that already has a root cannot take a second one, so the option is not
+            // offered rather than offered and then refused.
+            allowRoot = bones.none { it.parentName == null },
+            header = input,
+        ) { parent ->
+            val name = RigEdit.sanitise(input.text.toString())
+            when {
+                name.isEmpty() -> {
+                    Toast.makeText(this, R.string.rig_name_needed, Toast.LENGTH_SHORT).show()
+                    false
+                }
+                bones.any { it.name == name } -> {
+                    Toast.makeText(this, R.string.rig_name_taken, Toast.LENGTH_SHORT).show()
+                    false
+                }
+                parent == null && bones.any { it.parentName == null } -> {
+                    Toast.makeText(this, R.string.rig_one_root, Toast.LENGTH_SHORT).show()
+                    false
+                }
+                else -> {
+                    skeletonView.startAddBone(name, parent)
+                    true
+                }
+            }
+        }
+    }
+
+    private fun showBoneList() {
+        val folder = opened ?: return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.rig_bone_list))
+            .setView(box)
+            .setNegativeButton(R.string.action_close, null)
+            .setOnDismissListener { boneDialog = null }
+            .create()
+        boneDialog = dialog
+        boneListBox = box
+        fillBoneList(box, folder)
+        dialog.show()
+    }
+
+    private fun refreshBoneList() {
+        val folder = opened ?: return
+        if (boneDialog?.isShowing == true) fillBoneList(boneListBox, folder)
+    }
+
+    private fun fillBoneList(box: LinearLayout, folder: CharacterFolder) {
+        box.removeAllViews()
+        val bones = skeletonView.rigBones()
+        boneDialog?.setTitle(getString(R.string.rig_bone_list) + " (" + bones.size + ")")
+        box.addView(label(getString(R.string.rig_bone_list_hint), 11f, MUTED, bottom = 8))
+
+        val depth = RigEdit.depths(bones)
+        for (b in bones) box.addView(boneRow(folder, box, b, depth[b.name] ?: 0))
+
+        val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        footer.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(10) }
+
+        val add = label(getString(R.string.rig_add_bone), 12f, INK)
+        add.setPadding(dp(12), dp(8), dp(12), dp(8))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.setOnClickListener { askNewBone() }
+        footer.addView(add)
+
+        val clear = label(getString(R.string.rig_clear_button), 12f, MUTED)
+        clear.setPadding(dp(12), dp(8), dp(12), dp(8))
+        clear.background = getDrawable(R.drawable.menu_item_idle)
+        clear.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = dp(8) }
+        clear.setOnClickListener { confirmKeepOnlyRoot() }
+        footer.addView(clear)
+        box.addView(footer)
+    }
+
+    private fun boneRow(
+        folder: CharacterFolder,
+        box: LinearLayout,
+        bone: BoneSpec,
+        depth: Int,
+    ): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = getDrawable(R.drawable.menu_item_idle)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(6) }
+
+        val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        text.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+        )
+        val zh = boneLabel(bone.name)
+        // Indented by depth: a rig is a tree, and a flat list of nineteen names hides it.
+        text.addView(
+            label("    ".repeat(depth) + bone.name + if (zh.isEmpty()) "" else "  " + zh, 13f, INK)
+        )
+        text.addView(
+            label(
+                if (bone.parentName == null) getString(R.string.rig_bone_root)
+                else getString(R.string.rig_bone_parent) + bone.parentName,
+                10f, MUTED,
+            )
+        )
+        row.addView(text)
+
+        val reparent = label(getString(R.string.rig_change_parent), 11f, MUTED)
+        reparent.setPadding(dp(8), dp(6), dp(8), dp(6))
+        reparent.setOnClickListener { askReparent(bone.name) }
+        row.addView(reparent)
+
+        if (bone.parentName != null) {
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+            remove.setOnClickListener { confirmDeleteBone(folder, bone.name) }
+            row.addView(remove)
+        }
+        return row
+    }
+
+    private fun askReparent(name: String) {
+        val bones = skeletonView.rigBones()
+        val bone = bones.firstOrNull { it.name == name } ?: return
+        pickBone(
+            title = getString(R.string.rig_change_parent) + " · " + name,
+            bones = bones,
+            hint = getString(R.string.rig_change_parent_hint),
+            current = bone.parentName,
+            // Its own descendants are greyed out: hanging a bone off its own child is a
+            // loop, and a loop cannot be baked at all.
+            blocked = RigEdit.descendants(bones, name).toSet(),
+            allowRoot = bones.none { it.parentName == null && it.name != name },
+            header = null,
+        ) { parent -> skeletonView.reparentBone(name, parent) }
+    }
+
+    private fun confirmDeleteBone(folder: CharacterFolder, name: String) {
+        val bones = skeletonView.rigBones()
+        val bone = bones.firstOrNull { it.name == name } ?: return
+        val parent = bone.parentName
+        if (parent == null) {
+            Toast.makeText(this, R.string.rig_root_undeletable, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val kids = bones.count { it.parentName == name }
+        val message = StringBuilder()
+        if (kids > 0) {
+            message.append(getString(R.string.rig_delete_kids, kids, parent))
+            message.append("\n")
+        }
+        if (folder.partFile(name).isFile) message.append(getString(R.string.rig_delete_part))
+
+        val builder = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.action_delete) + " · " + name)
+        if (message.isNotEmpty()) builder.setMessage(message.toString())
+        builder
+            .setPositiveButton(R.string.depth_remove) { _, _ -> skeletonView.deleteBone(name) }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    private fun confirmKeepOnlyRoot() {
+        val root = skeletonView.rootName() ?: return
+        AlertDialog.Builder(this)
+            .setTitle(R.string.rig_clear)
+            .setMessage(getString(R.string.rig_clear_confirm, root))
+            .setPositiveButton(R.string.depth_remove) { _, _ -> skeletonView.keepOnlyRoot() }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    /**
+     * A flat picker for "which bone hangs off which".
+     *
+     * The list is the rig itself, indented by depth, so the choice is made against the
+     * shape it is part of. [onPick] answers whether the choice was taken: anything else
+     * leaves the list open, so a name can be corrected without retyping it.
+     */
+    private fun pickBone(
+        title: String,
+        bones: List<BoneSpec>,
+        hint: String,
+        current: String?,
+        blocked: Set<String>,
+        allowRoot: Boolean,
+        header: View?,
+        onPick: (String?) -> Boolean,
+    ) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        header?.let { box.addView(it) }
+        box.addView(label(hint, 11f, MUTED, top = if (header == null) 0 else 6, bottom = 6))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(box)
+            .setNegativeButton(R.string.depth_cancel, null)
+            .create()
+
+        val depth = RigEdit.depths(bones)
+        if (allowRoot) {
+            box.addView(
+                pickRow(null, getString(R.string.rig_bone_none), current, false, dialog, onPick)
+            )
+        }
+        for (b in bones) {
+            val zh = boneLabel(b.name)
+            val text = "    ".repeat(depth[b.name] ?: 0) + b.name +
+                if (zh.isEmpty()) "" else "  " + zh
+            box.addView(pickRow(b.name, text, current, b.name in blocked, dialog, onPick))
+        }
+        dialog.show()
+    }
+
+    private fun pickRow(
+        name: String?,
+        text: String,
+        current: String?,
+        blocked: Boolean,
+        dialog: AlertDialog,
+        onPick: (String?) -> Boolean,
+    ): View {
+        val row = label(text, 13f, if (blocked) MUTED else INK)
+        row.setPadding(dp(12), dp(10), dp(12), dp(10))
+        row.background = getDrawable(
+            if (name == current) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+        )
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        if (blocked) {
+            row.alpha = 0.35f
+            row.setOnClickListener {
+                Toast.makeText(this, R.string.rig_parent_loop, Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            row.setOnClickListener { if (onPick(name)) dialog.dismiss() }
+        }
+        return row
     }
 
     private fun askPoseName() {
@@ -877,6 +1358,10 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         val INK = Color.parseColor("#FF171528")
         val MUTED = Color.parseColor("#A6171528")
+
+        /** The stick figure in an action-list row: solid when it is the one being held. */
+        val FIGURE_ON = Color.parseColor("#FF5B4BC4")
+        val FIGURE_OFF = Color.parseColor("#806E56CF")
 
         val STIFFNESS_VALUES = floatArrayOf(0f, 0.35f, 0.7f, 1f)
         val STIFFNESS_LABELS = arrayOf("刚度 松垮", "刚度 半软", "刚度 偏硬", "刚度 硬挺")

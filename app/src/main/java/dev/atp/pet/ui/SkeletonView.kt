@@ -10,7 +10,10 @@ import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.IkChainSpec
+import dev.atp.pet.engine.skeleton.LayerSpec
+import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.TwoBoneIK
 import dev.atp.pet.render.PartLibrary
@@ -89,6 +92,15 @@ class SkeletonView @JvmOverloads constructor(
         strokeWidth = 1f * density
         color = 0x33000000
     }
+    private val pendingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = 0xFF20A66B.toInt()
+    }
+    private val pendingDot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xFF20A66B.toInt()
+    }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 11f * density
         color = 0xCC222233.toInt()
@@ -98,6 +110,7 @@ class SkeletonView @JvmOverloads constructor(
 
     fun load(folder: CharacterFolder) {
         this.folder = folder
+        cancelAddBone()
         library?.release()
         // Must be dropped as well as released: rebuild() reuses the stored library when
         // there is one, and reusing a released one hands the renderer recycled bitmaps.
@@ -130,7 +143,12 @@ class SkeletonView @JvmOverloads constructor(
         )
 
         handles.clear()
-        val chainByLower = parsed.ikChains.associateBy { it.lower }
+        val alive = built.bones.map { it.name }.toSet()
+        val chainByLower = parsed.ikChains
+            // The rig editor can delete either end of a chain, and a handle that aims at a
+            // bone which is no longer there throws the moment it is touched.
+            .filter { it.upper in alive && it.lower in alive }
+            .associateBy { it.lower }
         for (b in built.bones) {
             if (b.springy) continue
             handles.add(Handle(b, chainByLower[b.name]))
@@ -144,13 +162,183 @@ class SkeletonView @JvmOverloads constructor(
         editBones = on
         active = null
         heldJoint = null
+        if (!on) cancelAddBone()
         if (on) skeleton?.reset()
         invalidate()
     }
 
-    /** Head and tail per bone, in canvas coordinates, for saving. */
-    fun editedBones(): Map<String, Pair<Vec2, Vec2>> =
-        spec?.bones?.associate { it.name to (it.head to it.tail) } ?: emptyMap()
+    // ── rig surgery ─────────────────────────────────────────────────────────
+
+    /** A bone being drawn: named and parented already, waiting for its two taps. */
+    private var pendingName: String? = null
+    private var pendingParent: String? = null
+    private var pendingHead: Vec2? = null
+
+    /** Fired whenever the rig's shape changes, so the host can refresh what it shows. */
+    var onRigChanged: (() -> Unit)? = null
+
+    val addingBone: Boolean get() = pendingName != null
+
+    /** The bones as they stand right now, edits included and parents first. */
+    fun rigBones(): List<BoneSpec> = spec?.bones?.toList() ?: emptyList()
+
+    /** Draw order, back to front, including any bone that has just been added. */
+    fun rigLayers(): List<String> = spec?.layers?.sortedBy { it.z }?.map { it.bone } ?: emptyList()
+
+    fun rootName(): String? = spec?.bones?.firstOrNull { it.parentName == null }?.name
+
+    /**
+     * Draw a new bone: the next two taps on the canvas are its head and its tail.
+     *
+     * Two taps rather than a form, because a bone is a thing in the drawing. The only
+     * honest way to say where it goes is to point at the picture it has to fit.
+     */
+    fun startAddBone(name: String, parentName: String?) {
+        pendingName = name
+        pendingParent = parentName
+        pendingHead = null
+        heldJoint = null
+        active = null
+        // Those two taps must not read as a double tap: the second one would reset the
+        // pose and eat the bone.
+        lastTapAt = 0L
+        onInfo?.invoke("点一下「" + name + "」的起点（关节）")
+        invalidate()
+    }
+
+    fun cancelAddBone() {
+        if (pendingName == null && pendingHead == null) return
+        pendingName = null
+        pendingParent = null
+        pendingHead = null
+        invalidate()
+    }
+
+    /**
+     * Hang a bone off a different parent.
+     *
+     * Nothing moves. The head is stored in canvas coordinates and the parent-relative form
+     * is derived when the rig is baked, so changing the parent changes what the bone
+     * follows, not where it sits — which is the whole reason the rig is authored this way.
+     */
+    fun reparentBone(name: String, parentName: String?): Boolean {
+        val parsed = spec ?: return false
+        val bone = parsed.bones.firstOrNull { it.name == name } ?: return false
+        if (parentName != null && parsed.bones.none { it.name == parentName }) return false
+        if (parentName != null && RigEdit.descendants(parsed.bones, name).contains(parentName)) {
+            onInfo?.invoke("不能接到自己的下级上，那样会成环")
+            return false
+        }
+        if (parentName == null && parsed.bones.any { it.name != name && it.parentName == null }) {
+            onInfo?.invoke("已经有根骨骼了，一棵骨架只能有 1 根")
+            return false
+        }
+        bone.parentName = parentName
+        // Parents must come first in the list, and the new one may well be further down.
+        val reordered = RigEdit.order(parsed.bones.toList())
+        parsed.bones.clear()
+        parsed.bones.addAll(reordered)
+        rebuild(parsed)
+        onInfo?.invoke(name + " 现在挂在 " + (parentName ?: "（根）") + " 下面")
+        onRigChanged?.invoke()
+        return true
+    }
+
+    /**
+     * Remove a bone. Its children are re-hung on its parent, so the rest of the figure
+     * stays exactly where it is. The root is the one bone that cannot go: its children
+     * would have nothing to hang from.
+     */
+    fun deleteBone(name: String): Boolean {
+        val parsed = spec ?: return false
+        val bone = parsed.bones.firstOrNull { it.name == name } ?: return false
+        if (bone.parentName == null) {
+            onInfo?.invoke("根骨骼不能删，它的子骨骼会没有归属")
+            return false
+        }
+        for (b in parsed.bones) if (b.parentName == name) b.parentName = bone.parentName
+        parsed.bones.removeAll { it.name == name }
+        ensureLayers()
+        rebuild(parsed)
+        onInfo?.invoke("删掉了 " + name)
+        onRigChanged?.invoke()
+        return true
+    }
+
+    /** Keep only the root, which is where a rig drawn from nothing starts. */
+    fun keepOnlyRoot(): Boolean {
+        val parsed = spec ?: return false
+        val root = parsed.bones.firstOrNull { it.parentName == null } ?: return false
+        parsed.bones.removeAll { it.name != root.name }
+        ensureLayers()
+        rebuild(parsed)
+        onInfo?.invoke("只留下根骨骼 " + root.name)
+        onRigChanged?.invoke()
+        return true
+    }
+
+    /**
+     * Keep the draw order in step with the bones.
+     *
+     * A bone with no layer is a bone that is never drawn, and a layer for a bone that no
+     * longer exists is a hole in the order. A new bone goes on top; where it really belongs
+     * is the depth editor's question, not this one's.
+     */
+    private fun ensureLayers() {
+        val parsed = spec ?: return
+        val alive = parsed.bones.map { it.name }.toSet()
+        parsed.layers.removeAll { it.bone !in alive }
+        var z = (parsed.layers.maxOfOrNull { it.z } ?: 0) + 10
+        for (b in parsed.bones) {
+            if (parsed.layers.none { it.bone == b.name }) {
+                parsed.layers.add(LayerSpec(b.name, z))
+                z += 10
+            }
+        }
+    }
+
+    /** One tap of a bone being drawn: the first sets the head, the second finishes it. */
+    private fun placePoint(x: Float, y: Float) {
+        val parsed = spec ?: return
+        val name = pendingName ?: return
+        val start = pendingHead
+        if (start == null) {
+            pendingHead = toCanvas(x, y)
+            onInfo?.invoke("再点一下「" + name + "」的末端")
+            invalidate()
+            return
+        }
+        val end = toCanvas(x, y)
+        if (hypot(end.x - start.x, end.y - start.y) < 2f) {
+            onInfo?.invoke("两点挨在一起了，给「" + name + "」一个方向")
+            return
+        }
+        parsed.bones.add(
+            BoneSpec(
+                name = name,
+                // A new bone is a leaf, so appending it keeps parents ahead of children.
+                parentName = pendingParent,
+                head = start,
+                tail = end,
+                minAngle = -180f,
+                maxAngle = 180f,
+                springy = false,
+                stiffness = 0.35f,
+                damping = 0.86f,
+                gravity = 0f,
+                colliderType = "capsule",
+                // Zero means "work out a thickness from the figure" at load time.
+                colliderRadius = 0f,
+            )
+        )
+        pendingName = null
+        pendingParent = null
+        pendingHead = null
+        ensureLayers()
+        rebuild(parsed)
+        onInfo?.invoke(name + " 加好了 · 记得「保存骨骼」")
+        onRigChanged?.invoke()
+    }
 
     /** The current joint angles, for saving as a pose. */
     fun currentAngles(): Map<String, Float> =
@@ -237,6 +425,12 @@ class SkeletonView @JvmOverloads constructor(
                     canvas.drawCircle(vx(p), vy(p), 13f * density, textPaint)
                 }
             }
+            // The head of a bone that is half drawn, so the second tap has something to
+            // aim away from.
+            pendingHead?.let {
+                canvas.drawCircle(vx(it), vy(it), 11f * density, pendingPaint)
+                canvas.drawCircle(vx(it), vy(it), 4f * density, pendingDot)
+            }
         } else {
             for (h in handles) {
                 val tip = h.bone.tipPosition()
@@ -248,8 +442,14 @@ class SkeletonView @JvmOverloads constructor(
         }
 
         canvas.drawText(
-            if (editBones) "蓝点 = 关节 · 橙点 = 骨骼末端"
-            else "拖关节摆姿势 · 双击复位",
+            when {
+                pendingName != null && pendingHead == null ->
+                    "加骨骼 " + pendingName + " · 点一下起点（关节）"
+                pendingName != null ->
+                    "加骨骼 " + pendingName + " · 再点一下末端"
+                editBones -> "蓝点 = 关节 · 橙点 = 骨骼末端"
+                else -> "拖关节摆姿势 · 双击复位"
+            },
             10f * density, 16f * density, textPaint
         )
     }
@@ -302,6 +502,11 @@ class SkeletonView @JvmOverloads constructor(
         val sk = skeleton ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // A bone being drawn owns both taps.
+                if (pendingName != null) {
+                    placePoint(event.x, event.y)
+                    return true
+                }
                 val now = System.currentTimeMillis()
                 if (now - lastTapAt < 300) {
                     sk.reset()
