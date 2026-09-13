@@ -13,6 +13,8 @@ import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.IkChainSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.TwoBoneIK
+import dev.atp.pet.render.PartLibrary
+import dev.atp.pet.render.PartRenderer
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.min
@@ -36,6 +38,7 @@ class SkeletonView @JvmOverloads constructor(
 
     private var spec: CharacterSpec? = null
     private var skeleton: Skeleton? = null
+    private var renderer: PartRenderer? = null
     private val handles = mutableListOf<Handle>()
 
     private var scale = 1f
@@ -87,6 +90,19 @@ class SkeletonView @JvmOverloads constructor(
         spec = parsed
         skeleton = built
 
+        // Parts are optional. With none, the view is a bare rig; with some, the artwork
+        // is drawn underneath a faint skeleton so the two can be compared while posing.
+        val library = PartLibrary.load(
+            context,
+            assetPath.substringBeforeLast('/'),
+            parsed.bones.map { it.name },
+        )
+        renderer = if (library.isEmpty) null else PartRenderer(
+            built,
+            library,
+            parsed.layers.sortedBy { it.z }.map { it.bone },
+        )
+
         handles.clear()
         val chainByLower = parsed.ikChains.associateBy { it.lower }
         for (b in built.bones) {
@@ -98,7 +114,8 @@ class SkeletonView @JvmOverloads constructor(
         invalidate()
         onInfo?.invoke(
             parsed.id + "  ·  " + parsed.bones.size + " bones  ·  " +
-                parsed.ikChains.size + " IK chains  ·  drag a joint"
+                parsed.ikChains.size + " IK chains  ·  " +
+                library.size + " parts  ·  drag a joint"
         )
     }
 
@@ -134,6 +151,20 @@ class SkeletonView @JvmOverloads constructor(
             vx(Vec2(s.canvasWidth / 2f, 0f)), offsetY + s.canvasHeight * scale,
             framePaint
         )
+
+        // Artwork first, in the character's own canvas space.
+        renderer?.let {
+            canvas.save()
+            canvas.translate(offsetX, offsetY)
+            canvas.scale(scale, scale)
+            it.draw(canvas)
+            canvas.restore()
+        }
+
+        // The rig stays visible on top, dimmed when there is art to look at.
+        val fade = renderer != null
+        linePaint.alpha = if (fade) 110 else 255
+        jointPaint.alpha = if (fade) 110 else 255
 
         for (b in sk.bones) {
             val hx = vx(b.worldPosition)

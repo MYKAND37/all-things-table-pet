@@ -307,6 +307,152 @@ def verify(spec, by_name, order):
     return ok
 
 
+# ------------------------------- placeholder parts -------------------------------
+
+def _lerp_profile(points, y):
+    """Piecewise-linear silhouette half-width, used to give the stand-in body shape."""
+    if y <= points[0][0]:
+        return points[0][1]
+    for i in range(len(points) - 1):
+        y0, w0 = points[i]
+        y1, w1 = points[i + 1]
+        if y0 <= y <= y1:
+            t = (y - y0) / float(y1 - y0 or 1)
+            return w0 + (w1 - w0) * t
+    return points[-1][1]
+
+
+def emit_parts(spec, by_name, order, outdir):
+    """
+    Draw a stand-in body, one full-canvas PNG per bone, exactly the way an artist is
+    asked to export theirs.
+
+    This exists to prove the assembly path end to end: if these land on the right bones
+    and move correctly, then real artwork dropped into the same folder will too. Delete
+    the folder and the character goes back to a bare skeleton.
+    """
+    import os
+    from PIL import Image, ImageDraw
+
+    W, H = spec["canvas"]["width"], spec["canvas"]["height"]
+    HH = float(spec["headHeight"])
+    cx = spec["centreX"]
+    wd = spec["proportions"]["widths"]
+    top = spec["headTopY"]
+    S = 2                                     # supersample, then downscale
+
+    os.makedirs(outdir, exist_ok=True)
+
+    # Place every bone in its rest pose before measuring anything off it.
+    for b in order:
+        b.rotation = 0.0
+    update(order)
+
+    # Widths at the head and the tail of each limb, in head-height units. Limbs taper:
+    # a constant-width tube butted against a wide pelvis is what makes a stand-in body
+    # read as a skirt rather than as hips.
+    limb_w = {"shoulder": (0.130, 0.130), "upperarm": (0.245, 0.190),
+              "forearm": (0.190, 0.155), "hand": (0.175, 0.150),
+              "thigh": (0.620, 0.360), "shin": (0.330, 0.200),
+              "foot": (0.230, 0.205)}
+
+    # Widest at the hip joint row, then tapering in toward the crotch: a band that keeps
+    # its full width to the bottom edge reads as a skirt, which is not what a pelvis is.
+    torso_profile = [(455, 52), (560, wd["shoulder"] / 2.0), (920, wd["waist"] / 2.0),
+                     (1000, wd["hip"] / 2.0 - 14), (1055, wd["hip"] / 2.0 - 8),
+                     (1105, wd["hip"] / 2.0 - 46)]
+
+    # Torso bands, each owned by one bone. The artist does the same thing by hand when
+    # they split the body into pelvis / belly / ribcage layers.
+    bands = {
+        "hip": (920, 1110),
+        "spine": (686, 922),
+        "chest": (556, 688),
+    }
+
+    skin = {
+        "hip": (232, 205, 186), "spine": (238, 212, 192), "chest": (242, 217, 197),
+        "neck": (240, 214, 194), "head": (245, 220, 200),
+    }
+
+    def fill_for(name):
+        if name in skin:
+            return skin[name]
+        if name.endswith("_L"):
+            return (236, 210, 190)
+        return (228, 202, 182)
+
+    written = []
+    for b in order:
+        img = Image.new("RGBA", (W * S, H * S), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        col = fill_for(b.name) + (255,)
+        edge = (150, 118, 100, 190)
+
+        if b.name in bands:
+            y0, y1 = bands[b.name]
+            n = 26
+            pts = []
+            for i in range(n + 1):
+                yy = y0 + (y1 - y0) * i / float(n)
+                hw = _lerp_profile(torso_profile, yy)
+                pts.append(((cx - hw) * S, yy * S))
+            for i in range(n, -1, -1):
+                yy = y0 + (y1 - y0) * i / float(n)
+                hw = _lerp_profile(torso_profile, yy)
+                pts.append(((cx + hw) * S, yy * S))
+            d.polygon(pts, fill=col, outline=edge)
+
+        elif b.name == "head":
+            rx = wd["head"] / 2.0
+            ry = HH / 2.0
+            cyy = top + ry
+            d.ellipse([(cx - rx) * S, (cyy - ry) * S, (cx + rx) * S, (cyy + ry) * S],
+                      fill=col, outline=edge)
+
+        elif b.name == "neck":
+            y0, y1 = 424, 560
+            for i in range(2):
+                pass
+            pts = [((cx - 46) * S, y0 * S), ((cx + 46) * S, y0 * S),
+                   ((cx + 58) * S, y1 * S), ((cx - 58) * S, y1 * S)]
+            d.polygon(pts, fill=col, outline=edge)
+
+        else:
+            pair = None
+            for key, fracs in limb_w.items():
+                if b.name.startswith(key):
+                    pair = fracs
+                    break
+            if pair is None:
+                pair = (0.25, 0.25)
+            w0, w1 = pair[0] * HH * S, pair[1] * HH * S
+            hx, hy = b.wpos[0] * S, b.wpos[1] * S
+            tx, ty = tip(b)
+            tx, ty = tx * S, ty * S
+
+            dx, dy = tx - hx, ty - hy
+            blen = math.hypot(dx, dy) or 1.0
+            nx, ny = -dy / blen, dx / blen
+
+            poly = [(hx + nx * w0 / 2, hy + ny * w0 / 2),
+                    (tx + nx * w1 / 2, ty + ny * w1 / 2),
+                    (tx - nx * w1 / 2, ty - ny * w1 / 2),
+                    (hx - nx * w0 / 2, hy - ny * w0 / 2)]
+            d.polygon(poly, fill=col)
+            for (px, py, ww) in ((hx, hy, w0), (tx, ty, w1)):
+                r = ww / 2.0
+                d.ellipse([px - r, py - r, px + r, py + r], fill=col, outline=edge)
+
+        out = img.resize((W, H), Image.LANCZOS)
+        path = os.path.join(outdir, b.name + ".png")
+        out.save(path)
+        written.append(b.name)
+
+    print("parts -> %s  (%d files)" % (outdir, len(written)))
+    return written
+
+
 # ------------------------------- template render -------------------------------
 
 def render(spec, by_name, order, out_path, scale=2):
@@ -472,6 +618,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--spec", required=True)
     ap.add_argument("--out")
+    ap.add_argument("--parts", help="write a stand-in part PNG per bone into this directory")
     ap.add_argument("--verify", action="store_true")
     args = ap.parse_args()
 
@@ -493,6 +640,8 @@ def main():
             rc = 1
     if args.out:
         render(spec, by_name, order, args.out)
+    if args.parts:
+        emit_parts(spec, by_name, order, args.parts)
     return rc
 
 

@@ -13,6 +13,8 @@ import dev.atp.pet.engine.physics.PhysicsBody
 import dev.atp.pet.engine.physics.PhysicsWorld
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.Skeleton
+import dev.atp.pet.render.PartLibrary
+import dev.atp.pet.render.PartRenderer
 import kotlin.math.hypot
 import kotlin.math.min
 
@@ -32,6 +34,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     private var spec: CharacterSpec? = null
     private var skeleton: Skeleton? = null
+    private var renderer: PartRenderer? = null
     private var world: PhysicsWorld? = null
     private var body: PhysicsBody? = null
 
@@ -103,8 +106,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 halfExtents = Vec2(width / 2f, height / 2f),
             )
         )
+        val library = PartLibrary.load(
+            context,
+            assetPath.substringBeforeLast('/'),
+            parsed.bones.map { it.name },
+        )
+        renderer = if (library.isEmpty) null else PartRenderer(
+            built,
+            library,
+            parsed.layers.sortedBy { it.z }.map { it.bone },
+        )
+
         lastFrameNs = System.nanoTime()
-        onInfo?.invoke("drop · drag to throw · double-tap to reset")
+        onInfo?.invoke(
+            library.size.toString() + " parts loaded · drag to throw · double-tap to reset"
+        )
         invalidate()
     }
 
@@ -164,13 +180,24 @@ class PhysicsSandboxView @JvmOverloads constructor(
         )
 
         // ---- character ----
-        for (bone in sk.bones) {
-            val h = bone.worldPosition
-            val t = bone.tipPosition()
-            bonePaint.color = colourFor(bone.name)
-            canvas.drawLine(vx(h.x), vy(h.y), vx(t.x), vy(t.y), bonePaint)
-            jointPaint.color = bonePaint.color
-            canvas.drawCircle(vx(h.x), vy(h.y), 4f * density, jointPaint)
+        // Artwork if the package has any; the bare rig otherwise, so the bench is still
+        // useful before a single part has been drawn.
+        val art = renderer
+        if (art != null) {
+            canvas.save()
+            canvas.translate(offsetX, offsetY)
+            canvas.scale(scale, scale)
+            art.draw(canvas)
+            canvas.restore()
+        } else {
+            for (bone in sk.bones) {
+                val h = bone.worldPosition
+                val t = bone.tipPosition()
+                bonePaint.color = colourFor(bone.name)
+                canvas.drawLine(vx(h.x), vy(h.y), vx(t.x), vy(t.y), bonePaint)
+                jointPaint.color = bonePaint.color
+                canvas.drawCircle(vx(h.x), vy(h.y), 4f * density, jointPaint)
+            }
         }
 
         val state = when {
