@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Frosted surface: a translucent white gradient plus a bright 1dp edge. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <gradient
+                android:angle="135"
+                android:startColor="#BFFFFFFF"
+                android:endColor="#73FFFFFF" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <corners android:radius="28dp" />
+            <stroke
+                android:width="1dp"
+                android:color="#80FFFFFF" />
+        </shape>
+    </item>
+</layer-list>

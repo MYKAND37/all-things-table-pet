@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The aurora wash the frosted panels sit on. -->
+    <color name="bg_base">#FFEDE9F7</color>
+
+    <color name="brand">#FF6C4CE0</color>
+    <color name="brand_soft">#FF8FA8FF</color>
+
+    <color name="text_primary">#FF171528</color>
+    <color name="text_muted">#A6171528</color>
+    <color name="text_subtle">#66171528</color>
+
+    <color name="ripple">#26000000</color>
+</resources>

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Soft colour blobs under everything else. The frosted panels are translucent white,
+  so whatever sits behind them shows through slightly softened — no blur pass needed.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/bg_base" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="440dp"
+                android:centerX="0.12"
+                android:centerY="0.06"
+                android:startColor="#8C8FA8FF"
+                android:endColor="#008FA8FF" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="400dp"
+                android:centerX="0.96"
+                android:centerY="0.20"
+                android:startColor="#7CFFA6C9"
+                android:endColor="#00FFA6C9" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="420dp"
+                android:centerX="0.16"
+                android:centerY="0.94"
+                android:startColor="#6EA8E6CF"
+                android:endColor="#00A8E6CF" />
+        </shape>
+    </item>
+
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="380dp"
+                android:centerX="0.90"
+                android:centerY="0.98"
+                android:startColor="#5CFFD9A0"
+                android:endColor="#00FFD9A0" />
+        </shape>
+    </item>
+</layer-list>

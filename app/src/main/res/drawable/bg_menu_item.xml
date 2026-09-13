@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/ripple">
+    <item>
+        <selector>
+            <item
+                android:drawable="@drawable/menu_item_selected"
+                android:state_selected="true" />
+            <item android:drawable="@drawable/menu_item_idle" />
+        </selector>
+    </item>
+</ripple>

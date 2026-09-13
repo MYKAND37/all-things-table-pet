@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">All Things Table Pet</string>
+
+    <!-- Menu: the four areas from the wireframe. -->
+    <string name="menu_sandbox">测试场</string>
+    <string name="menu_pets">桌宠管理</string>
+    <string name="menu_props">道具管理</string>
+    <string name="menu_logic">逻辑管理</string>
+
+    <string name="content_placeholder">这里先留白，功能待实现</string>
+</resources>

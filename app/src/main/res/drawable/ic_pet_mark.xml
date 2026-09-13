@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A tiny stand-in for a table pet: a head over a body. Tintable, so the launcher
+     icon and the in-app brand mark share one file. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M54,38 m-12,0 a12,12 0 1,0 24,0 a12,12 0 1,0 -24,0" />
+
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M48,54 h12 a8,8 0 0 1 8,8 v10 a8,8 0 0 1 -8,8 h-12 a8,8 0 0 1 -8,-8 v-10 a8,8 0 0 1 8,-8 z" />
+</vector>
