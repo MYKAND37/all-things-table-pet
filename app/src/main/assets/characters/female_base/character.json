@@ -1,7 +1,7 @@
 {
   "id": "female_base",
   "name": "base body female, 6.12 heads",
-  "version": 1,
+  "version": 3,
   "canvas": {
     "width": 1024,
     "height": 2048
@@ -90,7 +90,11 @@
       "limits": [
         -20,
         20
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 150
+      }
     },
     {
       "name": "spine",
@@ -106,7 +110,11 @@
       "limits": [
         -20,
         20
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 125
+      }
     },
     {
       "name": "chest",
@@ -122,7 +130,11 @@
       "limits": [
         -20,
         20
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 145
+      }
     },
     {
       "name": "neck",
@@ -138,7 +150,11 @@
       "limits": [
         -25,
         25
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 50
+      }
     },
     {
       "name": "head",
@@ -154,7 +170,11 @@
       "limits": [
         -35,
         35
-      ]
+      ],
+      "collider": {
+        "type": "circle",
+        "radius": 115
+      }
     },
     {
       "name": "shoulder_L",
@@ -170,7 +190,11 @@
       "limits": [
         -25,
         25
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 45
+      }
     },
     {
       "name": "upperarm_L",
@@ -186,7 +210,11 @@
       "limits": [
         -170,
         170
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 33
+      }
     },
     {
       "name": "forearm_L",
@@ -202,7 +230,11 @@
       "limits": [
         -160,
         160
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 27
+      }
     },
     {
       "name": "hand_L",
@@ -218,7 +250,11 @@
       "limits": [
         -70,
         70
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 30
+      }
     },
     {
       "name": "shoulder_R",
@@ -234,7 +270,11 @@
       "limits": [
         -25,
         25
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 45
+      }
     },
     {
       "name": "upperarm_R",
@@ -250,7 +290,11 @@
       "limits": [
         -170,
         170
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 33
+      }
     },
     {
       "name": "forearm_R",
@@ -266,7 +310,11 @@
       "limits": [
         -160,
         160
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 27
+      }
     },
     {
       "name": "hand_R",
@@ -282,7 +330,11 @@
       "limits": [
         -70,
         70
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 30
+      }
     },
     {
       "name": "thigh_L",
@@ -298,7 +350,11 @@
       "limits": [
         -70,
         70
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 62
+      }
     },
     {
       "name": "shin_L",
@@ -314,7 +370,11 @@
       "limits": [
         -150,
         0
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 42
+      }
     },
     {
       "name": "foot_L",
@@ -330,7 +390,11 @@
       "limits": [
         -45,
         45
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 34
+      }
     },
     {
       "name": "thigh_R",
@@ -346,7 +410,11 @@
       "limits": [
         -70,
         70
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 62
+      }
     },
     {
       "name": "shin_R",
@@ -362,7 +430,11 @@
       "limits": [
         0,
         150
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 42
+      }
     },
     {
       "name": "foot_R",
@@ -378,7 +450,11 @@
       "limits": [
         -45,
         45
-      ]
+      ],
+      "collider": {
+        "type": "capsule",
+        "radius": 34
+      }
     }
   ],
   "ikChains": [
@@ -510,6 +586,8 @@
   "physics": {
     "bodyWidth": 330,
     "gravity": 2400,
-    "floorY": 1980
+    "floorY": 1980,
+    "stiffness": 0.0,
+    "note": "collider radius is in canvas px; delete a bone collider block and it falls back to 18% of the head height"
   }
 }

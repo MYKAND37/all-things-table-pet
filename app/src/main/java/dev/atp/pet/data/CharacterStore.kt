@@ -3,6 +3,7 @@ package dev.atp.pet.data
 import android.content.Context
 import org.json.JSONObject
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 
@@ -104,6 +105,27 @@ class CharacterStore(private val context: Context) {
                 if (target.exists()) target.delete()
                 temp.renameTo(target)
             }
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    /**
+     * Write an already-composited part — the result of the alignment screen, which puts
+     * the picked image onto a full-canvas transparent bitmap at the position and scale
+     * the user chose.
+     */
+    fun savePart(id: String, bone: String, bitmap: android.graphics.Bitmap): Boolean {
+        val folder = folder(id) ?: return false
+        val target = folder.partFile(bone)
+        target.parentFile?.mkdirs()
+        return try {
+            val temp = File(target.parentFile, bone + ".png.part")
+            FileOutputStream(temp).use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            }
+            if (target.exists()) target.delete()
+            temp.renameTo(target)
         } catch (e: IOException) {
             false
         }

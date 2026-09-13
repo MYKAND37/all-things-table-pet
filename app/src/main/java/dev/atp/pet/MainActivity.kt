@@ -1,5 +1,7 @@
 package dev.atp.pet
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -13,8 +15,10 @@ import androidx.appcompat.app.AppCompatActivity
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.SkeletonView
+import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
@@ -29,7 +33,7 @@ import kotlin.math.roundToInt
  */
 class MainActivity : AppCompatActivity() {
 
-    private enum class Pane { PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_RIG }
+    private enum class Pane { PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_RIG, PART_ALIGN }
 
     private lateinit var store: CharacterStore
     private var characters: List<CharacterFolder> = emptyList()
@@ -37,6 +41,7 @@ class MainActivity : AppCompatActivity() {
     private var opened: CharacterFolder? = null
     private var awaitingBone: String? = null
     private var railCollapsed = false
+    private var stiffnessStep = 0
 
     private lateinit var sidebar: LinearLayout
     private lateinit var railHint: TextView
@@ -50,6 +55,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var partListScroll: View
     private lateinit var partList: LinearLayout
     private lateinit var skeletonView: SkeletonView
+    private lateinit var alignPane: View
+    private lateinit var alignView: PartAlignView
     private lateinit var statusLine: TextView
     private lateinit var menuItems: List<TextView>
 
@@ -75,7 +82,21 @@ class MainActivity : AppCompatActivity() {
         partListScroll = findViewById(R.id.partListScroll)
         partList = findViewById(R.id.partList)
         skeletonView = findViewById(R.id.skeletonView)
+        alignPane = findViewById(R.id.alignPane)
+        alignView = findViewById(R.id.alignView)
         statusLine = findViewById(R.id.statusLine)
+
+        alignView.onInfo = { statusLine.text = it }
+        findViewById<View>(R.id.alignCancel).setOnClickListener {
+            alignView.release()
+            opened?.let { buildPartList(it) }
+            show(Pane.PET_PARTS)
+        }
+        findViewById<View>(R.id.alignCanvas).setOnClickListener { alignView.fitToCanvas() }
+        findViewById<View>(R.id.alignBone).setOnClickListener { alignView.fitToBone() }
+        findViewById<View>(R.id.alignMinus).setOnClickListener { alignView.nudgeScale(1f / 1.15f) }
+        findViewById<View>(R.id.alignPlus).setOnClickListener { alignView.nudgeScale(1.15f) }
+        findViewById<View>(R.id.alignConfirm).setOnClickListener { confirmImport() }
 
         skeletonView.onInfo = { statusLine.text = it }
         sandboxView.onInfo = { statusLine.text = it }
@@ -126,14 +147,18 @@ class MainActivity : AppCompatActivity() {
         petListScroll.visibility = if (pane == Pane.PET_LIST) View.VISIBLE else View.GONE
         partListScroll.visibility = if (pane == Pane.PET_PARTS) View.VISIBLE else View.GONE
         skeletonView.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
+        alignPane.visibility = if (pane == Pane.PART_ALIGN) View.VISIBLE else View.GONE
         statusLine.visibility =
-            if (pane == Pane.SANDBOX || pane == Pane.PET_RIG) View.VISIBLE else View.GONE
+            if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN)
+                View.VISIBLE
+            else View.GONE
 
         when (pane) {
             Pane.SANDBOX -> statusLine.text = "拖起来甩出去 · 双击复位 · 上面选桌宠"
             Pane.PET_LIST -> statusLine.text = ""
             Pane.PET_PARTS -> statusLine.text = ""
             Pane.PET_RIG -> statusLine.text = "拖关节摆姿势 · 双击复位"
+            Pane.PART_ALIGN -> Unit
             Pane.PLACEHOLDER -> statusLine.text = ""
         }
     }
@@ -160,6 +185,24 @@ class MainActivity : AppCompatActivity() {
             petChooser.addView(label(getString(R.string.pets_title) + ": none", 12f, MUTED))
             return
         }
+        // Stiffness is the dial between a limp ragdoll and one that holds a pose. It is
+        // the one physics number worth having on screen while the feel is being tuned.
+        val stiffChip = label(STIFFNESS_LABELS[stiffnessStep], 12f, INK)
+        stiffChip.background = getDrawable(R.drawable.menu_item_selected)
+        stiffChip.setPadding(dp(12), dp(6), dp(12), dp(6))
+        val sp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        sp.marginEnd = dp(10)
+        stiffChip.layoutParams = sp
+        stiffChip.setOnClickListener {
+            stiffnessStep = (stiffnessStep + 1) % STIFFNESS_VALUES.size
+            sandboxView.stiffness = STIFFNESS_VALUES[stiffnessStep]
+            buildPetChooser()
+        }
+        petChooser.addView(stiffChip)
+
         for (folder in characters) {
             val chip = label(folder.id, 12f, if (folder == summoned) INK else MUTED)
             chip.background = getDrawable(
@@ -304,16 +347,58 @@ class MainActivity : AppCompatActivity() {
         awaitingBone = null
         if (uri == null || bone == null || folder == null) return
 
-        val ok = store.importPart(folder.id, bone) { contentResolver.openInputStream(uri) }
+        val bitmap = decodeForAlign(uri)
+        if (bitmap == null) {
+            Toast.makeText(this, getString(R.string.align_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        alignView.load(folder, bone, bitmap)
+        show(Pane.PART_ALIGN)
+    }
+
+    /**
+     * Decode the picked file, downsampled to something a phone can hold. A modern camera
+     * roll is full of 6000px images, and four of those decoded at full size is an OOM
+     * before the alignment screen even appears.
+     */
+    private fun decodeForAlign(uri: Uri): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+
+        var sample = 1
+        var longest = max(bounds.outWidth, bounds.outHeight)
+        while (longest / sample > 2048) sample *= 2
+
+        val options = BitmapFactory.Options().apply {
+            inSampleSize = sample
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+        }
+        return contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, options)
+        }
+    }
+
+    private fun confirmImport() {
+        val folder = opened
+        val bone = alignView.targetBoneName()
+        val baked = alignView.compose()
+        if (folder == null || bone == null || baked == null) {
+            Toast.makeText(this, getString(R.string.align_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ok = store.savePart(folder.id, bone, baked)
+        baked.recycle()
         Toast.makeText(
             this,
-            if (ok) getString(R.string.import_ok) + " " + bone else getString(R.string.import_failed),
+            if (ok) getString(R.string.align_saved) + " " + bone else getString(R.string.import_failed),
             Toast.LENGTH_SHORT,
         ).show()
 
+        alignView.release()
         buildPartList(folder)
         if (summoned?.id == folder.id) summoned?.let { sandboxView.load(it) }
-        if (skeletonView.visibility == View.VISIBLE) skeletonView.load(folder)
+        show(Pane.PET_PARTS)
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -346,6 +431,9 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         val INK = Color.parseColor("#FF171528")
         val MUTED = Color.parseColor("#A6171528")
+
+        val STIFFNESS_VALUES = floatArrayOf(0f, 0.35f, 0.7f, 1f)
+        val STIFFNESS_LABELS = arrayOf("刚度 松垮", "刚度 半软", "刚度 偏硬", "刚度 硬挺")
 
         val LABELS = mapOf(
             "hip" to "胯", "spine" to "腰", "chest" to "胸", "neck" to "脖子", "head" to "头",

@@ -73,12 +73,16 @@ def bake(bones_spec):
     return by_name, order
 
 
-def update(order):
-    """Forward kinematics: world = world(parent) composed with local(bone)."""
+def update(order, root_offset=(0.0, 0.0)):
+    """Forward kinematics: world = world(parent) composed with local(bone).
+
+    root_offset displaces the whole figure. The ragdoll needs it because its root joint
+    is a free particle rather than a fixed origin.
+    """
     for b in order:
         r = b.local_rot()
         if b.parent is None:
-            b.wpos = b.rest_pos
+            b.wpos = (b.rest_pos[0] + root_offset[0], b.rest_pos[1] + root_offset[1])
             b.wrot = r
         else:
             px, py = b.parent.wpos

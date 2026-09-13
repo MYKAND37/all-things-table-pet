@@ -21,6 +21,10 @@ data class BoneSpec(
     val stiffness: Float,
     val damping: Float,
     val gravity: Float,
+    /** "capsule" runs along the bone, "circle" sits at its midpoint. */
+    val colliderType: String,
+    /** Radius in canvas pixels; zero means "derive a default from the head height". */
+    val colliderRadius: Float,
 )
 
 /** A limb the user can drag by its end, solved as a two-segment chain. */
@@ -127,6 +131,7 @@ class CharacterSpec(
                 val b = arr.getJSONObject(i)
                 val lim = b.optJSONArray("limits")
                 val phys = b.optJSONObject("physics")
+                val col = b.optJSONObject("collider")
                 BoneSpec(
                     name = b.getString("name"),
                     parentName = if (b.isNull("parent")) null else b.getString("parent"),
@@ -138,6 +143,8 @@ class CharacterSpec(
                     stiffness = phys?.optDouble("stiffness")?.toFloat() ?: 0.35f,
                     damping = phys?.optDouble("damping")?.toFloat() ?: 0.86f,
                     gravity = phys?.optDouble("gravity")?.toFloat() ?: 0f,
+                    colliderType = col?.optString("type", "capsule") ?: "capsule",
+                    colliderRadius = col?.optDouble("radius")?.toFloat() ?: 0f,
                 )
             }
 

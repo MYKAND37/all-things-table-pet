@@ -189,6 +189,58 @@
                     android:padding="12dp" />
             </ScrollView>
 
+            <!-- ── 桌宠管理：导入对齐 ───────────────── -->
+            <FrameLayout
+                android:id="@+id/alignPane"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <dev.atp.pet.ui.PartAlignView
+                    android:id="@+id/alignView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="bottom"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:padding="8dp">
+
+                    <TextView
+                        android:id="@+id/alignCancel"
+                        style="@style/AlignButton"
+                        android:text="@string/align_cancel" />
+
+                    <TextView
+                        android:id="@+id/alignCanvas"
+                        style="@style/AlignButton"
+                        android:text="@string/align_canvas" />
+
+                    <TextView
+                        android:id="@+id/alignBone"
+                        style="@style/AlignButton"
+                        android:text="@string/align_bone" />
+
+                    <TextView
+                        android:id="@+id/alignMinus"
+                        style="@style/AlignButton"
+                        android:text="@string/align_minus" />
+
+                    <TextView
+                        android:id="@+id/alignPlus"
+                        style="@style/AlignButton"
+                        android:text="@string/align_plus" />
+
+                    <TextView
+                        android:id="@+id/alignConfirm"
+                        style="@style/AlignButton"
+                        android:text="@string/align_confirm" />
+                </LinearLayout>
+            </FrameLayout>
+
             <!-- ── 桌宠管理：骨骼编辑器 ─────────────── -->
             <dev.atp.pet.ui.SkeletonView
                 android:id="@+id/skeletonView"

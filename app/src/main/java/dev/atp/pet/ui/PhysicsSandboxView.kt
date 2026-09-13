@@ -6,26 +6,21 @@ import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
-import dev.atp.pet.engine.math.Transform
-import dev.atp.pet.engine.math.Vec2
-import dev.atp.pet.engine.physics.Bounds
-import dev.atp.pet.engine.physics.PhysicsBody
-import dev.atp.pet.engine.physics.PhysicsWorld
 import dev.atp.pet.data.CharacterFolder
+import dev.atp.pet.engine.math.Vec2
+import dev.atp.pet.engine.physics.Ragdoll
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.render.PartLibrary
 import dev.atp.pet.render.PartRenderer
-import kotlin.math.hypot
 import kotlin.math.min
 
 /**
- * The physics bench: the character is dropped into a box with gravity and a floor, and
- * a finger can pick it up and throw it.
+ * The physics bench: the character is dropped into a box with gravity and a floor, and a
+ * finger can pick it up by any part of it and throw it.
  *
- * This is the runtime half of the split the project settled on — posing lives in 桌宠管理,
- * motion lives here. Nothing in this view knows about bones beyond drawing them; the
- * skeleton is placed by whatever the body says its position is.
+ * Posing lives in 桌宠管理; motion lives here. Nothing in this view knows about bones
+ * beyond drawing them — the skeleton is placed entirely by the ragdoll.
  */
 class PhysicsSandboxView @JvmOverloads constructor(
     context: Context,
@@ -37,20 +32,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var skeleton: Skeleton? = null
     private var renderer: PartRenderer? = null
     private var library: PartLibrary? = null
-    private var world: PhysicsWorld? = null
-    private var body: PhysicsBody? = null
-
-    /** Where the collider sits inside the character's own canvas coordinates. */
-    private var canvasCentre = Vec2.ZERO
+    private var ragdoll: Ragdoll? = null
 
     private var scale = 1f
     private var offsetX = 0f
     private var offsetY = 0f
 
-    private var grabOffset = Vec2.ZERO
+    private var heldBone: String? = null
+    private var pinTarget = Vec2.ZERO
     private var lastTapAt = 0L
     private var lastFrameNs = 0L
-    private var flingTracker: Vec2? = null
 
     private val density = resources.displayMetrics.density
 
@@ -62,13 +53,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f * density
-        color = 0x14000000
-    }
-    private val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 1f * density
-        color = 0x33C04000
-        pathEffect = android.graphics.DashPathEffect(floatArrayOf(6f * density, 6f * density), 0f)
+        color = 0x12000000
     }
     private val bonePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -83,7 +68,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     var onInfo: ((String) -> Unit)? = null
 
-    /** Load a character package from its folder. Safe to call again to summon another. */
+    /** 0 = limp ragdoll, 1 = holds a pose. Changing it takes effect immediately. */
+    var stiffness: Float = 0f
+        set(value) {
+            field = value
+            ragdoll?.stiffness = value
+            invalidate()
+        }
+
     fun load(folder: CharacterFolder) {
         library?.release()
         val parsed = CharacterSpec.parse(folder.specText())
@@ -92,23 +84,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         spec = parsed
         skeleton = built
 
-        // Collider = the body only. Arms are left out so a raised arm does not lift the
-        // character off the floor.
-        val height = parsed.totalHeight
-        val width = parsed.bodyWidth
-        val top = parsed.headTop
-        canvasCentre = Vec2(parsed.centreX, top + height / 2f)
-
-        world = PhysicsWorld(
-            gravity = parsed.gravity,
-            bounds = Bounds(0f, 0f, parsed.canvasWidth, parsed.floorY),
-        )
-        body = world!!.add(
-            PhysicsBody(
-                position = Vec2(canvasCentre.x, 360f),
-                halfExtents = Vec2(width / 2f, height / 2f),
-            )
-        )
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -117,20 +92,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
             parsed.layers.sortedBy { it.z }.map { it.bone },
         )
 
+        ragdoll = Ragdoll(built, parsed, stiffness)
+        heldBone = null
         lastFrameNs = System.nanoTime()
-        onInfo?.invoke(
-            folder.id + " · " + loaded.size + " parts · drag to throw · double-tap to reset"
-        )
+        onInfo?.invoke(folder.id + " · " + loaded.size + " parts · 抓住任意部位拖动")
         invalidate()
-    }
-
-    private fun reset() {
-        val b = body ?: return
-        b.position = Vec2(canvasCentre.x, 360f)
-        b.stop()
-        b.held = false
-        b.resting = false
-        world?.clearMotion()
     }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
@@ -148,18 +114,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         val s = spec ?: return
         val sk = skeleton ?: return
-        val w = world ?: return
-        val b = body ?: return
+        val rag = ragdoll ?: return
 
         val now = System.nanoTime()
         val dt = if (lastFrameNs == 0L) 0f else (now - lastFrameNs) / 1_000_000_000f
         lastFrameNs = now
-        w.step(dt)
-
-        // The body drives the skeleton; nothing else moves the character.
-        val offset = b.position - canvasCentre
-        sk.rootTransform = Transform(position = offset)
-        sk.update()
+        rag.step(dt, heldBone, pinTarget)
 
         // ---- sandbox ----
         val step = 256f
@@ -175,13 +135,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         canvas.drawLine(vx(0f), vy(s.floorY), vx(s.canvasWidth), vy(s.floorY), groundPaint)
 
-        canvas.drawRect(
-            vx(b.left), vy(b.top), vx(b.right), vy(b.bottom), boxPaint
-        )
-
         // ---- character ----
-        // Artwork if the package has any; the bare rig otherwise, so the bench is still
-        // useful before a single part has been drawn.
         val art = renderer
         if (art != null) {
             canvas.save()
@@ -200,22 +154,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
 
-        val state = when {
-            b.held -> "held"
-            b.resting -> "at rest"
-            b.grounded -> "on the ground"
-            else -> "falling"
+        val mode = when {
+            stiffness <= 0.01f -> "松垮"
+            stiffness >= 0.99f -> "硬挺"
+            else -> "半软"
         }
-        canvas.drawText(
-            "%s · vy=%.0f · vx=%.0f · %s".format(state, b.velocity.y, b.velocity.x, if (b.grounded) "grounded" else "air"),
-            10f * density, 16f * density, textPaint
-        )
-        // Deliberately no onInfo call here: this runs every frame, and pushing a fresh
-        // string into a TextView sixty times a second is pure waste. The canvas text
-        // above is the live readout; onInfo is for one-off messages only.
+        val state = if (heldBone != null) "抓住 " + heldBone else if (rag.grounded) "着地" else "空中"
+        canvas.drawText("刚度 $mode · $state", 10f * density, 16f * density, textPaint)
 
-        // Keep animating only while something can still change.
-        if (!b.resting || b.held) postInvalidateOnAnimation()
+        postInvalidateOnAnimation()
     }
 
     private fun colourFor(name: String): Int = when {
@@ -228,13 +175,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        val b = body ?: return false
-        val sk = skeleton ?: return false
+        val rag = ragdoll ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 val now = System.currentTimeMillis()
                 if (now - lastTapAt < 300) {
-                    reset()
+                    rag.reset()
+                    heldBone = null
                     lastTapAt = 0L
                     postInvalidateOnAnimation()
                     return true
@@ -242,41 +189,25 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 lastTapAt = now
 
                 val p = toWorld(event.x, event.y)
-                val inside = p.x >= b.left && p.x <= b.right && p.y >= b.top && p.y <= b.bottom
-                if (!inside) return false
-                grabOffset = p - b.position
-                b.held = true
-                b.wake()
-                flingTracker = b.position
+                val bone = rag.grabAt(p) ?: return false
+                heldBone = bone.name
+                pinTarget = p
                 lastFrameNs = System.nanoTime()
                 postInvalidateOnAnimation()
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (!b.held) return false
-                val p = toWorld(event.x, event.y)
-                val target = p - grabOffset
-                // Track speed from the finger so a release throws rather than drops.
-                val prev = b.position
-                b.position = target
-                val dt = 1f / 60f
-                b.velocity = Vec2((target.x - prev.x) / dt, (target.y - prev.y) / dt)
+                if (heldBone == null) return false
+                pinTarget = toWorld(event.x, event.y)
                 postInvalidateOnAnimation()
                 return true
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (!b.held) return false
-                b.held = false
-                // Cap the throw so a fast flick does not launch it off-screen.
-                val v = b.velocity
-                val speed = hypot(v.x, v.y)
-                val cap = 4000f
-                if (speed > cap) {
-                    b.velocity = Vec2(v.x / speed * cap, v.y / speed * cap)
-                }
-                b.wake()
+                if (heldBone == null) return false
+                heldBone = null
+                rag.release()
                 lastFrameNs = System.nanoTime()
                 postInvalidateOnAnimation()
                 return true
