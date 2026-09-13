@@ -38,7 +38,7 @@
 
 - [x] 应用外壳：侧栏菜单 + 磨砂内容区
 - [x] **通用骨骼系统**：正向运动学 + 两段式 IK（拖拽，保持肘部侧）
-- [x] **6.5 头身女性骨架**：30 根骨骼，含 11 根弹簧骨骼（头发 / 裙子）
+- [x] **女性素体骨架**（6.12 头身，按参考图实测）：30 根骨骼，含 11 根弹簧骨骼
 - [x] **绘画模板 + 命名规范**（A + C 方案）
 - [x] **测试场**：手机上直接拖关节试 IK
 - [ ] 图层与遮挡换序的执行部分
@@ -55,10 +55,10 @@ app/src/main/java/dev/atp/pet/
   engine/math/         Vec2, Transform
   engine/skeleton/     Bone, Skeleton(FK), TwoBoneIK, CharacterSpec
   ui/SkeletonView.kt   骨骼可视化 + 拖拽
-app/src/main/assets/characters/female_6_5/character.json
+app/src/main/assets/characters/female_base/character.json
 tools/skeleton_tool.py   参考实现 + 验证 + 模板生成
 docs/ART_GUIDE.md        绘画规范（A + C）
-docs/template_female_6_5.png
+docs/template_female_base.png
 ```
 
 ## 关于验证
@@ -71,8 +71,8 @@ docs/template_female_6_5.png
 
 ```bash
 python3 tools/skeleton_tool.py \
-  --spec app/src/main/assets/characters/female_6_5/character.json \
-  --verify --out docs/template_female_6_5.png
+  --spec app/src/main/assets/characters/female_base/character.json \
+  --verify --out docs/template_female_base.png
 ```
 
 改动骨骼数学时**务必先跑这个**——它抓到过两个真实的符号错误，那两个错误在静止姿势下

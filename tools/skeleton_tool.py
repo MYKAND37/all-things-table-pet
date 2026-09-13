@@ -343,8 +343,9 @@ def render(spec, by_name, order, out_path, scale=2):
                ((cx0 + hp) * S, 1063 * S), ((cx0 - hp) * S, 1063 * S),
                ((cx0 - wa) * S, 920 * S), ((cx0 - sh) * S, 556 * S)], fill=sil)
 
-    limb_w = {"upperarm": 0.40, "forearm": 0.32, "hand": 0.34,
-              "thigh": 0.58, "shin": 0.40, "foot": 0.32}
+    # Widths measured off the reference drawing, in head-height units.
+    limb_w = {"upperarm": 0.210, "forearm": 0.175, "hand": 0.190,
+              "thigh": 0.475, "shin": 0.310, "foot": 0.250}
 
     def capsule(p0, p1, w, fill):
         d.line([p0, p1], fill=fill, width=max(1, int(round(w))))
@@ -429,7 +430,9 @@ def render(spec, by_name, order, out_path, scale=2):
             d.text((lx, ly), b.name, font=f_label, fill=(58, 58, 78, 240), anchor="mm")
 
     hdr = [
-        "%s   canvas %dx%d   head %dpx   6.5 heads" % (spec["id"], W, H, spec["headHeight"]),
+        "%s   canvas %dx%d   head %dpx   %.2f heads tall"
+        % (spec["id"], W, H, spec["headHeight"],
+           spec["proportions"].get("headsTall", 6.0)),
         "Draw each part on its own layer, export EVERY layer at full canvas size,",
         "one PNG per bone, named after the bone.  A missing file just draws nothing.",
     ]

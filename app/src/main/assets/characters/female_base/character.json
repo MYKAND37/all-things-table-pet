@@ -1,76 +1,80 @@
 {
-  "id": "female_6_5",
-  "name": "6.5 head female",
+  "id": "female_base",
+  "name": "base body female, 6.12 heads",
   "version": 1,
   "canvas": {
     "width": 1024,
     "height": 2048
   },
-  "headHeight": 260,
+  "headHeight": 276.0,
   "centreX": 512,
   "headTopY": 179,
   "notes": [
     "Every part is exported at FULL CANVAS SIZE (1024x2048), one PNG per bone,",
-    "named after the bone. Position is therefore implicit — no calibration step.",
-    "A bone with no part file simply draws nothing; the skeleton still works."
+    "named after the bone. Position is therefore implicit \u2014 no calibration step.",
+    "A bone with no part file simply draws nothing; the skeleton still works.",
+    "Joint positions were measured off the supplied base-body reference, not guessed:",
+    "shoulder joints sit at +/-162px, the arm hangs 9.8 deg off vertical and runs",
+    "288/227/101, which puts the fingertips at y=1164 instead of hanging below the knee."
   ],
   "proportions": {
-    "headHeightPx": 260,
+    "headHeightPx": 276.0,
     "totalHeightPx": 1690,
     "landmarks": [
       {
         "key": "headTop",
-        "head": 0,
+        "head": 0.0,
         "y": 179
       },
       {
         "key": "chin",
-        "head": 1,
-        "y": 439
+        "head": 1.0,
+        "y": 455
       },
       {
         "key": "shoulder",
-        "head": 1.45,
-        "y": 556
+        "head": 1.37,
+        "y": 557
       },
       {
         "key": "chest",
-        "head": 1.95,
+        "head": 1.837,
         "y": 686
       },
       {
         "key": "waist",
-        "head": 2.85,
+        "head": 2.685,
         "y": 920
       },
       {
         "key": "hip",
-        "head": 3.4,
+        "head": 3.203,
         "y": 1063
       },
       {
         "key": "knee",
-        "head": 4.85,
+        "head": 4.569,
         "y": 1440
       },
       {
         "key": "ankle",
-        "head": 6.25,
+        "head": 5.888,
         "y": 1804
       },
       {
         "key": "sole",
-        "head": 6.5,
+        "head": 6.123,
         "y": 1869
       }
     ],
     "widths": {
-      "head": 187,
-      "shoulder": 377,
-      "waist": 247,
-      "hip": 364,
+      "head": 235,
+      "shoulder": 330,
+      "waist": 255,
+      "hip": 399,
       "hipJointSpan": 180
-    }
+    },
+    "headsTall": 6.12
   },
   "bones": [
     {
@@ -130,7 +134,7 @@
       ],
       "tail": [
         512,
-        500
+        455
       ],
       "limits": [
         -25,
@@ -142,7 +146,7 @@
       "parent": "neck",
       "head": [
         512,
-        500
+        455
       ],
       "tail": [
         512,
@@ -157,12 +161,12 @@
       "name": "shoulder_L",
       "parent": "chest",
       "head": [
-        450,
-        566
+        462,
+        568
       ],
       "tail": [
-        323.5,
-        556
+        350.0,
+        557.0
       ],
       "limits": [
         -25,
@@ -173,12 +177,12 @@
       "name": "upperarm_L",
       "parent": "shoulder_L",
       "head": [
-        323.5,
-        556
+        350.0,
+        557.0
       ],
       "tail": [
-        258.63,
-        861.18
+        300.98,
+        840.8
       ],
       "limits": [
         -170,
@@ -189,12 +193,12 @@
       "name": "forearm_L",
       "parent": "upperarm_L",
       "head": [
-        258.63,
-        861.18
+        300.98,
+        840.8
       ],
       "tail": [
-        204.57,
-        1115.5
+        262.34,
+        1064.49
       ],
       "limits": [
         -160,
@@ -205,12 +209,12 @@
       "name": "hand_L",
       "parent": "forearm_L",
       "head": [
-        204.57,
-        1115.5
+        262.34,
+        1064.49
       ],
       "tail": [
-        169.43,
-        1280.81
+        245.15,
+        1164.01
       ],
       "limits": [
         -70,
@@ -221,12 +225,12 @@
       "name": "shoulder_R",
       "parent": "chest",
       "head": [
-        574,
-        566
+        562,
+        568
       ],
       "tail": [
-        700.5,
-        556
+        674.0,
+        557.0
       ],
       "limits": [
         -25,
@@ -237,12 +241,12 @@
       "name": "upperarm_R",
       "parent": "shoulder_R",
       "head": [
-        700.5,
-        556
+        674.0,
+        557.0
       ],
       "tail": [
-        765.37,
-        861.18
+        723.02,
+        840.8
       ],
       "limits": [
         -170,
@@ -253,12 +257,12 @@
       "name": "forearm_R",
       "parent": "upperarm_R",
       "head": [
-        765.37,
-        861.18
+        723.02,
+        840.8
       ],
       "tail": [
-        819.43,
-        1115.5
+        761.66,
+        1064.49
       ],
       "limits": [
         -160,
@@ -269,12 +273,12 @@
       "name": "hand_R",
       "parent": "forearm_R",
       "head": [
-        819.43,
-        1115.5
+        761.66,
+        1064.49
       ],
       "tail": [
-        854.57,
-        1280.81
+        778.85,
+        1164.01
       ],
       "limits": [
         -70,

@@ -77,7 +77,7 @@ class SkeletonView @JvmOverloads constructor(
     /** Called with a one-line description of what just happened, for a status strip. */
     var onInfo: ((String) -> Unit)? = null
 
-    /** Load a character package from assets, e.g. "characters/female_6_5/character.json". */
+    /** Load a character package from assets, e.g. "characters/female_base/character.json". */
     fun load(assetPath: String) {
         val text = context.assets.open(assetPath).bufferedReader().use { it.readText() }
         val parsed = CharacterSpec.parse(text)

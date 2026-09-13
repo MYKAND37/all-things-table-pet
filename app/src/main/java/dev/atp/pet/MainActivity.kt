@@ -55,7 +55,7 @@ class MainActivity : AppCompatActivity() {
         show(true)
 
         try {
-            skeletonView.load("characters/female_6_5/character.json")
+            skeletonView.load("characters/female_base/character.json")
         } catch (e: Exception) {
             status.text = "character package failed to load: " + e.message
         }

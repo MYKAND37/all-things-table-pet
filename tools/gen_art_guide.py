@@ -6,7 +6,7 @@ def code(s):
 def fence(s):
     return BT * 3 + s
 
-spec = json.load(open('app/src/main/assets/characters/female_6_5/character.json', encoding='utf-8'))
+spec = json.load(open('app/src/main/assets/characters/female_base/character.json', encoding='utf-8'))
 W = spec['canvas']['width']; H = spec['canvas']['height']
 HH = spec['headHeight']
 
@@ -38,7 +38,7 @@ def blen(b):
 out = []
 w = out.append
 
-w('# 角色绘画规范 · female_6_5')
+w('# 角色绘画规范 · female_base')
 w('')
 w('这份文档就是 **A + C 方案**：模板对齐（A）加命名约定（C）。')
 w('你按模板画，按名字导出，系统自动装配，**不需要任何手动对齐**。')
@@ -51,11 +51,13 @@ w('| 项 | 值 |')
 w('|---|---|')
 w('| 画布尺寸 | **%d × %d**（宽 × 高） |' % (W, H))
 w('| 头高 | %d px |' % HH)
-w('| 身高 | %d px（6.5 头身） |' % round(HH * 6.5))
+w('| 身高 | %d px（%.2f 头身） |'
+  % (spec['proportions'].get('totalHeightPx', round(HH * 6.12)),
+     spec['proportions'].get('headsTall', 6.12)))
 w('| 头顶 y | %d px |' % spec['headTopY'])
 w('| 中线 x | %d px |' % spec['centreX'])
 w('')
-w('模板图：[' + 'template_female_6_5.png' + '](template_female_6_5.png)')
+w('模板图：[' + 'template_female_base.png' + '](template_female_base.png)')
 w('')
 w('## 二、导出规则（三条，必须全遵守）')
 w('')
@@ -127,7 +129,7 @@ w('')
 w('## 六、画完之后放哪')
 w('')
 w(fence(''))
-w('characters/female_6_5/')
+w('characters/female_base/')
 w('  character.json      <- 已经有了，不用动')
 w('  parts/')
 w('    head.png')
