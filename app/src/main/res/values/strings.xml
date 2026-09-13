@@ -36,4 +36,26 @@
     <string name="align_confirm">确定</string>
     <string name="align_failed">这张图读不出来</string>
     <string name="align_saved">已对齐保存</string>
+
+    <!-- 图层深度 -->
+    <string name="depth_title">图层与深度</string>
+    <string name="depth_entry">图层与深度</string>
+    <string name="depth_hint">上面的在前面（会盖住下面的）。点箭头调整。</string>
+    <string name="depth_rules">深度规则（同一个部位在不同姿势下换前后）</string>
+    <string name="depth_no_rules">还没有规则</string>
+    <string name="depth_add_rule">＋ 添加规则</string>
+    <string name="depth_save">保存</string>
+    <string name="depth_saved">已保存，正在重载</string>
+    <string name="depth_save_failed">保存失败</string>
+    <string name="depth_pick_part">第 1 步：要移动的部位</string>
+    <string name="depth_pick_ref">第 2 步：参照部位</string>
+    <string name="depth_pick_when">第 3 步：什么时候换？</string>
+    <string name="depth_pick_where">第 4 步：换到哪？</string>
+    <string name="depth_when_above">它高过参照时</string>
+    <string name="depth_when_below">它低于参照时</string>
+    <string name="depth_where_behind">放到参照后面</string>
+    <string name="depth_where_front">放到参照前面</string>
+    <string name="depth_descendants">（连同它下面的部位）</string>
+    <string name="depth_cancel">取消</string>
+    <string name="depth_remove">删除</string>
 </resources>

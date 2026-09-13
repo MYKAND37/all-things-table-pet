@@ -1,6 +1,8 @@
 package dev.atp.pet.data
 
 import android.content.Context
+import dev.atp.pet.engine.skeleton.SwapRuleSpec
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
@@ -127,6 +129,55 @@ class CharacterStore(private val context: Context) {
             if (target.exists()) target.delete()
             temp.renameTo(target)
         } catch (e: IOException) {
+            false
+        }
+    }
+
+    /**
+     * Write back the depth of every part, and the rules that change it.
+     *
+     * [backToFront] is the draw order: index 0 is drawn first and therefore ends up
+     * furthest back. Spacing the written values by ten rather than one leaves room to
+     * hand-edit a single part in between later without renumbering everything.
+     */
+    fun saveDepth(
+        id: String,
+        backToFront: List<String>,
+        swaps: List<SwapRuleSpec>,
+    ): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            val root = JSONObject(folder.specText())
+
+            val layers = JSONArray()
+            backToFront.forEachIndexed { index, bone ->
+                layers.put(JSONObject().put("bone", bone).put("z", 10 + index * 10))
+            }
+            root.put("layers", layers)
+
+            val rules = JSONArray()
+            for (s in swaps) {
+                rules.put(
+                    JSONObject()
+                        .put("parts", JSONArray(s.parts))
+                        .put("behind", JSONArray(s.behind))
+                        .put("to", if (s.toFront) "front" else "behind")
+                        .put(
+                            "trigger",
+                            JSONObject()
+                                .put("type", s.triggerType)
+                                .put("bone", s.triggerBone)
+                                .put("reference", s.referenceBone),
+                        )
+                )
+            }
+            root.put("layerSwaps", rules)
+
+            val temp = File(folder.dir, "character.json.tmp")
+            temp.writeText(root.toString(2))
+            if (folder.specFile.exists()) folder.specFile.delete()
+            temp.renameTo(folder.specFile)
+        } catch (e: Exception) {
             false
         }
     }

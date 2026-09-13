@@ -100,6 +100,7 @@ class SkeletonView @JvmOverloads constructor(
             built,
             loaded,
             parsed.layers.sortedBy { it.z }.map { it.bone },
+            parsed.swaps,
         )
 
         handles.clear()

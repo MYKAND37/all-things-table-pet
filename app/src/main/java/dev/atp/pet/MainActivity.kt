@@ -15,6 +15,7 @@ import androidx.appcompat.app.AppCompatActivity
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.SkeletonView
@@ -33,7 +34,9 @@ import kotlin.math.roundToInt
  */
 class MainActivity : AppCompatActivity() {
 
-    private enum class Pane { PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_RIG, PART_ALIGN }
+    private enum class Pane {
+        PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_RIG, PART_ALIGN, PET_DEPTH
+    }
 
     private lateinit var store: CharacterStore
     private var characters: List<CharacterFolder> = emptyList()
@@ -42,6 +45,16 @@ class MainActivity : AppCompatActivity() {
     private var awaitingBone: String? = null
     private var railCollapsed = false
     private var stiffnessStep = 0
+
+    /** Depth editing state, back-to-front. */
+    private lateinit var depthScroll: View
+    private lateinit var depthList: LinearLayout
+    private var depthBones = mutableListOf<String>()
+    private var depthRules = mutableListOf<SwapRuleSpec>()
+    private var wizardStage = 0
+    private var wizardPart: String? = null
+    private var wizardRef: String? = null
+    private var wizardAbove = true
 
     private lateinit var sidebar: LinearLayout
     private lateinit var railHint: TextView
@@ -82,6 +95,8 @@ class MainActivity : AppCompatActivity() {
         partListScroll = findViewById(R.id.partListScroll)
         partList = findViewById(R.id.partList)
         skeletonView = findViewById(R.id.skeletonView)
+        depthScroll = findViewById(R.id.depthScroll)
+        depthList = findViewById(R.id.depthList)
         alignPane = findViewById(R.id.alignPane)
         alignView = findViewById(R.id.alignView)
         statusLine = findViewById(R.id.statusLine)
@@ -148,6 +163,7 @@ class MainActivity : AppCompatActivity() {
         partListScroll.visibility = if (pane == Pane.PET_PARTS) View.VISIBLE else View.GONE
         skeletonView.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         alignPane.visibility = if (pane == Pane.PART_ALIGN) View.VISIBLE else View.GONE
+        depthScroll.visibility = if (pane == Pane.PET_DEPTH) View.VISIBLE else View.GONE
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN)
                 View.VISIBLE
@@ -159,6 +175,7 @@ class MainActivity : AppCompatActivity() {
             Pane.PET_PARTS -> statusLine.text = ""
             Pane.PET_RIG -> statusLine.text = "拖关节摆姿势 · 双击复位"
             Pane.PART_ALIGN -> Unit
+            Pane.PET_DEPTH -> statusLine.text = getString(R.string.depth_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
         }
     }
@@ -291,6 +308,18 @@ class MainActivity : AppCompatActivity() {
         }
         partList.addView(rig)
 
+        val depth = label(getString(R.string.depth_entry), 12f, INK)
+        depth.setPadding(dp(12), dp(8), dp(12), dp(8))
+        depth.background = getDrawable(R.drawable.menu_item_selected)
+        val dep = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        dep.topMargin = dp(8)
+        depth.layoutParams = dep
+        depth.setOnClickListener { openDepth(folder) }
+        partList.addView(depth)
+
         partList.addView(label(getString(R.string.part_hint), 11f, MUTED, top = 12, bottom = 8))
 
         for (bone in boneNames(folder)) {
@@ -399,6 +428,304 @@ class MainActivity : AppCompatActivity() {
         buildPartList(folder)
         if (summoned?.id == folder.id) summoned?.let { sandboxView.load(it) }
         show(Pane.PET_PARTS)
+    }
+
+    // ── 图层与深度 ──────────────────────────────────────────────────────────
+
+    private fun openDepth(folder: CharacterFolder) {
+        val parsed = try {
+            CharacterSpec.parse(folder.specText())
+        } catch (e: Exception) {
+            null
+        } ?: return
+
+        depthBones = parsed.layers.sortedBy { it.z }.map { it.bone }.toMutableList()
+        // A bone with artwork but no layer entry is never drawn at all. The shoulders were
+        // exactly that for a while, and "everything shows except these two" is a hard
+        // thing to guess from the code, so anything missing is appended at the front where
+        // it is at least visible.
+        for (b in parsed.bones.map { it.name }) {
+            if (b !in depthBones && folder.partFile(b).isFile) depthBones.add(b)
+        }
+        depthRules = parsed.swaps.toMutableList()
+        wizardStage = 0
+        buildDepthPane()
+        show(Pane.PET_DEPTH)
+    }
+
+    private fun buildDepthPane() {
+        val folder = opened ?: return
+        depthList.removeAllViews()
+
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val back = label(getString(R.string.pet_back), 13f, INK)
+        back.setPadding(dp(12), dp(6), dp(12), dp(6))
+        back.background = getDrawable(R.drawable.menu_item_idle)
+        back.setOnClickListener {
+            wizardStage = 0
+            buildPartList(folder)
+            show(Pane.PET_PARTS)
+        }
+        header.addView(back)
+        header.addView(label("  " + getString(R.string.depth_title), 15f, INK))
+        depthList.addView(header)
+
+        if (wizardStage > 0) {
+            buildWizard(folder)
+            return
+        }
+
+        depthList.addView(label(getString(R.string.depth_hint), 11f, MUTED, top = 10, bottom = 10))
+
+        // Front first: the top of the list is the part drawn last, so it covers the rest.
+        val frontFirst = depthBones.reversed()
+        for ((i, bone) in frontFirst.withIndex()) {
+            val realIndex = depthBones.size - 1 - i
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(12), dp(6), dp(8), dp(6))
+            }
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            lp.bottomMargin = dp(4)
+            row.layoutParams = lp
+
+            val name = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            name.addView(label(bone, 13f, INK))
+            name.addView(label(boneLabel(bone), 10f, MUTED))
+            name.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            row.addView(name)
+
+            val up = label("▲", 13f, INK)
+            up.setPadding(dp(10), dp(4), dp(10), dp(4))
+            up.setOnClickListener {
+                if (realIndex < depthBones.size - 1) {
+                    val b = depthBones.removeAt(realIndex)
+                    depthBones.add(realIndex + 1, b)
+                    buildDepthPane()
+                }
+            }
+            val down = label("▼", 13f, INK)
+            down.setPadding(dp(10), dp(4), dp(10), dp(4))
+            down.setOnClickListener {
+                if (realIndex > 0) {
+                    val b = depthBones.removeAt(realIndex)
+                    depthBones.add(realIndex - 1, b)
+                    buildDepthPane()
+                }
+            }
+            row.addView(up)
+            row.addView(down)
+            depthList.addView(row)
+        }
+
+        depthList.addView(label(getString(R.string.depth_rules), 13f, INK, top = 18, bottom = 6))
+        if (depthRules.isEmpty()) {
+            depthList.addView(label(getString(R.string.depth_no_rules), 11f, MUTED, bottom = 6))
+        }
+        for ((index, rule) in depthRules.withIndex()) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(12), dp(8), dp(8), dp(8))
+            }
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            lp.bottomMargin = dp(4)
+            row.layoutParams = lp
+
+            val txt = label(describeRule(rule), 11f, INK)
+            txt.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            row.addView(txt)
+
+            val del = label(getString(R.string.depth_remove), 11f, MUTED)
+            del.setPadding(dp(10), dp(4), dp(10), dp(4))
+            del.setOnClickListener {
+                depthRules.removeAt(index)
+                buildDepthPane()
+            }
+            row.addView(del)
+            depthList.addView(row)
+        }
+
+        val add = label(getString(R.string.depth_add_rule), 12f, INK)
+        add.setPadding(dp(12), dp(8), dp(12), dp(8))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        val alp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        alp.topMargin = dp(8)
+        add.layoutParams = alp
+        add.setOnClickListener {
+            wizardStage = 1
+            wizardPart = null
+            wizardRef = null
+            wizardAbove = true
+            buildDepthPane()
+        }
+        depthList.addView(add)
+
+        val save = label(getString(R.string.depth_save), 13f, INK)
+        save.setPadding(dp(20), dp(10), dp(20), dp(10))
+        save.background = getDrawable(R.drawable.menu_item_selected)
+        val slp = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        slp.topMargin = dp(16)
+        save.layoutParams = slp
+        save.setOnClickListener { saveDepth(folder) }
+        depthList.addView(save)
+    }
+
+    private fun describeRule(rule: SwapRuleSpec): String {
+        val when_ = if (rule.triggerType == "tipBelow") "低于" else "高过"
+        val where = if (rule.toFront) "前面" else "后面"
+        return rule.parts.joinToString("/") + " " + when_ + " " + rule.referenceBone +
+            " 时 → 放到 " + rule.behind.joinToString("/") + " " + where
+    }
+
+    private fun buildWizard(folder: CharacterFolder) {
+        val cancel = label(getString(R.string.depth_cancel), 12f, MUTED)
+        cancel.setPadding(dp(12), dp(6), dp(12), dp(6))
+        cancel.background = getDrawable(R.drawable.menu_item_idle)
+        cancel.setOnClickListener {
+            wizardStage = 0
+            buildDepthPane()
+        }
+        depthList.addView(cancel)
+
+        val bones = boneNames(folder)
+
+        if (wizardStage == 1 || wizardStage == 2) {
+            val title = if (wizardStage == 1) R.string.depth_pick_part else R.string.depth_pick_ref
+            depthList.addView(label(getString(title), 13f, INK, top = 12, bottom = 8))
+            for (bone in bones) {
+                val row = label(bone + "  " + boneLabel(bone), 12f, INK)
+                row.setPadding(dp(12), dp(10), dp(12), dp(10))
+                row.background = getDrawable(R.drawable.menu_item_idle)
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                lp.bottomMargin = dp(4)
+                row.layoutParams = lp
+                row.setOnClickListener {
+                    if (wizardStage == 1) {
+                        wizardPart = bone
+                        wizardStage = 2
+                    } else {
+                        wizardRef = bone
+                        wizardStage = 3
+                    }
+                    buildDepthPane()
+                }
+                depthList.addView(row)
+            }
+            return
+        }
+
+        if (wizardStage == 3) {
+            depthList.addView(label(getString(R.string.depth_pick_when), 13f, INK, top = 12, bottom = 8))
+            for (above in listOf(true, false)) {
+                val txt = getString(
+                    if (above) R.string.depth_when_above else R.string.depth_when_below
+                ) + "  (" + (wizardPart ?: "") + (if (above) " ↑ " else " ↓ ") + (wizardRef ?: "") + ")"
+                val row = label(txt, 12f, INK)
+                row.setPadding(dp(12), dp(10), dp(12), dp(10))
+                row.background = getDrawable(R.drawable.menu_item_idle)
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                lp.bottomMargin = dp(4)
+                row.layoutParams = lp
+                row.setOnClickListener {
+                    wizardAbove = above
+                    wizardStage = 4
+                    buildDepthPane()
+                }
+                depthList.addView(row)
+            }
+            return
+        }
+
+        depthList.addView(label(getString(R.string.depth_pick_where), 13f, INK, top = 12, bottom = 8))
+        for (toFront in listOf(false, true)) {
+            val txt = getString(
+                if (toFront) R.string.depth_where_front else R.string.depth_where_behind
+            ) + "  (" + (wizardRef ?: "") + ")"
+            val row = label(txt, 12f, INK)
+            row.setPadding(dp(12), dp(10), dp(12), dp(10))
+            row.background = getDrawable(R.drawable.menu_item_idle)
+            val lp = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            lp.bottomMargin = dp(4)
+            row.layoutParams = lp
+            row.setOnClickListener {
+                val part = wizardPart
+                val ref = wizardRef
+                if (part != null && ref != null) {
+                    depthRules.add(
+                        SwapRuleSpec(
+                            parts = withDescendants(folder, part),
+                            behind = listOf(ref),
+                            toFront = toFront,
+                            triggerType = if (wizardAbove) "tipAbove" else "tipBelow",
+                            triggerBone = part,
+                            referenceBone = ref,
+                        )
+                    )
+                }
+                wizardStage = 0
+                buildDepthPane()
+            }
+            depthList.addView(row)
+        }
+    }
+
+    /** A limb is the bone plus everything hanging off it: picking the upper arm means the arm. */
+    private fun withDescendants(folder: CharacterFolder, bone: String): List<String> {
+        val parsed = try {
+            CharacterSpec.parse(folder.specText())
+        } catch (e: Exception) {
+            return listOf(bone)
+        }
+        val children = HashMap<String, MutableList<String>>()
+        for (b in parsed.bones) {
+            b.parentName?.let { children.getOrPut(it) { mutableListOf() }.add(b.name) }
+        }
+        val out = mutableListOf<String>()
+        fun walk(name: String) {
+            out.add(name)
+            children[name]?.forEach { walk(it) }
+        }
+        walk(bone)
+        return out
+    }
+
+    private fun saveDepth(folder: CharacterFolder) {
+        val ok = store.saveDepth(folder.id, depthBones, depthRules)
+        Toast.makeText(
+            this,
+            getString(if (ok) R.string.depth_saved else R.string.depth_save_failed),
+            Toast.LENGTH_SHORT,
+        ).show()
+        if (!ok) return
+        if (summoned?.id == folder.id) summoned?.let { sandboxView.load(it) }
+        skeletonView.load(folder)
+        wizardStage = 0
+        buildDepthPane()
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────

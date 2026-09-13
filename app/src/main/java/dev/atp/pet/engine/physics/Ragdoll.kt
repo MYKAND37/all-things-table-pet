@@ -6,34 +6,24 @@ import dev.atp.pet.engine.math.normalizeAngle
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.Skeleton
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.sqrt
+import kotlin.random.Random
 
 /**
  * Articulated-body physics for one character.
  *
- * This replaces a single rigid block. Every joint carries its own angle and angular
- * momentum, so lifting the figure by one hand lets the rest of it hang: each bone takes a
- * gravity torque summed over its whole subtree, resisted by an angular spring towards a
- * target pose. That spring constant is the dial between the two behaviours the project
- * wants — at zero the figure is a limp ragdoll, cranked up it holds a pose.
+ * Every joint carries its own angle and angular momentum, so lifting the figure by one
+ * hand lets the rest of it hang: each bone takes a gravity torque summed over its whole
+ * subtree, resisted by an angular spring towards a target pose. That spring constant is
+ * the dial between the two behaviours the project wants — at zero the figure is a limp
+ * ragdoll, cranked up it holds a pose.
  *
- * The maths mirrors tools/ragdoll.py, which carries the tests. Two dead ends are recorded
- * there in full, because both looked reasonable and both were wrong:
- *
- *   * Verlet integration for the root. A pinned joint teleports the root by the distance
- *     the finger moved, and Verlet reads any positional correction as velocity, adds it
- *     again next step, and squares its way to NaN in under a second.
- *
- *   * Pinning with a FORCE. The equilibrium is degenerate — the force depends only on how
- *     far the grabbed point is from the finger, and "one spring-length short" is true
- *     wherever the rest of the body happens to be. Every gain produced the identical
- *     wrong pose, with the figure drifting into the ceiling and staying there.
- *
- * What works is solving the chain to the finger, then sliding the root only for the part
- * the chain could not cover.
+ * The maths mirrors tools/ragdoll.py, which carries the tests and the full history of the
+ * three approaches that did not work. Read that file before changing anything here.
  */
 class Ragdoll(
     private val skeleton: Skeleton,
@@ -48,7 +38,7 @@ class Ragdoll(
     private val floor = spec.floorY
     private val ceiling = 0f
     private val wallLeft = 0f
-    private val wallRight = spec.canvasWidth
+    private val wallRight = spec.worldWidth
     private val restitution = 0.2f
     private val groundFriction = 2.5f
 
@@ -60,8 +50,8 @@ class Ragdoll(
     private val target = HashMap<String, Float>()
 
     private val defaultRadius = spec.headHeight * 0.18f
+    private val random = Random(20260913)
 
-    /** Root position, and the home position the offset is measured from. */
     private val rootHome: Vec2
     var rootPos: Vec2
         private set
@@ -70,11 +60,12 @@ class Ragdoll(
     private val angle = HashMap<String, Float>()
     private val anglePrev = HashMap<String, Float>()
 
-    /** Angular acceleration from gravity alone, kept for readouts. */
     var grounded = false
         private set
 
-    /** Speed of the finger, so releasing throws the figure instead of dropping it. */
+    /** Height of the figure in its rest pose, used to tell "still up" from "already down". */
+    private val standingSpan: Float
+
     private var pinLast: Vec2? = null
     private var pinVel = Vec2.ZERO
 
@@ -99,8 +90,7 @@ class Ragdoll(
         }
 
         for (s in spec.bones) {
-            val known = byName.containsKey(s.name)
-            if (!known) continue
+            if (!byName.containsKey(s.name)) continue
             colliderType[s.name] = s.colliderType
             colliderRadius[s.name] = if (s.colliderRadius > 0f) s.colliderRadius else defaultRadius
         }
@@ -121,6 +111,7 @@ class Ragdoll(
         rootHome = bones.first().worldPosition
         rootPos = rootHome
         applyAngles()
+        standingSpan = spanOfFigure()
     }
 
     // -- placement ----------------------------------------------------------
@@ -147,6 +138,16 @@ class Ragdoll(
         } else {
             max(b.worldPosition.y, b.tipPosition().y) + r
         }
+    }
+
+    private fun spanOfFigure(): Float {
+        var low = Float.NEGATIVE_INFINITY
+        var high = Float.MAX_VALUE
+        for (b in bones) {
+            low = max(low, colliderLow(b))
+            high = kotlin.math.min(high, b.worldPosition.y)
+        }
+        return low - high
     }
 
     /** The bone whose collider is nearest to [p]; what a finger grabbing the body hits. */
@@ -197,7 +198,20 @@ class Ragdoll(
             alpha[b.name] = tau / max(inertia, 1e-6f)
         }
 
-        // Joints.
+        val noise = ANGULAR_NOISE * (1f - stiffness)
+        if (noise > 0f) {
+            for (b in bones) {
+                angle[b.name] = (angle[b.name] ?: 0f) + (random.nextFloat() * 2f - 1f) * noise
+            }
+        }
+
+        // A limp figure that has come to rest gives way instead of standing there. It
+        // stops giving once it is already down, or it would never actually come to rest.
+        val slow = abs(rootVel.x) < 30f && abs(rootVel.y) < 30f
+        val giving = stiffness < 0.25f && grounded && slow &&
+            spanOfFigure() > 0.55f * standingSpan
+        val give = if (giving) COLLAPSE_GAIN * (1f - stiffness) else 0f
+
         for (b in bones) {
             val name = b.name
             val theta = angle[name] ?: 0f
@@ -208,6 +222,14 @@ class Ragdoll(
             omega = omega.coerceIn(-cap, cap)
 
             var a = alpha[name] ?: 0f
+            if (giving) {
+                // Positive feedback on the joint's own deviation. A joint with no static
+                // friction cannot hold an angle, so whatever it has already given, it
+                // gives more of. Without this a limp figure that lands on its feet is a
+                // rigid statue balanced on a support polygon: every joint has found its
+                // zero-torque angle and nothing ever disturbs it.
+                a += theta * give
+            }
             val k = stiffness * K_MAX
             if (k > 0f) {
                 val c = 2f * sqrt(k) * SPRING_ZETA
@@ -218,13 +240,16 @@ class Ragdoll(
             next = next.coerceIn(b.minAngle, b.maxAngle)
 
             // Keep the angle we came FROM. Verlet reads the difference between the two
-            // stored angles as the velocity, so writing anything else here freezes the
-            // velocity and the integrator diverges.
+            // stored angles as the velocity, so writing anything else freezes the velocity
+            // and the integrator diverges.
             anglePrev[name] = theta
             angle[name] = next
         }
 
         // Root.
+        if (noise > 0f) {
+            rootVel = Vec2(rootVel.x + (random.nextFloat() * 2f - 1f) * LINEAR_NOISE * dt, rootVel.y)
+        }
         val damp = 1f - LINEAR_DAMP * dt
         rootVel = Vec2(rootVel.x * damp, rootVel.y * damp + gravity * dt)
         val speed = rootVel.length()
@@ -241,19 +266,77 @@ class Ragdoll(
         }
     }
 
+    /**
+     * Resolve the floor per bone, not just for the whole figure.
+     *
+     * Lifting only the root makes the body perch on whichever part happened to touch
+     * first and keeps its shape from there on, which is what "limp still feels stiff"
+     * actually was: the limbs never get to rest ON the floor, and every other part stays
+     * as rigid as the moment it landed.
+     */
     private fun ground(dt: Float) {
-        var deepest = 0f
-        for (b in bones) {
-            val pen = colliderLow(b) - floor
-            if (pen > deepest) deepest = pen
-        }
-        grounded = deepest > 0f
-        if (deepest > 0f) {
-            rootPos = Vec2(rootPos.x, rootPos.y - deepest)
-            if (rootVel.y > 0f) rootVel = Vec2(rootVel.x, -rootVel.y * restitution)
-            rootVel = Vec2(rootVel.x * (1f - groundFriction * dt), rootVel.y)
+        var settled = false
+        for (pass in 0 until GROUND_PASSES) {
+            var deepest = 0f
+            var target: Bone? = null
+            for (b in bones) {
+                val pen = colliderLow(b) - floor
+                if (pen > deepest) {
+                    deepest = pen
+                    target = b
+                }
+            }
+            if (target == null || deepest < 0.05f) {
+                settled = true
+                break
+            }
+            if (!turnOut(target, deepest)) lift(deepest, dt)
         }
 
+        if (!settled) {
+            // Ran out of passes with something still under the floor: the root carries it.
+            var worst = 0f
+            for (b in bones) worst = max(worst, colliderLow(b) - floor)
+            if (worst > 0.05f) lift(worst, dt)
+        }
+
+        walls()
+    }
+
+    /** Rotate a bone about its own joint until the part of it in the floor comes out. */
+    private fun turnOut(bone: Bone, pen: Float): Boolean {
+        val h = bone.worldPosition
+        val contact = if (colliderType[bone.name] == "circle") {
+            com(bone)
+        } else {
+            val t = bone.tipPosition()
+            if (t.y >= h.y) t else h
+        }
+        val dx = contact.x - h.x
+        // Rotating about the head raises the contact at dx per radian, so a contact
+        // directly under the joint cannot be helped by turning and the root has to do it.
+        if (abs(dx) < 1f) return false
+        val step = (pen / dx).coerceIn(-MAX_TURN_STEP, MAX_TURN_STEP)
+        val before = bone.rotation
+        val after = (before + step).coerceIn(bone.minAngle, bone.maxAngle)
+        if (after == before) return false
+        bone.rotation = after
+        angle[bone.name] = after
+        // Absorb it into the integrator history: a contact that is already resting must
+        // not feed the correction back in as velocity and bounce.
+        anglePrev[bone.name] = (anglePrev[bone.name] ?: 0f) + (after - before)
+        skeleton.update()
+        return true
+    }
+
+    private fun lift(amount: Float, dt: Float) {
+        rootPos = Vec2(rootPos.x, rootPos.y - amount)
+        if (rootVel.y > 0f) rootVel = Vec2(rootVel.x, -rootVel.y * restitution)
+        rootVel = Vec2(rootVel.x * (1f - groundFriction * dt), rootVel.y)
+        applyAngles()
+    }
+
+    private fun walls() {
         val r = colliderRadius[bones.first().name] ?: defaultRadius
         if (rootPos.x - r < wallLeft) {
             rootPos = Vec2(wallLeft + r, rootPos.y)
@@ -266,6 +349,9 @@ class Ragdoll(
             rootPos = Vec2(rootPos.x, ceiling + r)
             if (rootVel.y < 0f) rootVel = Vec2(rootVel.x, 0f)
         }
+        var lowest = Float.NEGATIVE_INFINITY
+        for (b in bones) lowest = max(lowest, colliderLow(b))
+        grounded = lowest > floor - 6f
     }
 
     /**
@@ -334,7 +420,6 @@ class Ragdoll(
         pinVel = Vec2.ZERO
     }
 
-    /** Put the figure back where it started, and settle the angles to rest. */
     fun reset() {
         rootPos = rootHome
         rootVel = Vec2.ZERO
@@ -352,11 +437,28 @@ class Ragdoll(
         const val K_MAX = 400f
         const val SPRING_ZETA = 1f
         const val LINEAR_DAMP = 0.6f
-        const val ANGULAR_DAMP = 1.4f
+
+        /**
+         * Per second, on every joint. This was 1.4 and made the whole figure feel like it
+         * was moving through syrup, which read as "stiff" even with the springs at zero.
+         */
+        const val ANGULAR_DAMP = 0.9f
+
         const val MAX_SPEED = 20000f
         const val MAX_OMEGA = 40f
 
         /** How hard the grab pulls the chain before the root starts sliding. */
         const val PIN_IK_ITERATIONS = 6
+
+        /** Floor resolution passes per step, and the largest turn one pass may apply. */
+        const val GROUND_PASSES = 4
+        const val MAX_TURN_STEP = 0.35f
+
+        /** A whisper of noise, so an exactly symmetrical pose can break on its own. */
+        const val ANGULAR_NOISE = 2.0e-5f
+        const val LINEAR_NOISE = 0.6f
+
+        /** How strongly a resting limp joint amplifies its own deviation, in 1/s^2. */
+        const val COLLAPSE_GAIN = 6f
     }
 }

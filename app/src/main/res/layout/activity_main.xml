@@ -189,6 +189,21 @@
                     android:padding="12dp" />
             </ScrollView>
 
+            <!-- ── 桌宠管理：图层深度 ───────────────── -->
+            <ScrollView
+                android:id="@+id/depthScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/depthList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
             <!-- ── 桌宠管理：导入对齐 ───────────────── -->
             <FrameLayout
                 android:id="@+id/alignPane"

@@ -34,11 +34,45 @@ K_MAX = 400.0
 SPRING_ZETA = 1.0
 
 LINEAR_DAMP = 0.6          # per second, on the root
-ANGULAR_DAMP = 1.4         # per second, on every joint
+ANGULAR_DAMP = 0.9         # per second, on every joint
 
 # How hard the grab pulls the chain towards the finger before the root starts sliding.
 # More iterations reach further up the chain; six settles well inside a frame.
 PIN_IK_ITERATIONS = 6
+
+# Floor resolution passes per step, and the largest turn one pass may apply.
+GROUND_PASSES = 4
+MAX_TURN_STEP = 0.35
+
+# A whisper of noise on the joints while the figure is limp, in radians per step.
+#
+# An exactly symmetrical limp figure standing on straight legs is in equilibrium and
+# stands there forever, which reads as a statue rather than a ragdoll. Real ones topple
+# because nothing is ever perfectly balanced, and upright is an UNSTABLE equilibrium, so
+# this does not need to be visible: it grows on its own until the figure falls over.
+ANGULAR_NOISE = 2.0e-5
+
+# The same whisper, on the root. Joint noise alone is not enough: a folded figure can end
+# up with every joint sitting on its limit, where the noise is simply clamped away, and it
+# then balances on one foot forever. The upright pose is an unstable equilibrium, so a
+# nudge that is far too small to see decides which way it topples.
+LINEAR_NOISE = 0.6         # px/s^2
+
+# A deliberately unphysical nudge, and the only one in this file.
+#
+# A limp figure that lands on its feet stands: the foot collider is a 68px capsule, which
+# is a real support polygon, and the pose is a genuine equilibrium. That is correct
+# physics and it looks like a statue, which is not what a limp setting is for. So once the
+# figure has stopped moving, a limp one is nudged until it topples. It only applies below
+# 0.25 stiffness, only while grounded, and only when nearly still, so it never fights a
+# throw or a drag.
+# How strongly a resting limp joint amplifies its own deviation, in 1/s^2. A real joint
+# has no static friction: whatever load it is under, it gives, and a figure whose joints
+# all give folds up. Without this a limp figure that lands on its feet is a rigid statue
+# balanced on a support polygon, because every joint has found its zero-torque angle and
+# nothing ever disturbs it. Applied only when limp, grounded and nearly still, so it never
+# fights a drag or a throw.
+COLLAPSE_GAIN = 6.0
 
 # Hard ceilings on the integrator itself. Not physics: an explicit integrator that is
 # fed a bad number should saturate rather than turn the figure into NaN.
@@ -84,6 +118,8 @@ class Ragdoll:
         self.total_mass = sum(self.mass.values())
 
         self.stiffness = dict((b.name, float(stiffness)) for b in order)
+        self.figure_stiffness = float(stiffness)
+        self.rng = random.Random(20260913)
 
         # The skeleton model only stores parent links, so build the child links and the
         # subtree lists here. Neither changes, so this happens once.
@@ -110,6 +146,11 @@ class Ragdoll:
         # correction as velocity, and one large correction then squares its way to
         # infinity in under a second.
         self.root_vel = [0.0, 0.0]
+
+        # How tall the figure is standing. Used to tell "still up" from "already down",
+        # which is what stops the limp give-way feedback once the figure has collapsed.
+        self.standing_span = (max(self.collider_low(b) for b in self.order)
+                              - min(b.wpos[1] for b in self.order))
         self.ang = dict((b.name, 0.0) for b in order)
         self.ang_prev = dict((b.name, 0.0) for b in order)
         self.target = dict((b.name, 0.0) for b in order)
@@ -187,6 +228,20 @@ class Ragdoll:
         self.alpha = alpha
 
         # Joints.
+        noise = ANGULAR_NOISE * (1.0 - self.figure_stiffness)
+        if noise > 0.0:
+            for b in self.order:
+                self.ang[b.name] += self.rng.uniform(-1.0, 1.0) * noise
+
+        # A limp figure that has come to rest gives way instead of standing there. It
+        # stops giving once it is already down, or it would never actually come to rest.
+        slow = abs(self.root_vel[0]) < 30.0 and abs(self.root_vel[1]) < 30.0
+        span = (max(self.collider_low(b) for b in self.order)
+                - min(b.wpos[1] for b in self.order))
+        giving = (self.figure_stiffness < 0.25 and self.grounded and slow
+                  and span > 0.55 * self.standing_span)
+        give = COLLAPSE_GAIN * (1.0 - self.figure_stiffness) if giving else 0.0
+
         for b in self.order:
             name = b.name
             theta = self.ang[name]
@@ -199,6 +254,13 @@ class Ragdoll:
             elif omega < -cap:
                 omega = -cap
             a = alpha[name]
+            if giving:
+                # Positive feedback on the joint's own deviation. A joint with no static
+                # friction cannot hold an angle, so whatever it has already given, it
+                # gives more of. Without this a limp figure that lands on its feet is a
+                # rigid statue balanced on a support polygon: every joint has found its
+                # zero-torque angle and nothing ever disturbs it.
+                a += theta * give
             k = self.stiffness[name] * K_MAX
             if k > 0.0:
                 # theta - ang_prev is a per-step difference; the spring needs rad/s.
@@ -216,7 +278,8 @@ class Ragdoll:
             self.ang_prev[name] = theta
             self.ang[name] = new_theta
 
-        # Root.
+        if noise > 0.0:
+            self.root_vel[0] += self.rng.uniform(-1.0, 1.0) * LINEAR_NOISE * dt
         self.root_vel[1] += g * dt
         damp = 1.0 - LINEAR_DAMP * dt
         self.root_vel[0] *= damp
@@ -311,18 +374,78 @@ class Ragdoll:
         self.pin_last = (p[0], p[1])
 
     def _ground(self, dt):
-        deepest = 0.0
-        for b in self.order:
-            pen = self.collider_low(b) - self.floor
-            if pen > deepest:
-                deepest = pen
-        self.grounded = deepest > 0.0
-        if deepest > 0.0:
-            self.root_pos[1] -= deepest
-            if self.root_vel[1] > 0.0:
-                self.root_vel[1] = -self.root_vel[1] * self.restitution
-            self.root_vel[0] *= (1.0 - self.ground_friction * dt)
+        """
+        Resolve the floor per bone, not just for the whole figure.
 
+        Lifting only the root makes the body perch on whichever part happened to touch
+        first and keeps its shape from there on, which is what "limp still feels stiff"
+        actually was: the limbs never get to rest ON the floor, they never sprawl, and
+        every other part stays exactly as rigid as when it landed.
+
+        So the deepest part is turned out of the floor first, about its own joint, and
+        only a part that cannot be helped by turning -- a bone hanging straight down, or
+        one already at its joint limit -- hands its share to the root.
+        """
+        settled = False
+        for _ in range(GROUND_PASSES):
+            deepest, target = 0.0, None
+            for b in self.order:
+                pen = self.collider_low(b) - self.floor
+                if pen > deepest:
+                    deepest, target = pen, b
+            if target is None or deepest < 0.05:
+                settled = True
+                break
+            if not self._turn_out(target, deepest):
+                self._lift(deepest, dt)
+
+        if not settled:
+            # Ran out of passes with something still under the floor: the root carries it.
+            worst = max(self.collider_low(b) - self.floor for b in self.order)
+            if worst > 0.05:
+                self._lift(worst, dt)
+
+        self._walls()
+
+    def _turn_out(self, bone, pen):
+        """Rotate a bone about its own joint until the part of it in the floor comes out."""
+        kind, _ = self.collider[bone.name]
+        h = bone.wpos
+        if kind == "circle":
+            contact = self.com(bone)
+        else:
+            t = tip(bone)
+            contact = t if t[1] >= h[1] else h
+        dx = contact[0] - h[0]
+        # Rotating about the head raises the contact at dx per radian, so a contact directly
+        # under the joint cannot be helped by turning at all and the root has to do it.
+        if abs(dx) < 1.0:
+            return False
+        step = max(-MAX_TURN_STEP, min(MAX_TURN_STEP, pen / dx))
+        before = bone.rotation
+        after = before + step
+        if after < bone.min_a:
+            after = bone.min_a
+        elif after > bone.max_a:
+            after = bone.max_a
+        if after == before:
+            return False
+        bone.rotation = after
+        self.ang[bone.name] = after
+        # Absorb it into the integrator history: a contact that is already resting must not
+        # feed the correction back in as velocity and bounce.
+        self.ang_prev[bone.name] += after - before
+        self.fk()
+        return True
+
+    def _lift(self, amount, dt):
+        self.root_pos[1] -= amount
+        if self.root_vel[1] > 0.0:
+            self.root_vel[1] = -self.root_vel[1] * self.restitution
+        self.root_vel[0] *= (1.0 - self.ground_friction * dt)
+        self.fk()
+
+    def _walls(self):
         r = self.collider[self.order[0].name][1]
         if self.root_pos[0] - r < self.wall_left:
             self.root_pos[0] = self.wall_left + r
@@ -334,6 +457,7 @@ class Ragdoll:
             self.root_pos[1] = self.ceiling + r
             if self.root_vel[1] < 0.0:
                 self.root_vel[1] = 0.0
+        self.grounded = max(self.collider_low(b) for b in self.order) > self.floor - 6.0
 
 
 # ------------------------------- tests -------------------------------
@@ -427,6 +551,31 @@ def run(spec_path):
     ok &= _report("stiff is at least 3x steadier than limp",
                   "%.1fx" % (drift[0.0] / max(drift[1.0], 1e-6)),
                   drift[0.0] > drift[1.0] * 3.0)
+
+    print("")
+    print("=== 6. it lands sprawled, not perched ===")
+    rag = Ragdoll(spec, by_name, order, stiffness=0.0)
+    # Dropped from height with speed, so it has to take a real landing.
+    rag.root_pos[1] -= 700.0
+    rag.root_vel[1] = 900.0
+    for _ in range(2400):
+        rag.step(1.0 / 120.0)
+    touching = sum(1 for b in order if rag.collider_low(b) - rag.floor > -25.0)
+    span = max(rag.collider_low(b) for b in order) - min(b.wpos[1] for b in order)
+    ok &= _report("several parts rest on the floor",
+                  "%d bones touching" % touching, touching >= 3)
+    ok &= _report("it is lying down, not standing",
+                  "%.0f px of %.0f" % (span, 1690.0), span < 1690.0 * 0.62)
+
+    print("")
+    print("=== 7. a stiff figure still lands on its feet ===")
+    rag = Ragdoll(spec, by_name, order, stiffness=1.0)
+    for _ in range(1200):
+        rag.step(1.0 / 120.0)
+    drift = max(abs(rag.ang[b.name]) for b in order)
+    span = max(rag.collider_low(b) for b in order) - min(b.wpos[1] for b in order)
+    ok &= _report("it stays upright", "%.0f px of %.0f" % (span, 1690.0), span > 1690.0 * 0.7)
+    ok &= _report("and does not drift into a pose", "%.3f rad" % drift, drift < 0.45)
 
     print("")
     print("=== 5. numbers stay finite over a long run ===")

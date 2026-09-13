@@ -33,6 +33,25 @@ data class IkChainSpec(val upper: String, val lower: String, val bend: Float)
 data class LayerSpec(val bone: String, val z: Int)
 
 /**
+ * A depth rule: when [triggerBone] reaches past [referenceBone], the [parts] are drawn the
+ * other side of [behind].
+ *
+ * This is what lets one arm be in front of the chest in one pose and behind the back in
+ * another. A single fixed order cannot do both, which is exactly the problem the depth
+ * editor exists to solve.
+ */
+data class SwapRuleSpec(
+    val parts: List<String>,
+    val behind: List<String>,
+    /** false = put [parts] behind [behind], true = in front of it. */
+    val toFront: Boolean,
+    /** "tipAbove" or "tipBelow". */
+    val triggerType: String,
+    val triggerBone: String,
+    val referenceBone: String,
+)
+
+/**
  * A character package: the skeleton, the drag chains and the draw order.
  *
  * Authored as joint positions, because that is what a person can measure off artwork.
@@ -46,6 +65,7 @@ class CharacterSpec(
     val bones: List<BoneSpec>,
     val ikChains: List<IkChainSpec>,
     val layers: List<LayerSpec>,
+    val swaps: List<SwapRuleSpec>,
     /** Centre line of the figure in canvas coordinates. */
     val centreX: Float,
     /** Top of the skull; the figure occupies headTop..headTop+totalHeight. */
@@ -55,6 +75,8 @@ class CharacterSpec(
     val bodyWidth: Float,
     val gravity: Float,
     val floorY: Float,
+    /** Width of the play area. Wider than the canvas: the pet needs room to be thrown. */
+    val worldWidth: Float,
 ) {
 
     /**
@@ -122,6 +144,11 @@ class CharacterSpec(
     companion object {
         private fun vec(a: JSONArray) = Vec2(a.getDouble(0).toFloat(), a.getDouble(1).toFloat())
 
+        private fun strings(a: JSONArray?): List<String> {
+            if (a == null) return emptyList()
+            return (0 until a.length()).map { a.getString(it) }
+        }
+
         fun parse(text: String): CharacterSpec {
             val o = JSONObject(text)
             val canvas = o.getJSONObject("canvas")
@@ -160,11 +187,26 @@ class CharacterSpec(
                 LayerSpec(l.getString("bone"), l.getInt("z"))
             }
 
+            val swapsArr = o.optJSONArray("layerSwaps")
+            val swaps = (0 until (swapsArr?.length() ?: 0)).map { i ->
+                val s = swapsArr!!.getJSONObject(i)
+                val trigger = s.optJSONObject("trigger")
+                SwapRuleSpec(
+                    parts = strings(s.optJSONArray("parts")),
+                    behind = strings(s.optJSONArray("behind")),
+                    toFront = s.optString("to", "behind") == "front",
+                    triggerType = trigger?.optString("type", "tipAbove") ?: "tipAbove",
+                    triggerBone = trigger?.optString("bone", "") ?: "",
+                    referenceBone = trigger?.optString("reference", "") ?: "",
+                )
+            }
+
             val canvasW = canvas.getDouble("width").toFloat()
             val props = o.optJSONObject("proportions")
             val phys = o.optJSONObject("physics")
 
             return CharacterSpec(
+                swaps = swaps,
                 id = o.optString("id", "unnamed"),
                 canvasWidth = canvasW,
                 canvasHeight = canvas.getDouble("height").toFloat(),
@@ -178,6 +220,7 @@ class CharacterSpec(
                 bodyWidth = phys?.optDouble("bodyWidth")?.toFloat() ?: (canvasW * 0.32f),
                 gravity = phys?.optDouble("gravity")?.toFloat() ?: 2400f,
                 floorY = phys?.optDouble("floorY")?.toFloat() ?: canvas.getDouble("height").toFloat(),
+                worldWidth = phys?.optDouble("worldWidth")?.toFloat() ?: (canvasW * 3f),
             )
         }
     }

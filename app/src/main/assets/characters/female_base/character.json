@@ -1,7 +1,7 @@
 {
   "id": "female_base",
   "name": "base body female, 6.12 heads",
-  "version": 3,
+  "version": 5,
   "canvas": {
     "width": 1024,
     "height": 2048
@@ -88,8 +88,8 @@
         920
       ],
       "limits": [
-        -20,
-        20
+        -35,
+        35
       ],
       "collider": {
         "type": "capsule",
@@ -108,8 +108,8 @@
         686
       ],
       "limits": [
-        -20,
-        20
+        -35,
+        35
       ],
       "collider": {
         "type": "capsule",
@@ -128,8 +128,8 @@
         548
       ],
       "limits": [
-        -20,
-        20
+        -35,
+        35
       ],
       "collider": {
         "type": "capsule",
@@ -148,8 +148,8 @@
         455
       ],
       "limits": [
-        -25,
-        25
+        -45,
+        45
       ],
       "collider": {
         "type": "capsule",
@@ -168,8 +168,8 @@
         179
       ],
       "limits": [
-        -35,
-        35
+        -50,
+        50
       ],
       "collider": {
         "type": "circle",
@@ -188,8 +188,8 @@
         557.0
       ],
       "limits": [
-        -25,
-        25
+        -40,
+        40
       ],
       "collider": {
         "type": "capsule",
@@ -208,8 +208,8 @@
         840.8
       ],
       "limits": [
-        -170,
-        170
+        -175,
+        175
       ],
       "collider": {
         "type": "capsule",
@@ -268,8 +268,8 @@
         557.0
       ],
       "limits": [
-        -25,
-        25
+        -40,
+        40
       ],
       "collider": {
         "type": "capsule",
@@ -288,8 +288,8 @@
         840.8
       ],
       "limits": [
-        -170,
-        170
+        -175,
+        175
       ],
       "collider": {
         "type": "capsule",
@@ -348,8 +348,8 @@
         1440
       ],
       "limits": [
-        -70,
-        70
+        -85,
+        85
       ],
       "collider": {
         "type": "capsule",
@@ -408,8 +408,8 @@
         1440
       ],
       "limits": [
-        -70,
-        70
+        -85,
+        85
       ],
       "collider": {
         "type": "capsule",
@@ -517,6 +517,10 @@
       "z": 24
     },
     {
+      "bone": "shoulder_R",
+      "z": 31
+    },
+    {
       "bone": "upperarm_R",
       "z": 32
     },
@@ -535,6 +539,10 @@
     {
       "bone": "head",
       "z": 42
+    },
+    {
+      "bone": "shoulder_L",
+      "z": 49
     },
     {
       "bone": "upperarm_L",
@@ -588,6 +596,7 @@
     "gravity": 2400,
     "floorY": 1980,
     "stiffness": 0.0,
-    "note": "collider radius is in canvas px; delete a bone collider block and it falls back to 18% of the head height"
+    "note": "worldWidth is the play area; the canvas is only as wide as the artwork needs. floorY stays the floor everywhere.",
+    "worldWidth": 3072
   }
 }

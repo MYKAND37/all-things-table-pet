@@ -5,6 +5,7 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import dev.atp.pet.engine.math.Transform
 import dev.atp.pet.engine.skeleton.Skeleton
+import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import kotlin.math.cos
 import kotlin.math.sin
 
@@ -25,9 +26,12 @@ class PartRenderer(
     private val library: PartLibrary,
     /** Bone names in back-to-front draw order. */
     drawOrder: List<String>,
+    private val swaps: List<SwapRuleSpec> = emptyList(),
 ) {
     private val restWorld = HashMap<String, Transform>()
-    private val order = drawOrder.filter { library.parts.containsKey(it) }
+    private val baseOrder = drawOrder.filter { library.parts.containsKey(it) }
+    private val order = ArrayList<String>(baseOrder.size)
+    private var lastTriggered = emptyList<Boolean>()
     private val matrix = Matrix()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
 
@@ -44,8 +48,68 @@ class PartRenderer(
         skeleton.update()
     }
 
+    /**
+     * The draw order for the pose right now.
+     *
+     * Rebuilt only when a rule's trigger actually flips: the answer changes when a limb
+     * crosses a threshold, not every frame, and rebuilding a list of twenty bones sixty
+     * times a second for nothing is the kind of waste that shows up as battery drain
+     * rather than as a bug.
+     */
+    private fun currentOrder(): List<String> {
+        if (swaps.isEmpty()) return baseOrder
+
+        var changed = lastTriggered.size != swaps.size
+        val triggered = ArrayList<Boolean>(swaps.size)
+        for ((index, rule) in swaps.withIndex()) {
+            val on = isTriggered(rule)
+            triggered.add(on)
+            if (index >= lastTriggered.size || lastTriggered[index] != on) changed = true
+        }
+        if (!changed && order.size == baseOrder.size) return order
+        lastTriggered = triggered
+
+        val list = ArrayList(baseOrder)
+        for ((index, rule) in swaps.withIndex()) {
+            if (!triggered[index]) continue
+            val moved = rule.parts.filter { list.contains(it) }
+            if (moved.isEmpty()) continue
+            list.removeAll(moved)
+
+            var anchor = -1
+            for (i in list.indices) {
+                if (rule.behind.contains(list[i])) {
+                    if (rule.toFront) {
+                        anchor = i + 1
+                    } else {
+                        anchor = i
+                        break
+                    }
+                }
+            }
+            if (anchor < 0) {
+                // Nothing to swap against is in view; put the parts back where they were.
+                list.addAll(moved)
+                continue
+            }
+            list.addAll(anchor, moved)
+        }
+
+        order.clear()
+        order.addAll(list)
+        return order
+    }
+
+    private fun isTriggered(rule: SwapRuleSpec): Boolean {
+        val bone = skeleton.find(rule.triggerBone) ?: return false
+        val reference = skeleton.find(rule.referenceBone) ?: return false
+        val tip = bone.tipPosition().y
+        val line = reference.worldPosition.y
+        return if (rule.triggerType == "tipBelow") tip > line else tip < line
+    }
+
     fun draw(canvas: Canvas) {
-        for (name in order) {
+        for (name in currentOrder()) {
             val part = library.parts[name] ?: continue
             val bone = skeleton.find(name) ?: continue
             val rest = restWorld[name] ?: continue
