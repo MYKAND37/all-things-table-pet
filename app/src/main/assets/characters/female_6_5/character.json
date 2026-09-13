@@ -1,0 +1,763 @@
+{
+  "id": "female_6_5",
+  "name": "6.5 head female",
+  "version": 1,
+  "canvas": {
+    "width": 1024,
+    "height": 2048
+  },
+  "headHeight": 260,
+  "centreX": 512,
+  "headTopY": 179,
+  "notes": [
+    "Every part is exported at FULL CANVAS SIZE (1024x2048), one PNG per bone,",
+    "named after the bone. Position is therefore implicit — no calibration step.",
+    "A bone with no part file simply draws nothing; the skeleton still works."
+  ],
+  "proportions": {
+    "headHeightPx": 260,
+    "totalHeightPx": 1690,
+    "landmarks": [
+      {
+        "key": "headTop",
+        "head": 0,
+        "y": 179
+      },
+      {
+        "key": "chin",
+        "head": 1,
+        "y": 439
+      },
+      {
+        "key": "shoulder",
+        "head": 1.45,
+        "y": 556
+      },
+      {
+        "key": "chest",
+        "head": 1.95,
+        "y": 686
+      },
+      {
+        "key": "waist",
+        "head": 2.85,
+        "y": 920
+      },
+      {
+        "key": "hip",
+        "head": 3.4,
+        "y": 1063
+      },
+      {
+        "key": "knee",
+        "head": 4.85,
+        "y": 1440
+      },
+      {
+        "key": "ankle",
+        "head": 6.25,
+        "y": 1804
+      },
+      {
+        "key": "sole",
+        "head": 6.5,
+        "y": 1869
+      }
+    ],
+    "widths": {
+      "head": 187,
+      "shoulder": 377,
+      "waist": 247,
+      "hip": 364,
+      "hipJointSpan": 180
+    }
+  },
+  "bones": [
+    {
+      "name": "hip",
+      "parent": null,
+      "head": [
+        512,
+        1063
+      ],
+      "tail": [
+        512,
+        920
+      ],
+      "limits": [
+        -20,
+        20
+      ]
+    },
+    {
+      "name": "spine",
+      "parent": "hip",
+      "head": [
+        512,
+        920
+      ],
+      "tail": [
+        512,
+        686
+      ],
+      "limits": [
+        -20,
+        20
+      ]
+    },
+    {
+      "name": "chest",
+      "parent": "spine",
+      "head": [
+        512,
+        686
+      ],
+      "tail": [
+        512,
+        548
+      ],
+      "limits": [
+        -20,
+        20
+      ]
+    },
+    {
+      "name": "neck",
+      "parent": "chest",
+      "head": [
+        512,
+        548
+      ],
+      "tail": [
+        512,
+        500
+      ],
+      "limits": [
+        -25,
+        25
+      ]
+    },
+    {
+      "name": "head",
+      "parent": "neck",
+      "head": [
+        512,
+        500
+      ],
+      "tail": [
+        512,
+        179
+      ],
+      "limits": [
+        -35,
+        35
+      ]
+    },
+    {
+      "name": "shoulder_L",
+      "parent": "chest",
+      "head": [
+        450,
+        566
+      ],
+      "tail": [
+        323.5,
+        556
+      ],
+      "limits": [
+        -25,
+        25
+      ]
+    },
+    {
+      "name": "upperarm_L",
+      "parent": "shoulder_L",
+      "head": [
+        323.5,
+        556
+      ],
+      "tail": [
+        258.63,
+        861.18
+      ],
+      "limits": [
+        -170,
+        170
+      ]
+    },
+    {
+      "name": "forearm_L",
+      "parent": "upperarm_L",
+      "head": [
+        258.63,
+        861.18
+      ],
+      "tail": [
+        204.57,
+        1115.5
+      ],
+      "limits": [
+        -160,
+        160
+      ]
+    },
+    {
+      "name": "hand_L",
+      "parent": "forearm_L",
+      "head": [
+        204.57,
+        1115.5
+      ],
+      "tail": [
+        169.43,
+        1280.81
+      ],
+      "limits": [
+        -70,
+        70
+      ]
+    },
+    {
+      "name": "shoulder_R",
+      "parent": "chest",
+      "head": [
+        574,
+        566
+      ],
+      "tail": [
+        700.5,
+        556
+      ],
+      "limits": [
+        -25,
+        25
+      ]
+    },
+    {
+      "name": "upperarm_R",
+      "parent": "shoulder_R",
+      "head": [
+        700.5,
+        556
+      ],
+      "tail": [
+        765.37,
+        861.18
+      ],
+      "limits": [
+        -170,
+        170
+      ]
+    },
+    {
+      "name": "forearm_R",
+      "parent": "upperarm_R",
+      "head": [
+        765.37,
+        861.18
+      ],
+      "tail": [
+        819.43,
+        1115.5
+      ],
+      "limits": [
+        -160,
+        160
+      ]
+    },
+    {
+      "name": "hand_R",
+      "parent": "forearm_R",
+      "head": [
+        819.43,
+        1115.5
+      ],
+      "tail": [
+        854.57,
+        1280.81
+      ],
+      "limits": [
+        -70,
+        70
+      ]
+    },
+    {
+      "name": "thigh_L",
+      "parent": "hip",
+      "head": [
+        422,
+        1063
+      ],
+      "tail": [
+        422,
+        1440
+      ],
+      "limits": [
+        -70,
+        70
+      ]
+    },
+    {
+      "name": "shin_L",
+      "parent": "thigh_L",
+      "head": [
+        422,
+        1440
+      ],
+      "tail": [
+        422,
+        1804
+      ],
+      "limits": [
+        -150,
+        0
+      ]
+    },
+    {
+      "name": "foot_L",
+      "parent": "shin_L",
+      "head": [
+        422,
+        1804
+      ],
+      "tail": [
+        422,
+        1869
+      ],
+      "limits": [
+        -45,
+        45
+      ]
+    },
+    {
+      "name": "thigh_R",
+      "parent": "hip",
+      "head": [
+        602,
+        1063
+      ],
+      "tail": [
+        602,
+        1440
+      ],
+      "limits": [
+        -70,
+        70
+      ]
+    },
+    {
+      "name": "shin_R",
+      "parent": "thigh_R",
+      "head": [
+        602,
+        1440
+      ],
+      "tail": [
+        602,
+        1804
+      ],
+      "limits": [
+        -150,
+        0
+      ]
+    },
+    {
+      "name": "foot_R",
+      "parent": "shin_R",
+      "head": [
+        602,
+        1804
+      ],
+      "tail": [
+        602,
+        1869
+      ],
+      "limits": [
+        -45,
+        45
+      ]
+    },
+    {
+      "name": "hair_back_1",
+      "parent": "head",
+      "head": [
+        512,
+        300
+      ],
+      "tail": [
+        512,
+        430
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.28,
+        "damping": 0.88,
+        "gravity": 260
+      }
+    },
+    {
+      "name": "hair_back_2",
+      "parent": "hair_back_1",
+      "head": [
+        512,
+        430
+      ],
+      "tail": [
+        512,
+        560
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.32,
+        "damping": 0.88,
+        "gravity": 260
+      }
+    },
+    {
+      "name": "hair_back_3",
+      "parent": "hair_back_2",
+      "head": [
+        512,
+        560
+      ],
+      "tail": [
+        512,
+        690
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.36,
+        "damping": 0.9,
+        "gravity": 260
+      }
+    },
+    {
+      "name": "hair_side_L_1",
+      "parent": "head",
+      "head": [
+        400,
+        330
+      ],
+      "tail": [
+        378,
+        450
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.34,
+        "damping": 0.86,
+        "gravity": 240
+      }
+    },
+    {
+      "name": "hair_side_L_2",
+      "parent": "hair_side_L_1",
+      "head": [
+        378,
+        450
+      ],
+      "tail": [
+        366,
+        570
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.38,
+        "damping": 0.88,
+        "gravity": 240
+      }
+    },
+    {
+      "name": "hair_side_R_1",
+      "parent": "head",
+      "head": [
+        624,
+        330
+      ],
+      "tail": [
+        646,
+        450
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.34,
+        "damping": 0.86,
+        "gravity": 240
+      }
+    },
+    {
+      "name": "hair_side_R_2",
+      "parent": "hair_side_R_1",
+      "head": [
+        646,
+        450
+      ],
+      "tail": [
+        658,
+        570
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.38,
+        "damping": 0.88,
+        "gravity": 240
+      }
+    },
+    {
+      "name": "skirt_front_L",
+      "parent": "hip",
+      "head": [
+        466,
+        1100
+      ],
+      "tail": [
+        452,
+        1240
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.42,
+        "damping": 0.84,
+        "gravity": 300
+      }
+    },
+    {
+      "name": "skirt_front_R",
+      "parent": "hip",
+      "head": [
+        558,
+        1100
+      ],
+      "tail": [
+        572,
+        1240
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.42,
+        "damping": 0.84,
+        "gravity": 300
+      }
+    },
+    {
+      "name": "skirt_side_L",
+      "parent": "hip",
+      "head": [
+        400,
+        1090
+      ],
+      "tail": [
+        368,
+        1215
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.4,
+        "damping": 0.84,
+        "gravity": 300
+      }
+    },
+    {
+      "name": "skirt_side_R",
+      "parent": "hip",
+      "head": [
+        624,
+        1090
+      ],
+      "tail": [
+        656,
+        1215
+      ],
+      "spring": true,
+      "physics": {
+        "stiffness": 0.4,
+        "damping": 0.84,
+        "gravity": 300
+      }
+    }
+  ],
+  "ikChains": [
+    {
+      "upper": "upperarm_L",
+      "lower": "forearm_L",
+      "bend": 1
+    },
+    {
+      "upper": "upperarm_R",
+      "lower": "forearm_R",
+      "bend": -1
+    },
+    {
+      "upper": "thigh_L",
+      "lower": "shin_L",
+      "bend": 1
+    },
+    {
+      "upper": "thigh_R",
+      "lower": "shin_R",
+      "bend": -1
+    }
+  ],
+  "layers": [
+    {
+      "bone": "hair_back_1",
+      "z": 0
+    },
+    {
+      "bone": "hair_back_2",
+      "z": 1
+    },
+    {
+      "bone": "hair_back_3",
+      "z": 2
+    },
+    {
+      "bone": "thigh_R",
+      "z": 10
+    },
+    {
+      "bone": "shin_R",
+      "z": 11
+    },
+    {
+      "bone": "foot_R",
+      "z": 12
+    },
+    {
+      "bone": "thigh_L",
+      "z": 13
+    },
+    {
+      "bone": "shin_L",
+      "z": 14
+    },
+    {
+      "bone": "foot_L",
+      "z": 15
+    },
+    {
+      "bone": "hip",
+      "z": 20
+    },
+    {
+      "bone": "spine",
+      "z": 22
+    },
+    {
+      "bone": "chest",
+      "z": 24
+    },
+    {
+      "bone": "skirt_side_R",
+      "z": 26
+    },
+    {
+      "bone": "skirt_side_L",
+      "z": 27
+    },
+    {
+      "bone": "skirt_front_R",
+      "z": 28
+    },
+    {
+      "bone": "skirt_front_L",
+      "z": 29
+    },
+    {
+      "bone": "upperarm_R",
+      "z": 32
+    },
+    {
+      "bone": "forearm_R",
+      "z": 33
+    },
+    {
+      "bone": "hand_R",
+      "z": 34
+    },
+    {
+      "bone": "neck",
+      "z": 40
+    },
+    {
+      "bone": "head",
+      "z": 42
+    },
+    {
+      "bone": "hair_side_R_1",
+      "z": 44
+    },
+    {
+      "bone": "hair_side_R_2",
+      "z": 45
+    },
+    {
+      "bone": "hair_side_L_1",
+      "z": 46
+    },
+    {
+      "bone": "hair_side_L_2",
+      "z": 47
+    },
+    {
+      "bone": "upperarm_L",
+      "z": 50
+    },
+    {
+      "bone": "forearm_L",
+      "z": 51
+    },
+    {
+      "bone": "hand_L",
+      "z": 52
+    }
+  ],
+  "layerSwaps": [
+    {
+      "parts": [
+        "upperarm_L",
+        "forearm_L",
+        "hand_L"
+      ],
+      "behind": [
+        "neck",
+        "head",
+        "hair_side_L_1",
+        "hair_side_L_2",
+        "hair_side_R_1",
+        "hair_side_R_2",
+        "hair_back_1",
+        "hair_back_2",
+        "hair_back_3"
+      ],
+      "trigger": {
+        "type": "tipAbove",
+        "bone": "forearm_L",
+        "reference": "chest"
+      }
+    },
+    {
+      "parts": [
+        "upperarm_R",
+        "forearm_R",
+        "hand_R"
+      ],
+      "behind": [
+        "neck",
+        "head",
+        "hair_side_L_1",
+        "hair_side_L_2",
+        "hair_side_R_1",
+        "hair_side_R_2",
+        "hair_back_1",
+        "hair_back_2",
+        "hair_back_3"
+      ],
+      "trigger": {
+        "type": "tipAbove",
+        "bone": "forearm_R",
+        "reference": "chest"
+      }
+    }
+  ]
+}

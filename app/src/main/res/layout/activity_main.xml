@@ -83,6 +83,7 @@
             android:background="@drawable/glass_panel">
 
             <LinearLayout
+                android:id="@+id/placeholder"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="center"
@@ -118,6 +119,22 @@
                     android:textColor="@color/text_subtle"
                     android:textSize="13sp" />
             </LinearLayout>
+
+            <dev.atp.pet.ui.SkeletonView
+                android:id="@+id/skeletonView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
+            <TextView
+                android:id="@+id/skeletonStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom"
+                android:padding="10dp"
+                android:textColor="@color/text_muted"
+                android:textSize="11sp"
+                android:visibility="gone" />
         </FrameLayout>
     </LinearLayout>
 </FrameLayout>
