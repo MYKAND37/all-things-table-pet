@@ -10,12 +10,11 @@
   "centreX": 512,
   "headTopY": 179,
   "notes": [
-    "Every part is exported at FULL CANVAS SIZE (1024x2048), one PNG per bone,",
-    "named after the bone. Position is therefore implicit \u2014 no calibration step.",
+    "Joint positions were measured off the supplied base-body reference, not guessed.",
+    "Every part is exported at FULL CANVAS SIZE, one PNG per bone, named after the bone.",
     "A bone with no part file simply draws nothing; the skeleton still works.",
-    "Joint positions were measured off the supplied base-body reference, not guessed:",
-    "shoulder joints sit at +/-162px, the arm hangs 9.8 deg off vertical and runs",
-    "288/227/101, which puts the fingertips at y=1164 instead of hanging below the knee."
+    "Hair and skirt spring chains were removed until there is artwork for them; they",
+    "are one git revert away in the commit that stripped them."
   ],
   "proportions": {
     "headHeightPx": 276.0,
@@ -361,8 +360,8 @@
         1804
       ],
       "limits": [
-        -150,
-        0
+        0,
+        150
       ]
     },
     {
@@ -380,204 +379,6 @@
         -45,
         45
       ]
-    },
-    {
-      "name": "hair_back_1",
-      "parent": "head",
-      "head": [
-        512,
-        300
-      ],
-      "tail": [
-        512,
-        430
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.28,
-        "damping": 0.88,
-        "gravity": 260
-      }
-    },
-    {
-      "name": "hair_back_2",
-      "parent": "hair_back_1",
-      "head": [
-        512,
-        430
-      ],
-      "tail": [
-        512,
-        560
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.32,
-        "damping": 0.88,
-        "gravity": 260
-      }
-    },
-    {
-      "name": "hair_back_3",
-      "parent": "hair_back_2",
-      "head": [
-        512,
-        560
-      ],
-      "tail": [
-        512,
-        690
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.36,
-        "damping": 0.9,
-        "gravity": 260
-      }
-    },
-    {
-      "name": "hair_side_L_1",
-      "parent": "head",
-      "head": [
-        400,
-        330
-      ],
-      "tail": [
-        378,
-        450
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.34,
-        "damping": 0.86,
-        "gravity": 240
-      }
-    },
-    {
-      "name": "hair_side_L_2",
-      "parent": "hair_side_L_1",
-      "head": [
-        378,
-        450
-      ],
-      "tail": [
-        366,
-        570
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.38,
-        "damping": 0.88,
-        "gravity": 240
-      }
-    },
-    {
-      "name": "hair_side_R_1",
-      "parent": "head",
-      "head": [
-        624,
-        330
-      ],
-      "tail": [
-        646,
-        450
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.34,
-        "damping": 0.86,
-        "gravity": 240
-      }
-    },
-    {
-      "name": "hair_side_R_2",
-      "parent": "hair_side_R_1",
-      "head": [
-        646,
-        450
-      ],
-      "tail": [
-        658,
-        570
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.38,
-        "damping": 0.88,
-        "gravity": 240
-      }
-    },
-    {
-      "name": "skirt_front_L",
-      "parent": "hip",
-      "head": [
-        466,
-        1100
-      ],
-      "tail": [
-        452,
-        1240
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.42,
-        "damping": 0.84,
-        "gravity": 300
-      }
-    },
-    {
-      "name": "skirt_front_R",
-      "parent": "hip",
-      "head": [
-        558,
-        1100
-      ],
-      "tail": [
-        572,
-        1240
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.42,
-        "damping": 0.84,
-        "gravity": 300
-      }
-    },
-    {
-      "name": "skirt_side_L",
-      "parent": "hip",
-      "head": [
-        400,
-        1090
-      ],
-      "tail": [
-        368,
-        1215
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.4,
-        "damping": 0.84,
-        "gravity": 300
-      }
-    },
-    {
-      "name": "skirt_side_R",
-      "parent": "hip",
-      "head": [
-        624,
-        1090
-      ],
-      "tail": [
-        656,
-        1215
-      ],
-      "spring": true,
-      "physics": {
-        "stiffness": 0.4,
-        "damping": 0.84,
-        "gravity": 300
-      }
     }
   ],
   "ikChains": [
@@ -603,18 +404,6 @@
     }
   ],
   "layers": [
-    {
-      "bone": "hair_back_1",
-      "z": 0
-    },
-    {
-      "bone": "hair_back_2",
-      "z": 1
-    },
-    {
-      "bone": "hair_back_3",
-      "z": 2
-    },
     {
       "bone": "thigh_R",
       "z": 10
@@ -652,22 +441,6 @@
       "z": 24
     },
     {
-      "bone": "skirt_side_R",
-      "z": 26
-    },
-    {
-      "bone": "skirt_side_L",
-      "z": 27
-    },
-    {
-      "bone": "skirt_front_R",
-      "z": 28
-    },
-    {
-      "bone": "skirt_front_L",
-      "z": 29
-    },
-    {
       "bone": "upperarm_R",
       "z": 32
     },
@@ -686,22 +459,6 @@
     {
       "bone": "head",
       "z": 42
-    },
-    {
-      "bone": "hair_side_R_1",
-      "z": 44
-    },
-    {
-      "bone": "hair_side_R_2",
-      "z": 45
-    },
-    {
-      "bone": "hair_side_L_1",
-      "z": 46
-    },
-    {
-      "bone": "hair_side_L_2",
-      "z": 47
     },
     {
       "bone": "upperarm_L",
@@ -725,14 +482,7 @@
       ],
       "behind": [
         "neck",
-        "head",
-        "hair_side_L_1",
-        "hair_side_L_2",
-        "hair_side_R_1",
-        "hair_side_R_2",
-        "hair_back_1",
-        "hair_back_2",
-        "hair_back_3"
+        "head"
       ],
       "trigger": {
         "type": "tipAbove",
@@ -748,14 +498,7 @@
       ],
       "behind": [
         "neck",
-        "head",
-        "hair_side_L_1",
-        "hair_side_L_2",
-        "hair_side_R_1",
-        "hair_side_R_2",
-        "hair_back_1",
-        "hair_back_2",
-        "hair_back_3"
+        "head"
       ],
       "trigger": {
         "type": "tipAbove",
@@ -763,5 +506,10 @@
         "reference": "chest"
       }
     }
-  ]
+  ],
+  "physics": {
+    "bodyWidth": 330,
+    "gravity": 2400,
+    "floorY": 1980
+  }
 }

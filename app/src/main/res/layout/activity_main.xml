@@ -126,6 +126,12 @@
                 android:layout_height="match_parent"
                 android:visibility="gone" />
 
+            <dev.atp.pet.ui.PhysicsSandboxView
+                android:id="@+id/sandboxView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone" />
+
             <TextView
                 android:id="@+id/skeletonStatus"
                 android:layout_width="match_parent"

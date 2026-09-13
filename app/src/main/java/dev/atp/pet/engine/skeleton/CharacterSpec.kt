@@ -42,6 +42,15 @@ class CharacterSpec(
     val bones: List<BoneSpec>,
     val ikChains: List<IkChainSpec>,
     val layers: List<LayerSpec>,
+    /** Centre line of the figure in canvas coordinates. */
+    val centreX: Float,
+    /** Top of the skull; the figure occupies headTop..headTop+totalHeight. */
+    val headTop: Float,
+    val totalHeight: Float,
+    /** Collider width for physics: the body, deliberately excluding the arms. */
+    val bodyWidth: Float,
+    val gravity: Float,
+    val floorY: Float,
 ) {
 
     /**
@@ -144,14 +153,24 @@ class CharacterSpec(
                 LayerSpec(l.getString("bone"), l.getInt("z"))
             }
 
+            val canvasW = canvas.getDouble("width").toFloat()
+            val props = o.optJSONObject("proportions")
+            val phys = o.optJSONObject("physics")
+
             return CharacterSpec(
                 id = o.optString("id", "unnamed"),
-                canvasWidth = canvas.getDouble("width").toFloat(),
+                canvasWidth = canvasW,
                 canvasHeight = canvas.getDouble("height").toFloat(),
                 headHeight = o.optDouble("headHeight", 0.0).toFloat(),
                 bones = bones,
                 ikChains = chains,
                 layers = layers,
+                centreX = o.optDouble("centreX", (canvasW / 2f).toDouble()).toFloat(),
+                headTop = o.optDouble("headTopY", 0.0).toFloat(),
+                totalHeight = props?.optDouble("totalHeightPx")?.toFloat() ?: 0f,
+                bodyWidth = phys?.optDouble("bodyWidth")?.toFloat() ?: (canvasW * 0.32f),
+                gravity = phys?.optDouble("gravity")?.toFloat() ?: 2400f,
+                floorY = phys?.optDouble("floorY")?.toFloat() ?: canvas.getDouble("height").toFloat(),
             )
         }
     }

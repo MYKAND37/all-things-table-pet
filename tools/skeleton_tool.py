@@ -265,6 +265,29 @@ def verify(spec, by_name, order):
         else:
             print("  %-28s live-pose drag  worst err=%.5fpx" % (up + " -> " + lo, live_worst))
 
+        # Knees must mirror. Dragged straight down from rest, the left knee has to
+        # travel left and the right knee right. This is what breaks when the two
+        # shins carry IDENTICAL limits instead of mirrored ones: the maths wants a
+        # positive rotation on one side, the limit clamps it to zero, and the knee
+        # can only ever bend one way. Cheap to write, and it is a real bug that
+        # survived every other test here.
+        update(order)
+        upper.rotation = 0.0
+        lower.rotation = 0.0
+        update(order)
+        root = upper.wpos
+        target = (root[0], root[1] + reach * 0.7)
+        solve_drag(by_name, up, lo, target, bend, order)
+        knee = tip(upper)
+        dx = knee[0] - root[0]
+        outward = -1.0 if up.endswith("_L") else 1.0
+        if dx * outward <= 1.0:
+            ok = False
+            print("  FAIL %s: knee bends the wrong way from rest (dx=%.1f)" % (up, dx))
+        else:
+            print("  %-28s knee bends outward from rest (dx=%+.1f)"
+                  % (up + " -> " + lo, dx))
+
         # Out of reach: the chain must stay extended and point at the target rather
         # than snapping to a pose that reaches nothing.
         update(order)

@@ -4,14 +4,18 @@ import android.os.Bundle
 import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.SkeletonView
 
 /**
  * The app shell: a fixed rail of four areas on the left, a frosted pane on the right.
  *
- * Only 测试场 does anything so far. It hosts the rigging bench, which loads the 6.5-head
- * character package and lets a finger drag its joints -- the on-device half of the
- * skeleton work. The other areas are still placeholders.
+ * The split the project settled on:
+ *
+ *   测试场    runtime -- physics, motion, and later props and events
+ *   桌宠管理  authoring -- the rig editor
+ *
+ * 道具管理 and 逻辑管理 are still placeholders.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -24,6 +28,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var placeholder: View
     private lateinit var skeletonView: SkeletonView
+    private lateinit var sandboxView: PhysicsSandboxView
     private lateinit var status: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,6 +38,7 @@ class MainActivity : AppCompatActivity() {
         val title = findViewById<TextView>(R.id.contentTitle)
         placeholder = findViewById(R.id.placeholder)
         skeletonView = findViewById(R.id.skeletonView)
+        sandboxView = findViewById(R.id.sandboxView)
         status = findViewById(R.id.skeletonStatus)
 
         val items = menuIds.map { findViewById<TextView>(it) }
@@ -41,29 +47,42 @@ class MainActivity : AppCompatActivity() {
                 items.forEach { it.isSelected = false }
                 item.isSelected = true
                 title.text = item.text
-                show(item.id == R.id.menuSandbox)
+                show(item.id)
             }
         }
 
         skeletonView.onInfo = { status.text = it }
+        sandboxView.onInfo = { status.text = it }
 
-        // The bench is the first thing worth looking at, so open on it.
+        try {
+            sandboxView.load(CHARACTER)
+            skeletonView.load(CHARACTER)
+        } catch (e: Exception) {
+            status.text = "character package failed to load: " + e.message
+        }
+
         items.firstOrNull()?.let {
             it.isSelected = true
             title.text = it.text
         }
-        show(true)
+        show(R.id.menuSandbox)
+    }
 
-        try {
-            skeletonView.load("characters/female_base/character.json")
-        } catch (e: Exception) {
-            status.text = "character package failed to load: " + e.message
+    private fun show(selected: Int) {
+        val sandbox = selected == R.id.menuSandbox
+        val editor = selected == R.id.menuPets
+        placeholder.visibility = if (sandbox || editor) View.GONE else View.VISIBLE
+        sandboxView.visibility = if (sandbox) View.VISIBLE else View.GONE
+        skeletonView.visibility = if (editor) View.VISIBLE else View.GONE
+        status.visibility = if (sandbox || editor) View.VISIBLE else View.GONE
+        status.text = when {
+            sandbox -> "拖拽可以抓起来甩出去 · 松手后受重力下落 · 双击复位"
+            editor -> "拖关节摆姿势 · 双击复位"
+            else -> ""
         }
     }
 
-    private fun show(sandbox: Boolean) {
-        placeholder.visibility = if (sandbox) View.GONE else View.VISIBLE
-        skeletonView.visibility = if (sandbox) View.VISIBLE else View.GONE
-        status.visibility = if (sandbox) View.VISIBLE else View.GONE
+    private companion object {
+        const val CHARACTER = "characters/female_base/character.json"
     }
 }
