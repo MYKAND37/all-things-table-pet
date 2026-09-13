@@ -13,8 +13,11 @@ import kotlin.math.sin
 data class BoneSpec(
     val name: String,
     val parentName: String?,
-    val head: Vec2,
-    val tail: Vec2,
+    // Mutable: the bone editor moves these and re-bakes the rig. Head and tail are in
+    // canvas coordinates, which is also exactly the rest pose, which is why editing works
+    // in canvas space and needs no pose to be undone first.
+    var head: Vec2,
+    var tail: Vec2,
     val minAngle: Float,
     val maxAngle: Float,
     val springy: Boolean,

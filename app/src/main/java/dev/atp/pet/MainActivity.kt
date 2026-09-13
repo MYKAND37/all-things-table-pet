@@ -1,5 +1,6 @@
 package dev.atp.pet
 
+import android.app.AlertDialog
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -7,6 +8,7 @@ import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -56,6 +58,14 @@ class MainActivity : AppCompatActivity() {
     private var wizardRef: String? = null
     private var wizardAbove = true
 
+    /** Rig editor. */
+    private lateinit var rigBar: View
+    private lateinit var rigMode: TextView
+    private var rigBoneMode = false
+
+    /** Which saved pose the sandbox is holding, if any. */
+    private var activePose: String? = null
+
     private lateinit var sidebar: LinearLayout
     private lateinit var railHint: TextView
     private lateinit var placeholder: View
@@ -95,6 +105,13 @@ class MainActivity : AppCompatActivity() {
         partListScroll = findViewById(R.id.partListScroll)
         partList = findViewById(R.id.partList)
         skeletonView = findViewById(R.id.skeletonView)
+        rigBar = findViewById(R.id.rigBar)
+        rigMode = findViewById(R.id.rigMode)
+        findViewById<View>(R.id.rigMode).setOnClickListener { toggleRigMode() }
+        findViewById<View>(R.id.rigSaveBones).setOnClickListener { saveBones() }
+        findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
+        findViewById<View>(R.id.rigSavePose).setOnClickListener { askPoseName() }
+
         depthScroll = findViewById(R.id.depthScroll)
         depthList = findViewById(R.id.depthList)
         alignPane = findViewById(R.id.alignPane)
@@ -164,6 +181,12 @@ class MainActivity : AppCompatActivity() {
         skeletonView.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         alignPane.visibility = if (pane == Pane.PART_ALIGN) View.VISIBLE else View.GONE
         depthScroll.visibility = if (pane == Pane.PET_DEPTH) View.VISIBLE else View.GONE
+        rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
+        if (pane != Pane.PET_RIG && rigBoneMode) {
+            rigBoneMode = false
+            skeletonView.setBoneEditMode(false)
+            rigMode.text = getString(R.string.rig_mode_pose)
+        }
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN)
                 View.VISIBLE
@@ -220,6 +243,48 @@ class MainActivity : AppCompatActivity() {
         }
         petChooser.addView(stiffChip)
 
+        val poses = summoned?.let { store.loadPoses(it.id) } ?: emptyList()
+        if (poses.isNotEmpty()) {
+            val none = label(getString(R.string.pose_none), 12f, if (activePose == null) INK else MUTED)
+            none.background = getDrawable(
+                if (activePose == null) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            none.setPadding(dp(12), dp(6), dp(12), dp(6))
+            val np = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            np.marginEnd = dp(6)
+            none.layoutParams = np
+            none.setOnClickListener {
+                activePose = null
+                sandboxView.applyPose(null)
+                buildPetChooser()
+            }
+            petChooser.addView(none)
+
+            for (pose in poses) {
+                val on = activePose == pose.name
+                val chip = label(pose.name, 12f, if (on) INK else MUTED)
+                chip.background = getDrawable(
+                    if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+                )
+                chip.setPadding(dp(12), dp(6), dp(12), dp(6))
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                )
+                lp.marginEnd = dp(6)
+                chip.layoutParams = lp
+                chip.setOnClickListener {
+                    activePose = pose.name
+                    sandboxView.applyPose(pose.angles)
+                    buildPetChooser()
+                }
+                petChooser.addView(chip)
+            }
+        }
+
         for (folder in characters) {
             val chip = label(folder.id, 12f, if (folder == summoned) INK else MUTED)
             chip.background = getDrawable(
@@ -234,6 +299,7 @@ class MainActivity : AppCompatActivity() {
             chip.layoutParams = params
             chip.setOnClickListener {
                 summoned = folder
+                activePose = null
                 sandboxView.load(folder)
                 buildPetChooser()
             }
@@ -304,6 +370,9 @@ class MainActivity : AppCompatActivity() {
         rig.layoutParams = rp
         rig.setOnClickListener {
             skeletonView.load(folder)
+            rigBoneMode = false
+            skeletonView.setBoneEditMode(false)
+            rigMode.text = getString(R.string.rig_mode_pose)
             show(Pane.PET_RIG)
         }
         partList.addView(rig)
@@ -726,6 +795,56 @@ class MainActivity : AppCompatActivity() {
         skeletonView.load(folder)
         wizardStage = 0
         buildDepthPane()
+    }
+
+    // ── 骨骼编辑器 ──────────────────────────────────────────────────────────
+
+    private fun toggleRigMode() {
+        rigBoneMode = !rigBoneMode
+        skeletonView.setBoneEditMode(rigBoneMode)
+        rigMode.text = getString(
+            if (rigBoneMode) R.string.rig_mode_bones else R.string.rig_mode_pose
+        )
+    }
+
+    private fun saveBones() {
+        val folder = opened ?: return
+        val ok = store.saveBones(folder.id, skeletonView.editedBones())
+        Toast.makeText(
+            this,
+            getString(if (ok) R.string.rig_bones_saved else R.string.rig_save_failed),
+            Toast.LENGTH_SHORT,
+        ).show()
+        if (!ok) return
+        // The rig changed shape, so the parts and the physics have to be rebuilt from it.
+        skeletonView.load(folder)
+        rigBoneMode = false
+        skeletonView.setBoneEditMode(false)
+        rigMode.text = getString(R.string.rig_mode_pose)
+        if (summoned?.id == folder.id) summoned?.let { sandboxView.load(it) }
+    }
+
+    private fun askPoseName() {
+        val folder = opened ?: return
+        val input = EditText(this).apply {
+            hint = getString(R.string.rig_pose_name)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.rig_save_pose)
+            .setView(input)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val name = input.text.toString().trim().ifEmpty { "动作" }
+                val ok = store.savePose(folder.id, name, skeletonView.currentAngles())
+                Toast.makeText(
+                    this,
+                    getString(if (ok) R.string.rig_pose_saved else R.string.rig_save_failed),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                if (ok && summoned?.id == folder.id) buildPetChooser()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────

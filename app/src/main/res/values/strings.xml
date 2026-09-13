@@ -58,4 +58,16 @@
     <string name="depth_descendants">（连同它下面的部位）</string>
     <string name="depth_cancel">取消</string>
     <string name="depth_remove">删除</string>
+
+    <!-- 骨骼编辑器 -->
+    <string name="rig_mode_pose">摆姿势</string>
+    <string name="rig_mode_bones">改骨骼</string>
+    <string name="rig_save_bones">保存骨骼</string>
+    <string name="rig_reset">复位</string>
+    <string name="rig_save_pose">存为动作</string>
+    <string name="rig_bones_saved">骨骼已保存</string>
+    <string name="rig_save_failed">保存失败</string>
+    <string name="rig_pose_name">动作名称</string>
+    <string name="rig_pose_saved">动作已保存</string>
+    <string name="pose_none">不摆动作</string>
 </resources>

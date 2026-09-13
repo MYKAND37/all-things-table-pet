@@ -1,6 +1,7 @@
 package dev.atp.pet.data
 
 import android.content.Context
+import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -182,6 +183,103 @@ class CharacterStore(private val context: Context) {
         }
     }
 
+    /**
+     * Write back the rig geometry after the bone editor moved it.
+     *
+     * [geometry] maps a bone name to its head and tail in canvas coordinates. The version
+     * is bumped so the seeding pass — which refreshes the bundled spec whenever the app
+     * ships a newer one — leaves these edits alone instead of overwriting them on the
+     * next launch.
+     */
+    fun saveBones(id: String, geometry: Map<String, Pair<Vec2, Vec2>>): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.getJSONArray("bones")
+            for (i in 0 until arr.length()) {
+                val b = arr.getJSONObject(i)
+                val g = geometry[b.getString("name")] ?: continue
+                b.put("head", JSONArray(listOf(g.first.x.toDouble(), g.first.y.toDouble())))
+                b.put("tail", JSONArray(listOf(g.second.x.toDouble(), g.second.y.toDouble())))
+            }
+            root.put("version", root.optInt("version", 0) + 1)
+            writeSpec(folder, root)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ── 动作预设 ────────────────────────────────────────────────────────────
+
+    /** A saved pose: the joint angles the character holds while it is "doing" this action. */
+    data class Pose(val name: String, val angles: Map<String, Float>)
+
+    fun loadPoses(id: String): List<Pose> {
+        val folder = folder(id) ?: return emptyList()
+        val file = File(folder.dir, POSES_FILE)
+        if (!file.isFile) return emptyList()
+        return try {
+            val arr = JSONArray(file.readText())
+            (0 until arr.length()).map { i ->
+                val o = arr.getJSONObject(i)
+                val angles = o.getJSONObject("angles")
+                Pose(
+                    o.getString("name"),
+                    angles.keys().asSequence().associateWith { angles.getDouble(it).toFloat() },
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun savePose(id: String, name: String, angles: Map<String, Float>): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            val kept = loadPoses(id).filter { it.name != name }
+            val arr = JSONArray()
+            for (p in kept + Pose(name, angles)) {
+                val a = JSONObject()
+                for ((bone, value) in p.angles) a.put(bone, value.toDouble())
+                arr.put(JSONObject().put("name", p.name).put("angles", a))
+            }
+            val temp = File(folder.dir, POSES_FILE + ".tmp")
+            temp.writeText(arr.toString(2))
+            val target = File(folder.dir, POSES_FILE)
+            if (target.exists()) target.delete()
+            temp.renameTo(target)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun deletePose(id: String, name: String): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            val arr = JSONArray()
+            for (p in loadPoses(id)) {
+                if (p.name == name) continue
+                val a = JSONObject()
+                for ((bone, value) in p.angles) a.put(bone, value.toDouble())
+                arr.put(JSONObject().put("name", p.name).put("angles", a))
+            }
+            val temp = File(folder.dir, POSES_FILE + ".tmp")
+            temp.writeText(arr.toString(2))
+            val target = File(folder.dir, POSES_FILE)
+            if (target.exists()) target.delete()
+            temp.renameTo(target)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun writeSpec(folder: CharacterFolder, root: JSONObject): Boolean {
+        val temp = File(folder.dir, "character.json.tmp")
+        temp.writeText(root.toString(2))
+        if (folder.specFile.exists()) folder.specFile.delete()
+        return temp.renameTo(folder.specFile)
+    }
+
     fun clearPart(id: String, bone: String): Boolean {
         val folder = folder(id) ?: return false
         return folder.partFile(bone).delete()
@@ -226,5 +324,8 @@ class CharacterStore(private val context: Context) {
 
     private companion object {
         const val BUNDLED_ROOT = "characters"
+
+        /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
+        const val POSES_FILE = "poses.json"
     }
 }

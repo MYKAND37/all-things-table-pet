@@ -94,6 +94,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
             invalidate()
         }
 
+    /** null clears back to limp. */
+    fun applyPose(angles: Map<String, Float>?) {
+        val rag = ragdoll ?: return
+        if (angles == null) rag.clearPose() else rag.applyPose(angles)
+        stiffness = rag.stiffness
+        invalidate()
+    }
+
     fun load(folder: CharacterFolder) {
         library?.release()
         val parsed = CharacterSpec.parse(folder.specText())

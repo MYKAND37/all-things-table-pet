@@ -413,6 +413,24 @@ class Ragdoll(
         return out
     }
 
+    /**
+     * Hold a saved pose.
+     *
+     * Setting the spring targets is all it takes: the joints are already pulled towards
+     * [target], so a pose is just a different set of angles to be pulled towards. Dragging
+     * still works — the pin moves the whole figure, and a dragged joint springs back to
+     * the pose it is supposed to be holding.
+     */
+    fun applyPose(angles: Map<String, Float>, hold: Float = 0.85f) {
+        for (b in bones) target[b.name] = angles[b.name] ?: 0f
+        stiffness = hold
+    }
+
+    /** Drop the pose: the joints go back to hanging limp. */
+    fun clearPose() {
+        for (b in bones) target[b.name] = 0f
+    }
+
     /** Let go: keep whatever speed the drag had. */
     fun release() {
         rootVel = pinVel
