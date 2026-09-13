@@ -1,9 +1,9 @@
 package dev.atp.pet.render
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import java.io.File
 import java.io.IOException
 
 /**
@@ -16,7 +16,7 @@ import java.io.IOException
 class Part(val bitmap: Bitmap, val offsetX: Float, val offsetY: Float)
 
 /**
- * Every part image a character package ships, keyed by bone name.
+ * Every part image a character folder holds, keyed by bone name.
  *
  * The naming convention is the whole contract: a file called upperarm_L.png is the
  * artwork for the bone called upperarm_L. A bone with no file simply draws nothing,
@@ -27,15 +27,20 @@ class PartLibrary(val parts: Map<String, Part>) {
     val isEmpty: Boolean get() = parts.isEmpty()
     val size: Int get() = parts.size
 
+    fun release() {
+        parts.values.forEach { it.bitmap.recycle() }
+    }
+
     companion object {
         /** Threshold below which a pixel counts as empty; avoids halos from soft edges. */
         private const val ALPHA_CUTOFF = 8
 
-        fun load(context: Context, assetDir: String, boneNames: List<String>): PartLibrary {
+        fun load(partsDir: File, boneNames: List<String>): PartLibrary {
             val out = LinkedHashMap<String, Part>()
             for (name in boneNames) {
-                val path = assetDir + "/parts/" + name + ".png"
-                val source = open(context, path) ?: continue
+                val file = File(partsDir, name + ".png")
+                if (!file.isFile) continue
+                val source = open(file) ?: continue
                 val bounds = alphaBounds(source)
                 if (bounds == null) {
                     source.recycle()
@@ -50,16 +55,14 @@ class PartLibrary(val parts: Map<String, Part>) {
             return PartLibrary(out)
         }
 
-        private fun open(context: Context, path: String): Bitmap? {
+        private fun open(file: File): Bitmap? {
             return try {
-                context.assets.open(path).use { stream ->
-                    val options = BitmapFactory.Options().apply {
-                        // Assets are not density-scaled; ask for the pixels as authored.
-                        inScaled = false
-                        inPreferredConfig = Bitmap.Config.ARGB_8888
-                    }
-                    BitmapFactory.decodeStream(stream, null, options)
+                val options = BitmapFactory.Options().apply {
+                    // Authored pixels, not density-scaled ones.
+                    inScaled = false
+                    inPreferredConfig = Bitmap.Config.ARGB_8888
                 }
+                BitmapFactory.decodeFile(file.absolutePath, options)
             } catch (e: IOException) {
                 null
             }

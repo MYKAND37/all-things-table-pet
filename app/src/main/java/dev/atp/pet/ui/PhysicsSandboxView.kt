@@ -11,6 +11,7 @@ import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Bounds
 import dev.atp.pet.engine.physics.PhysicsBody
 import dev.atp.pet.engine.physics.PhysicsWorld
+import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.render.PartLibrary
@@ -35,6 +36,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var spec: CharacterSpec? = null
     private var skeleton: Skeleton? = null
     private var renderer: PartRenderer? = null
+    private var library: PartLibrary? = null
     private var world: PhysicsWorld? = null
     private var body: PhysicsBody? = null
 
@@ -81,9 +83,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     var onInfo: ((String) -> Unit)? = null
 
-    fun load(assetPath: String) {
-        val text = context.assets.open(assetPath).bufferedReader().use { it.readText() }
-        val parsed = CharacterSpec.parse(text)
+    /** Load a character package from its folder. Safe to call again to summon another. */
+    fun load(folder: CharacterFolder) {
+        library?.release()
+        val parsed = CharacterSpec.parse(folder.specText())
         val built = parsed.buildSkeleton()
         built.update()
         spec = parsed
@@ -106,20 +109,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 halfExtents = Vec2(width / 2f, height / 2f),
             )
         )
-        val library = PartLibrary.load(
-            context,
-            assetPath.substringBeforeLast('/'),
-            parsed.bones.map { it.name },
-        )
-        renderer = if (library.isEmpty) null else PartRenderer(
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+        library = loaded
+        renderer = if (loaded.isEmpty) null else PartRenderer(
             built,
-            library,
+            loaded,
             parsed.layers.sortedBy { it.z }.map { it.bone },
         )
 
         lastFrameNs = System.nanoTime()
         onInfo?.invoke(
-            library.size.toString() + " parts loaded · drag to throw · double-tap to reset"
+            folder.id + " · " + loaded.size + " parts · drag to throw · double-tap to reset"
         )
         invalidate()
     }

@@ -9,4 +9,21 @@
     <string name="menu_logic">逻辑管理</string>
 
     <string name="content_placeholder">这里先留白，功能待实现</string>
+
+    <string name="rail_collapse">收起</string>
+    <string name="rail_expand">展开</string>
+
+    <!-- 桌宠管理 -->
+    <string name="pets_title">桌宠</string>
+    <string name="pets_subtitle">点开一只，给它导入部位图片</string>
+    <string name="pet_back">返回</string>
+    <string name="pet_edit_rig">看骨架 / 摆姿势</string>
+    <string name="pet_parts_title">部位</string>
+    <string name="part_empty">未导入</string>
+    <string name="part_import">导入图片</string>
+    <string name="part_replace">替换</string>
+    <string name="part_clear">删除</string>
+    <string name="part_hint">点部位名即可从设备里选图。图片按整张画布导出即可，命名由 App 决定。</string>
+    <string name="import_failed">导入失败，可能不是图片</string>
+    <string name="import_ok">已导入</string>
 </resources>

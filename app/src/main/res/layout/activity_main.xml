@@ -1,7 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The shell: a fixed rail of four areas on the left, a frosted pane on the right.
-  No behaviour lives here yet.
+  The shell: a rail of four areas on the left, a frosted pane on the right.
+
+    测试场    runs a character: pick one from the chips, then drag it around
+    桌宠管理  a folder of packages; open one to import artwork for its bones
+
+  The rail collapses so the test bench gets the whole width.
 -->
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
@@ -14,7 +18,7 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent"
         android:orientation="horizontal"
-        android:padding="14dp">
+        android:padding="10dp">
 
         <!-- ── 侧栏 ─────────────────────────────────── -->
         <LinearLayout
@@ -23,11 +27,15 @@
             android:layout_height="match_parent"
             android:background="@drawable/glass_sidebar"
             android:orientation="vertical"
-            android:padding="10dp">
+            android:padding="8dp">
 
             <LinearLayout
+                android:id="@+id/railHeader"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:background="?android:attr/selectableItemBackground"
+                android:clickable="true"
+                android:focusable="true"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingStart="4dp"
@@ -36,19 +44,20 @@
                 android:paddingBottom="12dp">
 
                 <ImageView
-                    android:layout_width="26dp"
-                    android:layout_height="26dp"
+                    android:layout_width="24dp"
+                    android:layout_height="24dp"
                     android:contentDescription="@null"
                     android:src="@drawable/ic_pet_mark"
                     app:tint="@color/brand" />
 
                 <TextView
+                    android:id="@+id/railHint"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
                     android:layout_weight="1"
-                    android:text="@string/app_name"
-                    android:textColor="@color/text_muted"
+                    android:text="@string/rail_collapse"
+                    android:textColor="@color/text_subtle"
                     android:textSize="10sp" />
             </LinearLayout>
 
@@ -78,10 +87,11 @@
             android:id="@+id/content"
             android:layout_width="0dp"
             android:layout_height="match_parent"
-            android:layout_marginStart="14dp"
+            android:layout_marginStart="10dp"
             android:layout_weight="1"
             android:background="@drawable/glass_panel">
 
+            <!-- 道具管理 / 逻辑管理 还没做 -->
             <LinearLayout
                 android:id="@+id/placeholder"
                 android:layout_width="match_parent"
@@ -120,20 +130,74 @@
                     android:textSize="13sp" />
             </LinearLayout>
 
+            <!-- ── 测试场 ───────────────────────────── -->
+            <FrameLayout
+                android:id="@+id/sandboxPane"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <dev.atp.pet.ui.PhysicsSandboxView
+                    android:id="@+id/sandboxView"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent" />
+
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top"
+                    android:paddingStart="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingEnd="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/petChooser"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal" />
+                </HorizontalScrollView>
+            </FrameLayout>
+
+            <!-- ── 桌宠管理：桌宠列表 ───────────────── -->
+            <ScrollView
+                android:id="@+id/petListScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/petList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 桌宠管理：某只桌宠的部位 ─────────── -->
+            <ScrollView
+                android:id="@+id/partListScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/partList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 桌宠管理：骨骼编辑器 ─────────────── -->
             <dev.atp.pet.ui.SkeletonView
                 android:id="@+id/skeletonView"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:visibility="gone" />
 
-            <dev.atp.pet.ui.PhysicsSandboxView
-                android:id="@+id/sandboxView"
-                android:layout_width="match_parent"
-                android:layout_height="match_parent"
-                android:visibility="gone" />
-
             <TextView
-                android:id="@+id/skeletonStatus"
+                android:id="@+id/statusLine"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_gravity="bottom"

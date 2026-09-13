@@ -11,6 +11,7 @@ import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.IkChainSpec
+import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.TwoBoneIK
 import dev.atp.pet.render.PartLibrary
@@ -39,6 +40,7 @@ class SkeletonView @JvmOverloads constructor(
     private var spec: CharacterSpec? = null
     private var skeleton: Skeleton? = null
     private var renderer: PartRenderer? = null
+    private var library: PartLibrary? = null
     private val handles = mutableListOf<Handle>()
 
     private var scale = 1f
@@ -80,10 +82,10 @@ class SkeletonView @JvmOverloads constructor(
     /** Called with a one-line description of what just happened, for a status strip. */
     var onInfo: ((String) -> Unit)? = null
 
-    /** Load a character package from assets, e.g. "characters/female_base/character.json". */
-    fun load(assetPath: String) {
-        val text = context.assets.open(assetPath).bufferedReader().use { it.readText() }
-        val parsed = CharacterSpec.parse(text)
+    /** Load a character package from its folder. Safe to call again after parts change. */
+    fun load(folder: CharacterFolder) {
+        library?.release()
+        val parsed = CharacterSpec.parse(folder.specText())
         val built = parsed.buildSkeleton()
         built.update()
 
@@ -92,14 +94,11 @@ class SkeletonView @JvmOverloads constructor(
 
         // Parts are optional. With none, the view is a bare rig; with some, the artwork
         // is drawn underneath a faint skeleton so the two can be compared while posing.
-        val library = PartLibrary.load(
-            context,
-            assetPath.substringBeforeLast('/'),
-            parsed.bones.map { it.name },
-        )
-        renderer = if (library.isEmpty) null else PartRenderer(
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+        library = loaded
+        renderer = if (loaded.isEmpty) null else PartRenderer(
             built,
-            library,
+            loaded,
             parsed.layers.sortedBy { it.z }.map { it.bone },
         )
 
@@ -115,7 +114,7 @@ class SkeletonView @JvmOverloads constructor(
         onInfo?.invoke(
             parsed.id + "  ·  " + parsed.bones.size + " bones  ·  " +
                 parsed.ikChains.size + " IK chains  ·  " +
-                library.size + " parts  ·  drag a joint"
+                loaded.size + " parts  ·  drag a joint"
         )
     }
 
