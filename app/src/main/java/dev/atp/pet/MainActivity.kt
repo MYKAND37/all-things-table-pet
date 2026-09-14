@@ -913,7 +913,7 @@ class MainActivity : AppCompatActivity() {
             )
         }
         for (state in states) {
-            val key = bone + CharacterStore.VARIANT_SEPARATOR + state.id
+            val key = store.variantKey(bone, state.id)
             if (key in have) continue
             partFilesList.addView(
                 addTile(getString(R.string.part_files_add_state, state.name)) {
@@ -2663,7 +2663,7 @@ class MainActivity : AppCompatActivity() {
             actions.add(getString(R.string.state_use_art) to {
                 val hits = boneNames(folder).filter { bone ->
                     store.partDrawings(folder.id, bone)
-                        .any { it.artKey == bone + CharacterStore.VARIANT_SEPARATOR + state.id }
+                        .any { it.artKey == store.variantKey(bone, state.id) }
                 }
                 if (hits.isEmpty()) {
                     Toast.makeText(this, R.string.state_use_art_none, Toast.LENGTH_LONG).show()

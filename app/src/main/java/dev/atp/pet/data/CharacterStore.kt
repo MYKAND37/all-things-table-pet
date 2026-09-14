@@ -603,6 +603,15 @@ class CharacterStore(private val context: Context) {
         }
     }
 
+    /**
+     * The artwork key a state's drawing of a bone is stored under.
+     *
+     * The naming convention is the whole interface between the rig, the drawings and the
+     * layers, so it is spelled out in one place rather than assembled out of a constant
+     * wherever somebody needs it.
+     */
+    fun variantKey(bone: String, state: String): String = bone + VARIANT_SEPARATOR + state
+
     /** One drawing on disk, and the key the layers call it by. */
     class PartDrawing(val artKey: String, val file: File) {
         /** The state this drawing is for, or "" for the base drawing. */
