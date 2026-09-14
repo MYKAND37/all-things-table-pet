@@ -348,6 +348,43 @@ def main():
     report("layerSwaps that named foot_R are gone",
            all("foot_R" not in json.dumps(r) for r in reparsed.get("layerSwaps", [])))
 
+    print("\nthe attributes editor writes limits the solver actually honours")
+    root, bones = load()
+    saved, _ = save_rig(root, bones, [b.name for b in bones])
+    # What the dialog does: change the two numbers on the in-memory bone and save the rig.
+    edited = json.loads(json.dumps(saved))
+    for b in edited["bones"]:
+        if b["name"] == "shin_L":
+            b["limits"] = [-25.0, 40.0]
+            b["collider"] = {"type": "circle", "radius": 33.0}
+    by_name, seq = bake(edited["bones"])
+    shin = by_name["shin_L"]
+    report("the joint's limits came back in radians",
+           abs(shin.min_a - math.radians(-25.0)) < 1e-6 and
+           abs(shin.max_a - math.radians(40.0)) < 1e-6,
+           "%.1f..%.1f deg" % (math.degrees(shin.min_a), math.degrees(shin.max_a)))
+    report("and the collider came back with them",
+           edited["bones"][[b["name"] for b in edited["bones"]].index("shin_L")]["collider"]
+           == {"type": "circle", "radius": 33.0})
+
+    # Now the part that matters: a joint that is only allowed 25 degrees of bend must never
+    # be seen bending 60, however hard it is thrown about.
+    from ragdoll import Ragdoll
+    from skeleton_tool import room
+    spec = room(json.loads(json.dumps(edited)))
+    bn, seq2 = bake(spec["bones"])
+    pet = Ragdoll(spec, bn, seq2, stiffness=0.0)
+    worst = 0.0
+    for i in range(600):
+        pin = [("foot_L", (bn["foot_L"].wpos[0], 400.0))] if i > 120 else None
+        pet.step(1.0 / 60.0, pin)
+        worst = max(worst, abs(pet.ang["shin_L"]))
+    report("600 steps of being dragged around never break the limit",
+           worst <= math.radians(40.0) + 1e-4,
+           "worst %.1f deg of 40" % math.degrees(worst))
+    report("and the knee still moves", worst > math.radians(5.0),
+           "%.1f deg" % math.degrees(worst))
+
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

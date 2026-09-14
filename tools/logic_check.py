@@ -162,6 +162,18 @@ class Engine:
     def handle(self, etype, part="", value=0.0, prop=""):
         return self.resolve({"type": etype, "part": part, "value": value, "prop": prop})
 
+    def raise_signal(self, name):
+        """
+        A signal, raised by one rule and heard by another.
+
+        The one event with no physics behind it, and the one that makes a rule set a program
+        rather than a list: what follows 就 can be another rule's 当. A rule that raises a
+        signal does not hear it -- the signal is raised after the actions are returned, by
+        whoever performs them, which is what stops "发信号 X" and "当 X" from looping inside
+        one call.
+        """
+        return self.handle("emit", part=name)
+
     def step(self, dt):
         self.clock += dt
         out = []
@@ -315,6 +327,44 @@ def main():
                  "rules": [{"on": "tick", "if": [{"kind": "weird", "stat": "X", "op": ">", "value": 0}],
                             "then": [{"kind": "say", "text": "no"}]}]})
     report("an unknown condition kind is false", e2.handle("tick") == [])
+
+    print("\nsignals: what follows 就 can be another rule's 当")
+    sig = {"stats": [{"id": "N", "name": "N", "value": 0, "min": 0, "max": 100}],
+           "rules": [
+               {"on": "click", "cooldown": 0.0,
+                "then": [{"kind": "emit", "text": "打了"},
+                         {"kind": "add", "stat": "N", "value": 1}]},
+               {"on": "emit", "part": "打了", "cooldown": 0.0,
+                "then": [{"kind": "say", "text": "谁打我"}]},
+               {"on": "emit", "part": "没发过", "cooldown": 0.0,
+                "then": [{"kind": "say", "text": "不该出现"}]},
+               {"on": "emit", "part": "", "cooldown": 0.0,
+                "then": [{"kind": "add", "stat": "N", "value": 10}]},
+           ]}
+    eng = Engine(sig)
+    out = eng.handle("click")
+    # "add" is applied inside the engine and never comes back out, so the only action the
+    # world has to perform is the signal.
+    report("the raising rule ran", kinds(out) == ["emit"], str(kinds(out)))
+    raised = [a["text"] for a in out if a["kind"] == "emit"]
+    report("and it asked for one signal", raised == ["打了"], str(raised))
+    heard = eng.raise_signal(raised[0])
+    report("the named rule heard it", says(heard) == ["谁打我"], str(says(heard)))
+    report("a rule for a signal that was not raised stays quiet",
+           says(heard) == ["谁打我"])
+    report("an unnamed 当 hears every signal",
+           kinds(heard) == ["say"] and eng.value["N"] == 11.0, str(eng.value["N"]))
+    # The raise is performed by whoever ran the actions, not inside resolve, so a rule that
+    # raises a signal is not re-entered by its own signal.
+    report("a signal does not set off its own raiser",
+           kinds(eng.raise_signal("打了")) == ["say"], str(kinds(eng.raise_signal("打了"))))
+    eng2 = Engine(sig)
+    report("nothing happens without the click", says(eng2.raise_signal("打了")) == ["谁打我"])
+    report("and a prefix catches its family",
+           says(Engine({"stats": sig["stats"],
+                        "rules": [{"on": "emit", "part": "打", "cooldown": 0.0,
+                                   "then": [{"kind": "say", "text": "家族"}]}]})
+                .handle("emit", part="打了")) == ["家族"])
 
     print("\nnumbers clamp, and report what actually happened")
     e = Engine(default)

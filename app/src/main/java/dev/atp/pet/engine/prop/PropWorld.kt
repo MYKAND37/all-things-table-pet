@@ -100,6 +100,13 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
         return prop
     }
 
+    /** Take every prop of one kind off the bench — what a candle does when it burns out. */
+    fun removeOf(id: String): Int {
+        val gone = live.filter { it.spec.id == id }
+        live.removeAll(gone)
+        return gone.size
+    }
+
     fun remove(prop: Prop) {
         live.remove(prop)
     }

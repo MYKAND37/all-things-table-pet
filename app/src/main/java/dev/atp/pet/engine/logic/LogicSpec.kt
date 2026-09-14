@@ -43,6 +43,44 @@ data class ConditionSpec(
 )
 
 /**
+ * Who a rule set belongs to.
+ *
+ * A character is not the only thing that can have logic. A prop can — a candle that burns
+ * down, a ball that bounces differently once it has been dropped — and so can a liquid. The
+ * rules are the same rules; what changes is what the events are ABOUT and what the actions
+ * act on, which is exactly the fields already in [dev.atp.pet.engine.event.GameEvent] and
+ * [ActionSpec] read from the other end.
+ *
+ * Subjects are strings rather than a sealed class because every one of them is written into
+ * a file, and a file that names a prop that has since been deleted has to load as "nothing
+ * to run" rather than as an exception.
+ */
+object Subjects {
+    /** The character itself. Every character has one, and it is the default everywhere. */
+    const val PET = "pet"
+
+    const val PROP_PREFIX = "prop:"
+    const val LIQUID_PREFIX = "liquid:"
+
+    fun prop(id: String): String = PROP_PREFIX + id
+
+    fun liquid(id: String): String = LIQUID_PREFIX + id
+
+    fun isProp(subject: String): Boolean = subject.startsWith(PROP_PREFIX)
+
+    fun isLiquid(subject: String): Boolean = subject.startsWith(LIQUID_PREFIX)
+
+    /** The prop or liquid id inside a subject, or "" for the character. */
+    fun objectId(subject: String): String =
+        if (isProp(subject) || isLiquid(subject)) subject.substringAfter(':') else ""
+
+    /** Which prop this subject is about, or "" if it is not about one. */
+    fun propId(subject: String): String = if (isProp(subject)) objectId(subject) else ""
+
+    fun liquidId(subject: String): String = if (isLiquid(subject)) objectId(subject) else ""
+}
+
+/**
  * The two ways a clause can be joined to the one before it.
  *
  * The reading order is left to right with 而且 binding tighter, which is what anybody who
@@ -120,7 +158,30 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),
     STATE_TOGGLE("stateToggle", "切换状态", "state"),
-    SPILL("spill", "喷液体", "liquid");
+    SPILL("spill", "喷液体", "liquid"),
+
+    /**
+     * Raise a signal for the character's own rules to hear.
+     *
+     * The module that makes 就 a logic module: what comes after 就 can be another rule's
+     * 当, so a long chain of behaviour is written as several small rules that name their
+     * signals rather than as one action list that has to be read in order to be understood.
+     * Not visible by itself — that is the point.
+     */
+    EMIT("emit", "发一个信号", "text"),
+
+    /**
+     * Shove a prop, by name.
+     *
+     * The first action that names something other than the character as the thing it acts
+     * ON. That is the other half of "these things can be objects": a prop having its own
+     * logic is one thing, and the character's logic being able to reach out and move a prop
+     * is what makes the two halves into one system.
+     */
+    PUSH_PROP("pushProp", "推一下道具", "propValue"),
+
+    /** Take a prop or a liquid off the bench. What a candle does when it burns out. */
+    CLEAR("clear", "清掉道具", "clearWhat");
 
     companion object {
         fun of(id: String): ActionKind = values().firstOrNull { it.id == id } ?: SAY
@@ -160,6 +221,20 @@ class LogicSpec(
     companion object {
 
         fun parse(text: String): LogicSpec {
+            val spec = read(text)
+            return if (spec.stats.isEmpty()) read(DEFAULT) else spec
+        }
+
+        /**
+         * A spec for a prop or a liquid.
+         *
+         * Deliberately does NOT fall back to the character's defaults: a candle with no
+         * rules is a candle with no rules, and handing it a life bar and a pain stat because
+         * its file was empty would be the app inventing a character.
+         */
+        fun parseObject(text: String): LogicSpec = read(text)
+
+        private fun read(text: String): LogicSpec {
             val o = JSONObject(text)
             val statArr = o.optJSONArray("stats")
             val stats = (0 until (statArr?.length() ?: 0)).map { i ->
@@ -245,7 +320,6 @@ class LogicSpec(
                     },
                 )
             }
-            if (stats.isEmpty()) return parse(DEFAULT)
             return LogicSpec(stats, rules, states, liquids)
         }
 
@@ -327,7 +401,23 @@ class LogicSpec(
          * What a character starts with: two numbers and five rules that do something
          * visible, so the logic panel is never an empty page somebody has to guess at.
          */
-        val DEFAULT = """
+        /**
+     * What a prop or a liquid starts with when it is first given logic of its own.
+     *
+     * One number and no rules, because the first rule is the thing the user is about to
+     * write: a candle's clock is almost always 耐久 and almost never 生命.
+     */
+    val OBJECT_DEFAULT = """
+{
+  "version": 1,
+  "stats": [ { "id": "L", "name": "耐久", "value": 100, "min": 0, "max": 100 } ],
+  "states": [],
+  "liquids": [],
+  "rules": []
+}
+"""
+
+    val DEFAULT = """
 {
   "version": 1,
   "stats": [
@@ -409,6 +499,16 @@ class LogicSpec(
         { "kind": "stat", "stat": "H", "op": "<=", "value": 20, "join": "or" }
       ],
       "then": [ { "kind": "say", "text": "……站不住了" } ]
+    },
+    {
+      "on": "thrown", "part": "", "cooldown": 1.0, "once": false,
+      "if": [],
+      "then": [ { "kind": "emit", "text": "被扔过" } ]
+    },
+    {
+      "on": "emit", "part": "被扔过", "cooldown": 3.0, "once": false,
+      "if": [ { "kind": "stat", "stat": "P", "op": ">=", "value": 40 } ],
+      "then": [ { "kind": "say", "text": "别又扔我……" }, { "kind": "burst", "text": "sweat", "value": 3 } ]
     }
   ]
 }

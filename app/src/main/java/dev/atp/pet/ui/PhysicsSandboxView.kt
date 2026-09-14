@@ -66,6 +66,28 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var world: PropWorld? = null
     private val particles = Particles()
 
+    /** Signals raised by rules and not yet handed back to the engine. See drainSignals. */
+    private val signals = mutableListOf<String>()
+
+    /**
+     * The logic that belongs to props and liquids, and the engines running it.
+     *
+     * One engine per SUBJECT rather than one per object: two candles burn down together,
+     * because they are the same candle. That is also the honest reading of "a prop uses that
+     * logic set" — the logic is about the KIND of thing, and there is one bench.
+     */
+    private var objectLogic: Map<String, LogicSpec> = emptyMap()
+    private val objectEngines = HashMap<String, RuleEngine>()
+
+    /** Props whose landing has already been reported, so it is a transition and not a state. */
+    private val propLanded = HashSet<Int>()
+
+    /** Which subject every action currently being performed belongs to. See perform. */
+    private var acting: String = Subjects.PET
+
+    /** Where a bubble should be drawn, when the thing speaking is not the character. */
+    private var bubbleAt: Vec2? = null
+
     /** The layers as loaded, so the 状态 panel can count what hangs off each state. */
     private var layersNow: List<LayerSpec> = emptyList()
 
@@ -188,6 +210,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         logic: LogicSpec,
         propSpecs: List<PropSpec>,
         propsDir: File?,
+        objectLogic: Map<String, LogicSpec> = emptyMap(),
     ) {
         library?.release()
         val parsed = CharacterSpec.parse(folder.specText())
@@ -217,8 +240,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         renderer?.hidden = broken
         particles.clear()
         bubble = null
+        bubbleAt = null
 
         engine = RuleEngine(logic)
+        this.objectLogic = objectLogic
+        objectEngines.clear()
+        propLanded.clear()
         clock = 0f
         prevRootY = built.root.worldPosition.y
         wasGrounded = true
@@ -258,7 +285,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     fun spill(id: String, count: Int = 40) {
         val liquid = Liquids.of(id, liquids)
-        fluid?.spill(liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity)
+        fluid?.spill(
+            liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity, liquid = id,
+        )
         invalidate()
     }
 
@@ -323,6 +352,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldTargets.clear()
         heldOffsets.clear()
         heldProp = null
+        signals.clear()
         world?.clear()
         ropes.clear()
         particles.clear()
@@ -344,6 +374,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val e = engine ?: return
         val actions = e.handle(event.copy(at = clock))
         perform(actions, event)
+        drainSignals()
+    }
+
+    /**
+     * Hand the queued signals to the engine, a bounded number of times.
+     *
+     * The bound is the whole point. Signals are how one rule's 就 becomes another rule's 当,
+     * which is a loop the moment somebody writes "when X, raise X" — and they will, because
+     * it is one line and it looks harmless. Thirty-two rounds is far more than any chain
+     * anybody means, and the ones past it are dropped rather than recalled next frame, so a
+     * loop costs a frame of work each time instead of the whole app.
+     */
+    private fun drainSignals() {
+        var guard = 0
+        while (signals.isNotEmpty() && guard++ < MAX_SIGNALS_PER_FRAME) {
+            val name = signals.removeAt(0)
+            val e = engine ?: break
+            perform(e.handle(GameEvent(EventType.EMIT, part = name, at = clock)), null)
+        }
+        signals.clear()
     }
 
     /**
@@ -351,42 +401,90 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *
      * The event that caused them comes along because "喷粒子" and "推一下" need to happen
      * AT the part that was hit, and the rule has no idea where that is.
+     *
+     * [subject] is whose rules these were. Almost every action already means "at the thing
+     * this is about", and for a prop or a liquid that thing is not the character — so the
+     * same action list, run from a candle's rules, burns the candle rather than the pet.
      */
-    private fun perform(actions: List<ActionSpec>, event: GameEvent?) {
+    private fun perform(
+        actions: List<ActionSpec>,
+        event: GameEvent?,
+        subject: String = Subjects.PET,
+    ) {
+        val outer = acting
+        acting = subject
+        try {
+            runActions(actions, event)
+        } finally {
+            acting = outer
+        }
+    }
+
+    private fun runActions(actions: List<ActionSpec>, event: GameEvent?) {
         for (a in actions) {
             when (a.kind) {
                 "say" -> {
                     bubble = a.text
                     bubbleLeft = BUBBLE_SECONDS
+                    bubbleAt = subjectPoint(acting)
                 }
                 "pose" -> applyPose(poseByName[a.text], home = false)
                 "clearPose" -> applyPose(null)
                 "spawn" -> propSpecs.firstOrNull { it.id == a.prop }?.let {
-                    spawn(it, Vec2(homeX() - 200f, homeY() - 900f), Vec2(120f, 60f))
+                    // From an object's own rules the new prop appears where that object is:
+                    // a candle that spawns smoke should do it at the candle.
+                    val at = subjectPoint(acting) ?: Vec2(homeX() - 200f, homeY() - 900f)
+                    spawn(it, at, Vec2(120f, 60f))
+                }
+                "pushProp" -> {
+                    val id = a.prop.ifEmpty { Subjects.propId(acting) }
+                    val dir = directionOf(a.text, event)
+                    if (id.isNotEmpty()) {
+                        for (prop in world?.live.orEmpty()) {
+                            if (prop.spec.id == id) prop.velocity = prop.velocity + dir * a.value
+                        }
+                    }
+                }
+                "clear" -> {
+                    val what = a.prop.ifEmpty { Subjects.objectId(acting) }
+                    if (Subjects.isLiquid(acting) || a.text == "liquid") {
+                        fluid?.clearOf(what)
+                    } else if (what.isNotEmpty()) {
+                        world?.removeOf(what)
+                    } else {
+                        fluid?.clear()
+                    }
+                    particles.burst("dust", pointOf(event), 8)
                 }
                 "burst" -> particles.burst(a.text, pointOf(event), a.value.toInt())
                 "spill" -> {
                     val liquid = Liquids.of(a.text, liquids)
                     fluid?.spill(
                         liquid.colour, pointOf(event),
-                        a.value.toInt(), liquid.viscosity,
+                        a.value.toInt(), liquid.viscosity, liquid = liquid.id,
                     )
                 }
+                "emit" -> {
+                    // A signal, raised by one rule and heard by another. Queued rather than
+                    // fired here and now: "when signal X, raise signal X" is one line to
+                    // write and an infinite recursion to run, and a queue with a cap turns
+                    // it into a signal that simply stops being heard.
+                    if (a.text.isNotEmpty()) signals.add(a.text)
+                }
                 "impulse" -> {
+                    val dir = directionOf(a.text, event)
+                    // A prop's own rules shove the prop. Same action, same list, and the
+                    // only thing that changed is what "this" means.
+                    val propId = Subjects.propId(acting)
+                    if (propId.isNotEmpty()) {
+                        for (prop in world?.live.orEmpty()) {
+                            if (prop.spec.id == propId) prop.velocity = prop.velocity + dir * a.value
+                        }
+                        continue
+                    }
                     val rag = ragdoll ?: continue
                     val sk = skeleton ?: continue
                     val bone = sk.find(a.bone.ifEmpty { event?.part ?: "" }) ?: sk.root
-                    // "Push it away from whatever hit it" is the only one of these that
-                    // needs the event, and it is the one that reads as physics rather than
-                    // as animation.
-                    val away = pointOf(event) - sk.root.worldPosition
-                    val dir = when (a.text) {
-                        "down" -> Vec2(0f, 1f)
-                        "left" -> Vec2(-1f, 0f)
-                        "right" -> Vec2(1f, 0f)
-                        "away" -> if (away.length() < 1f) Vec2(0f, -1f) else away.normalized()
-                        else -> Vec2(0f, -1f)
-                    }
                     rag.impulse(bone, dir, a.value)
                 }
                 "break" -> {
@@ -401,7 +499,55 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * The four directions a shove can go, as unit vectors.
+     *
+     * "away" is the only one that needs the event: it means away from whatever hit it, which
+     * is the one that reads as physics rather than as animation.
+     */
+    private fun directionOf(name: String, event: GameEvent?): Vec2 {
+        val sk = skeleton
+        val away = if (sk == null) Vec2.ZERO else pointOf(event) - sk.root.worldPosition
+        return when (name) {
+            "down" -> Vec2(0f, 1f)
+            "left" -> Vec2(-1f, 0f)
+            "right" -> Vec2(1f, 0f)
+            "away" -> if (away.length() < 1f) Vec2(0f, -1f) else away.normalized()
+            else -> Vec2(0f, -1f)
+        }
+    }
+
+    /**
+     * Where the thing the rules are about is, in canvas coordinates.
+     *
+     * A prop is where it is; a liquid is the middle of its own drops, which is the puddle.
+     * Null for the character and for an object that has gone, and every caller then falls
+     * back to where the pet is — because "the thing this is about is not there" should show
+     * up in the middle of the bench rather than at the origin.
+     */
+    private fun subjectPoint(subject: String): Vec2? {
+        if (Subjects.isProp(subject)) {
+            val id = Subjects.objectId(subject)
+            return world?.live?.firstOrNull { it.spec.id == id }?.position
+        }
+        if (Subjects.isLiquid(subject)) {
+            val id = Subjects.objectId(subject)
+            var x = 0f
+            var y = 0f
+            var n = 0
+            for (d in fluid?.drops.orEmpty()) {
+                if (d.liquid != id) continue
+                x += d.x
+                y += d.y
+                n++
+            }
+            return if (n == 0) null else Vec2(x / n, y / n)
+        }
+        return null
+    }
+
     private fun pointOf(event: GameEvent?): Vec2 {
+        subjectPoint(acting)?.let { return it }
         val sk = skeleton ?: return Vec2.ZERO
         val name = event?.part ?: ""
         if (name.isNotEmpty()) {
@@ -510,10 +656,28 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 { bone -> rag.colliderRadius(bone) },
                 { bone, dir, strength -> rag.impulse(bone, dir, strength) },
             )
-            for (h in hits) fire(
-                GameEvent(EventType.PROP_HIT, part = h.bone.name, value = h.value, prop = h.prop.spec.id)
-            )
+            for (h in hits) {
+                fire(GameEvent(EventType.PROP_HIT, part = h.bone.name, value = h.value, prop = h.prop.spec.id))
+                // The prop hears about it too: it hit something, and what it hit is the part.
+                fireTo(
+                    Subjects.prop(h.prop.spec.id),
+                    GameEvent(EventType.IMPACT, part = h.bone.name, value = h.value, prop = h.prop.spec.id),
+                )
+            }
+            // A prop that has just touched down. A transition, not a state: "on the floor" as
+            // a state is a TICK rule with a condition, which is where that belongs.
+            for (prop in w.live) {
+                if (prop.onFloor && propLanded.add(prop.serial)) {
+                    fireTo(
+                        Subjects.prop(prop.spec.id),
+                        GameEvent(EventType.LANDED, value = abs(prop.velocity.y), prop = prop.spec.id),
+                    )
+                } else if (!prop.onFloor) {
+                    propLanded.remove(prop.serial)
+                }
+            }
         }
+        stepObjects(dt)
 
         // Landing is a transition, not a state: it is the moment the figure stops falling,
         // and the speed it had is what the rules get to see.
@@ -532,6 +696,47 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // Liquid runs around the body: the same capsules the props collide with.
         fluid?.step(dt, s.gravity, sk) { rag.colliderRadius(it) }
         attachRopes()
+    }
+
+    /**
+     * Run the props' and liquids' own logic, for the ones that are on the bench.
+     *
+     * An engine only runs while its subject is actually present. A candle's rules ticking
+     * away in an empty room would burn it down before anybody lit it — and "is it there" is
+     * the one condition every rule of an object's would otherwise have to write for itself.
+     */
+    private fun stepObjects(dt: Float) {
+        val w = world
+        val f = fluid
+
+        val present = LinkedHashSet<String>()
+        if (w != null) for (prop in w.live) present.add(Subjects.prop(prop.spec.id))
+        if (f != null) for (id in Liquids.present(f.drops)) present.add(Subjects.liquid(id))
+
+        // A subject that has just appeared gets its SPAWN, which is what a rule about "when
+        // the candle appears" has been waiting for.
+        for (subject in present) {
+            if (objectEngines.containsKey(subject)) continue
+            val spec = objectLogic[subject] ?: continue
+            if (spec.rules.isEmpty()) continue
+            val engine = RuleEngine(spec)
+            objectEngines[subject] = engine
+            fireTo(subject, GameEvent(EventType.SPAWN))
+        }
+
+        for ((subject, engine) in objectEngines) {
+            if (subject !in present) continue
+            val actions = engine.step(dt)
+            if (actions.isNotEmpty()) perform(actions, null, subject)
+        }
+    }
+
+    /** Something happened to a prop or a liquid. Silently ignored if it has no logic. */
+    private fun fireTo(subject: String, event: GameEvent) {
+        val engine = objectEngines[subject] ?: return
+        val actions = engine.handle(event.copy(at = clock))
+        if (actions.isEmpty()) return
+        perform(actions, event, subject)
     }
 
     /**
@@ -808,9 +1013,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val text = bubble
         val s = spec ?: return
         if (text == null || bubbleLeft <= 0f) return
+        // A prop or a liquid can say something too, and then it says it about itself: a
+        // candle that announces it is burning down has to do it over the candle.
+        val at = bubbleAt
         val head = sk.find("head") ?: sk.root
-        val x = head.worldPosition.x
-        val y = head.worldPosition.y - s.headHeight * 0.45f
+        val x = at?.x ?: head.worldPosition.x
+        val y = (at?.y ?: head.worldPosition.y) - s.headHeight * 0.45f
         val box = RectF(x - 200f, y - 82f, x + 200f, y - 4f)
         worldPaint.style = Paint.Style.FILL
         worldPaint.color = 0xF2FFFFFF.toInt()
@@ -1167,6 +1375,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     companion object {
         private const val BUBBLE_SECONDS = 2.6f
+
+        /** How many signals one event may set off before the rest are dropped. See drainSignals. */
+        private const val MAX_SIGNALS_PER_FRAME = 32
         /** Above this the release is a throw, below it the pet was simply put down. */
         private const val THROW_SPEED = 700f
         private const val SHOT_SPEED = 2600f

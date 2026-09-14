@@ -290,6 +290,14 @@ class CharacterStore(private val context: Context) {
                     o.put("limits", JSONArray(listOf(-180.0, 180.0)))
                     o.put("collider", JSONObject().put("type", "capsule").put("radius", 0.0))
                 }
+                // What the joint is allowed to do, and what it collides as. Written every
+                // time rather than only for a new bone, because these are the fields the
+                // attribute editor changes — and they are the two that actually reach the
+                // solver and the world.
+                o.put("limits", JSONArray(listOf(b.minAngle.toDouble(), b.maxAngle.toDouble())))
+                o.put("collider", JSONObject()
+                    .put("type", b.colliderType)
+                    .put("radius", b.colliderRadius.toDouble()))
                 arr.put(o)
             }
             root.put("bones", arr)
@@ -506,6 +514,58 @@ class CharacterStore(private val context: Context) {
 
     fun saveProps(specs: List<PropSpec>): Boolean = writeText(File(propsDir, PROPS_FILE), PropSpecs.toJson(specs))
 
+    // ── 客体逻辑：道具和液体自己的那套规则 ──────────────────────────────────
+
+    /**
+     * The logic that belongs to a prop or a liquid, by subject.
+     *
+     * One file for all of them rather than a directory per object, because a prop is a name
+     * and a picture and half a dozen numbers, not a package: half a dozen files for the
+     * possibility that a candle wants two rules is a lot of filesystem for not much.
+     *
+     * Nothing here knows what a subject MEANS. A file that names a prop which has since been
+     * deleted loads exactly as well as one that names a prop that exists, and simply has
+     * nothing on the bench to run against.
+     */
+    fun loadObjectLogic(): Map<String, LogicSpec> {
+        val file = File(propsDir, OBJECT_LOGIC_FILE)
+        if (!file.isFile) return emptyMap()
+        return try {
+            val root = JSONObject(file.readText())
+            val out = LinkedHashMap<String, LogicSpec>()
+            for (subject in root.keys()) {
+                out[subject] = LogicSpec.parseObject(root.getJSONObject(subject).toString())
+            }
+            out
+        } catch (e: Exception) {
+            emptyMap()
+        }
+    }
+
+    fun saveObjectLogic(subject: String, spec: LogicSpec): Boolean {
+        propsDir.mkdirs()
+        return try {
+            val file = File(propsDir, OBJECT_LOGIC_FILE)
+            val root = if (file.isFile) JSONObject(file.readText()) else JSONObject()
+            root.put(subject, JSONObject(LogicSpec.toJson(spec)))
+            writeText(file, root.toString(2))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun forgetObjectLogic(subject: String): Boolean {
+        val file = File(propsDir, OBJECT_LOGIC_FILE)
+        if (!file.isFile) return false
+        return try {
+            val root = JSONObject(file.readText())
+            root.remove(subject)
+            writeText(file, root.toString(2))
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     fun savePropArt(id: String, bitmap: android.graphics.Bitmap): Boolean {
         propsDir.mkdirs()
         val target = propArtFile(id)
@@ -681,6 +741,9 @@ class CharacterStore(private val context: Context) {
 
         /** Props are shared by every character, so they sit at the top level. */
         const val PROPS_DIR = "props"
+
+        /** The logic of every prop and every liquid, keyed by subject. See Subjects. */
+        const val OBJECT_LOGIC_FILE = "object-logic.json"
         const val PROPS_FILE = "props.json"
     }
 }

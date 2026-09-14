@@ -20,7 +20,22 @@ enum class EventType(val id: String, val label: String, val unit: String) {
     /** value = impact speed times the mass of whatever hit it. */
     IMPACT("impact", "被打到", "力度"),
     CLICK("click", "被点一下", ""),
-    PROP_HIT("propHit", "被道具碰到", "力度");
+    PROP_HIT("propHit", "被道具碰到", "力度"),
+
+    /**
+     * A signal a rule raised.
+     *
+     * The one event with no physics behind it: something else in the character's own logic
+     * asked for it. It is what makes a rule set a program rather than a list — "hit, then a
+     * moment later say something, then turn a state on" is three rules that talk to each
+     * other instead of one action list, and the same signal can be listened for by more than
+     * one rule.
+     *
+     * Which signal it is lives in [GameEvent.part], because a signal is matched exactly the
+     * way a part is: a rule that names nothing hears every signal, and one that names a
+     * prefix hears the family.
+     */
+    EMIT("emit", "收到信号", "");
 
     // There is deliberately no "a stat changed" event. Every reaction to a number can be
     // written as TICK plus a condition, which fires half a second later and cannot feed
@@ -37,7 +52,8 @@ enum class EventType(val id: String, val label: String, val unit: String) {
  *
  * [part] is a bone name, empty when the event belongs to the figure as a whole. A rule may
  * name a bone exactly, or name a prefix — "hand" catches hand_L and hand_R, which is what
- * somebody writing a rule by hand almost always means.
+ * somebody writing a rule by hand almost always means. For [EventType.EMIT] it is the name
+ * of the signal instead, and it is matched by the same rule.
  */
 data class GameEvent(
     val type: EventType,

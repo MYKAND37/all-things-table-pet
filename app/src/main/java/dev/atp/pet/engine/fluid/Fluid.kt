@@ -33,6 +33,14 @@ class Drop(
     val colour: Int,
     val radius: Float,
     val viscosity: Float,
+    /**
+     * Which liquid this is, by name.
+     *
+     * The colour is not enough. Two liquids can be the same colour, and a liquid with its
+     * own rules — a puddle that spreads, an acid that eats — has to be findable in a crowd
+     * of drops that all look alike.
+     */
+    val liquid: String = "",
 ) {
     var prevX = x
     var prevY = y
@@ -69,6 +77,15 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         drops.clear()
     }
 
+    /** Take one liquid off the bench, leaving every other one alone. */
+    fun clearOf(liquid: String) {
+        if (liquid.isEmpty()) {
+            clear()
+            return
+        }
+        drops.removeAll { it.liquid == liquid }
+    }
+
     /**
      * Pour liquid out at a point.
      *
@@ -76,7 +93,14 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
      * bleeding has to keep bleeding, and a spill that silently does nothing because the
      * pool is full is worse than one that pushes the old liquid out.
      */
-    fun spill(colour: Int, at: Vec2, count: Int, viscosity: Float, speed: Float = 260f) {
+    fun spill(
+        colour: Int,
+        at: Vec2,
+        count: Int,
+        viscosity: Float,
+        speed: Float = 260f,
+        liquid: String = "",
+    ) {
         val n = count.coerceIn(0, 200)
         for (i in 0 until n) {
             val angle = random.nextFloat() * TWO_PI
@@ -90,6 +114,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                     colour = colour,
                     radius = RADIUS,
                     viscosity = viscosity,
+                    liquid = liquid,
                 )
             )
         }
@@ -293,4 +318,11 @@ object Liquids {
 
     fun of(id: String, all: List<LiquidSpec>): LiquidSpec =
         all.firstOrNull { it.id == id } ?: DEFAULTS.first()
+
+    /** Every liquid with drops on the bench right now, in the order they first appeared. */
+    fun present(drops: List<Drop>): List<String> {
+        val out = LinkedHashSet<String>()
+        for (d in drops) if (d.liquid.isNotEmpty()) out.add(d.liquid)
+        return out.toList()
+    }
 }

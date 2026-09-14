@@ -39,13 +39,16 @@ AIR_DRAG = 0.4
 
 
 class Drop:
-    __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy")
+    __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy", "liquid")
 
-    def __init__(self, x, y, vx, vy, colour, r):
+    def __init__(self, x, y, vx, vy, colour, r, liquid=""):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.px, self.py = x, y
         self.dx, self.dy = 0.0, 0.0
         self.colour, self.r, self.age = colour, r, 0.0
+        # Which liquid this is, by name: the colour is not enough, because two liquids can be
+        # the same colour and a liquid with rules of its own has to be findable in a crowd.
+        self.liquid = liquid
 
 
 class Fluid:
@@ -55,7 +58,22 @@ class Fluid:
         self.drops = []
         self.rng = random.Random(4242)
 
-    def spill(self, x, y, count, colour, speed=260.0, spread=1.0):
+    def digest(self, liquid):
+        """Every liquid with drops on the bench, in the order they first appeared."""
+        out = []
+        for d in self.drops:
+            if d.liquid and d.liquid not in out:
+                out.append(d.liquid)
+        return out
+
+    def clear_of(self, liquid):
+        """Take one liquid off the bench, leaving the others alone."""
+        if not liquid:
+            self.drops.clear()
+            return
+        self.drops = [d for d in self.drops if d.liquid != liquid]
+
+    def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid=""):
         # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
         # bleeding has to keep bleeding, and a spill that silently does nothing because the
         # pool is full is worse than one that pushes the old liquid out.
@@ -64,7 +82,7 @@ class Fluid:
             v = speed * self.rng.uniform(0.2, 1.0) * spread
             self.drops.append(
                 Drop(x + self.rng.uniform(-6, 6), y + self.rng.uniform(-6, 6),
-                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS)
+                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS, liquid)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
@@ -232,6 +250,23 @@ def main():
     report("it came to rest", len(moving) <= 10, "%d still moving" % len(moving))
     report("no drop left the arena",
            all(-1 <= d.x <= 3001 for d in f.drops))
+
+    print("a liquid knows which liquid it is")
+    f = Fluid(2000.0, 3000.0)
+    report("an empty bench has no liquids on it", f.digest("") == [])
+    f.spill(1000, 1000, 30, 0xFF0000, liquid="blood")
+    f.spill(1200, 1000, 30, 0xFF0000, liquid="blood")
+    f.spill(1400, 1000, 30, 0xFF0000, liquid="ink")
+    report("two names, in the order they appeared", f.digest("") == ["blood", "ink"],
+           str(f.digest("")))
+    # Same colour on purpose: this is the case a colour cannot answer.
+    report("the drops are told apart by name, not by colour",
+           len([d for d in f.drops if d.liquid == "ink"]) == 30,
+           str(len([d for d in f.drops if d.liquid == "ink"])))
+    f.clear_of("ink")
+    report("clearing one leaves the other", f.digest("") == ["blood"] and len(f.drops) == 60)
+    f.clear_of("")
+    report("clearing with no name clears everything", len(f.drops) == 0)
 
     print("nothing detonates")
     f = Fluid(2000.0, 3000.0)

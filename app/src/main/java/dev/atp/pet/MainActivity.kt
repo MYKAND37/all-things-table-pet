@@ -137,6 +137,9 @@ class MainActivity : AppCompatActivity() {
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
     private var logicStates: MutableList<StateSpec> = mutableListOf()
     private var logicLiquids: MutableList<LiquidSpec> = mutableListOf()
+
+    /** Whose logic the pane is editing: the character, or a prop, or a liquid. See Subjects. */
+    private var logicSubject: String = Subjects.PET
     private lateinit var skeletonView: SkeletonView
     private lateinit var rigRow: View
     private lateinit var rigBonePanel: LinearLayout
@@ -265,7 +268,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun reloadSandbox(folder: CharacterFolder) {
         sandboxView.setPoseNames(store.loadPoses(folder.id).associate { it.name to it.angles })
-        sandboxView.load(folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir)
+        sandboxView.load(
+            folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir,
+            store.loadObjectLogic(),
+        )
     }
 
     /** Reload the bench, but only if that is the character currently on it. */
@@ -1684,6 +1690,11 @@ class MainActivity : AppCompatActivity() {
         )
         row.addView(text)
 
+        val attrs = label(getString(R.string.rig_attributes), 11f, MUTED)
+        attrs.setPadding(dp(7), dp(6), dp(7), dp(6))
+        attrs.setOnClickListener { askBoneAttributes(folder, bone) }
+        row.addView(attrs)
+
         val rename = label(getString(R.string.action_rename), 11f, MUTED)
         rename.setPadding(dp(7), dp(6), dp(7), dp(6))
         rename.setOnClickListener { askRenameBone(bone.name) }
@@ -1701,6 +1712,110 @@ class MainActivity : AppCompatActivity() {
             row.addView(remove)
         }
         return row
+    }
+
+    /**
+     * What a joint is allowed to do, and what it collides as.
+     *
+     * The range of motion is the one that changes how the pet FEELS: the limits are what a
+     * knee stops at, and every one of them was measured off a reference sheet and then
+     * never looked at again. A shoulder that can swing a hundred and seventy degrees and one
+     * that can swing ninety are two different animals, and the only way to find out which
+     * one you want is to drag the arm and see where it stops.
+     *
+     * The collider is the other half: it is what the floor, the props and the liquid see,
+     * and it is where "why does it hover above the ground" and "why does it sink into the
+     * table" come from.
+     *
+     * Mass is deliberately not here. A bone's mass is derived from its collider's area, so
+     * a fatter collider is a heavier limb, and offering a separate weight would be offering
+     * two answers to one question.
+     */
+    private fun askBoneAttributes(folder: CharacterFolder, bone: BoneSpec) {
+        var minAngle = bone.minAngle
+        var maxAngle = bone.maxAngle
+        var type = bone.colliderType
+        var radius = bone.colliderRadius
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        box.addView(
+            label(
+                getString(R.string.rig_limits_hint, boneLabel(bone.name).ifEmpty { bone.name }),
+                11f, MUTED, bottom = 8,
+            )
+        )
+
+        val fromInput = EditText(this).apply {
+            setText(trim(minAngle))
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            hint = getString(R.string.rig_limit_from)
+        }
+        val toInput = EditText(this).apply {
+            setText(trim(maxAngle))
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_SIGNED
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            hint = getString(R.string.rig_limit_to)
+        }
+        box.addView(fromInput)
+        box.addView(toInput)
+
+        box.addView(label(getString(R.string.rig_collider), 11f, MUTED, top = 12, bottom = 6))
+        val typeChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val typeViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "capsule" to getString(R.string.rig_collider_capsule),
+            "circle" to getString(R.string.rig_collider_circle),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                type = id
+                paintChips(typeViews, listOf("capsule", "circle"), { type })
+            }
+            typeViews.add(chip)
+            typeChips.addView(chip)
+        }
+        box.addView(typeChips)
+
+        val radiusInput = EditText(this).apply {
+            setText(if (radius <= 0f) "" else trim(radius))
+            inputType = InputType.TYPE_CLASS_NUMBER or InputType.TYPE_NUMBER_FLAG_DECIMAL
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            hint = getString(R.string.rig_collider_radius)
+        }
+        box.addView(radiusInput)
+        box.addView(label(getString(R.string.rig_collider_hint), 10f, MUTED, top = 6))
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.rig_attributes) + " · " + bone.name)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                fun degrees(text: String, fallback: Float): Float =
+                    text.trim().toFloatOrNull()?.coerceIn(-360f, 360f) ?: fallback
+                val lo = degrees(fromInput.text.toString(), minAngle)
+                val hi = degrees(toInput.text.toString(), maxAngle)
+                // A range written backwards is a joint that cannot move at all, which reads
+                // as a broken rig rather than as a typo. Swapping is what they meant.
+                bone.minAngle = kotlin.math.min(lo, hi)
+                bone.maxAngle = kotlin.math.max(lo, hi)
+                bone.colliderType = if (type == "circle") "circle" else "capsule"
+                bone.colliderRadius =
+                    radiusInput.text.toString().trim().toFloatOrNull()?.coerceIn(0f, 400f) ?: 0f
+                saveBones()
+                Toast.makeText(this, R.string.rig_attributes_saved, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .create()
+        dialog.show()
+        paintChips(typeViews, listOf("capsule", "circle"), { type })
     }
 
     /**
@@ -2092,19 +2207,30 @@ class MainActivity : AppCompatActivity() {
      * to forget — the file and the screen cannot drift apart.
      */
     private fun openLogic() {
+        openLogic(logicSubject)
+    }
+
+    /**
+     * Load one subject's logic into the editor.
+     *
+     * The editor is one editor and the subject is a chip, because the rules are the same
+     * rules: a prop that burns down and a character that bleeds are written in the same
+     * three boxes, and giving them two screens would mean maintaining two of everything and
+     * learning two of everything.
+     */
+    private fun openLogic(subject: String) {
+        logicSubject = subject
         val folder = summoned
-        if (folder == null) {
-            logicStats = mutableListOf()
-            logicRules = mutableListOf()
-            logicStates = mutableListOf()
-            logicLiquids = mutableListOf()
-        } else {
-            val spec = store.loadLogic(folder.id)
-            logicStats = spec.stats.toMutableList()
-            logicRules = spec.rules.toMutableList()
-            logicStates = spec.states.toMutableList()
-            logicLiquids = spec.liquids.toMutableList()
+        val spec = when {
+            folder == null -> LogicSpec(emptyList(), emptyList())
+            subject == Subjects.PET -> store.loadLogic(folder.id)
+            else -> store.loadObjectLogic()[subject]
+                ?: LogicSpec.parseObject(LogicSpec.OBJECT_DEFAULT)
         }
+        logicStats = spec.stats.toMutableList()
+        logicRules = spec.rules.toMutableList()
+        logicStates = spec.states.toMutableList()
+        logicLiquids = spec.liquids.toMutableList()
         buildLogicPane()
     }
 
@@ -2117,13 +2243,15 @@ class MainActivity : AppCompatActivity() {
      */
     private fun saveLogic() {
         val folder = summoned ?: return
-        store.saveLogic(
-            folder.id,
-            LogicSpec(
-                logicStats.toList(), logicRules.toList(),
-                logicStates.toList(), logicLiquids.toList(),
-            ),
+        val spec = LogicSpec(
+            logicStats.toList(), logicRules.toList(),
+            logicStates.toList(), logicLiquids.toList(),
         )
+        if (logicSubject == Subjects.PET) {
+            store.saveLogic(folder.id, spec)
+        } else {
+            store.saveObjectLogic(logicSubject, spec)
+        }
     }
 
     /**
@@ -2203,6 +2331,23 @@ class MainActivity : AppCompatActivity() {
         buildLiquidBar()
 
         logicBar.removeAllViews()
+
+        // Whose logic this is. A prop can have rules of its own, and this is the switch that
+        // says which set the graph is showing.
+        for ((id, text) in subjectOptions()) {
+            val chip = label(text, 12f, if (id == logicSubject) INK else MUTED)
+            chip.background = getDrawable(
+                if (id == logicSubject) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            chip.setPadding(dp(10), dp(6), dp(10), dp(6))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener { openLogic(id) }
+            logicBar.addView(chip)
+        }
+
         logicBar.addView(small(getString(R.string.logic_add_rule)) {
             logicRules.add(
                 RuleSpec(
@@ -2281,6 +2426,26 @@ class MainActivity : AppCompatActivity() {
         liquidBar.addView(small(getString(R.string.logic_add_liquid)) { askEditLiquid(null) { buildLogicPane() } })
     }
 
+    /**
+     * Every logic set there is, as chips: the character, then each prop, then each liquid.
+     *
+     * Nothing is offered that cannot be used. A prop that has been deleted from 道具管理 is
+     * not on this row, and its rules are left in the file rather than deleted with it — the
+     * same bargain the rig makes with a deleted bone.
+     */
+    private fun subjectOptions(): List<Pair<String, String>> {
+        val out = mutableListOf(Subjects.PET to getString(R.string.logic_subject_pet))
+        for (prop in props) out.add(Subjects.prop(prop.id) to getString(R.string.logic_subject_prop, prop.name))
+        // The liquids come from the CHARACTER's file even while a prop's logic is being
+        // edited: liquids are declared by the character, and a prop whose own file has none
+        // would otherwise hide every liquid from this row and make them unreachable.
+        val liquids = summoned?.let { store.loadLogic(it.id).liquids } ?: emptyList()
+        for (liquid in liquids) {
+            out.add(Subjects.liquid(liquid.id) to getString(R.string.logic_subject_liquid, liquid.name))
+        }
+        return out
+    }
+
     /** The 当 box: everything about the rule that is not a node of its own. */
     private fun askRuleSettings(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
@@ -2307,10 +2472,18 @@ class MainActivity : AppCompatActivity() {
         }
 
         row(getString(R.string.logic_when) + EventType.of(rule.on).label) { askRuleEvent(index) }
-        row(
-            getString(R.string.logic_pick_part) + "：" +
-                if (rule.part.isEmpty()) getString(R.string.logic_pick_any_part) else partText(rule.part)
-        ) { askRulePart(index) }
+        if (rule.on == EventType.EMIT.id) {
+            row(
+                getString(R.string.logic_pick_signal) + "：" +
+                    if (rule.part.isEmpty()) getString(R.string.logic_any_signal) else rule.part
+            ) { askRuleSignal(index) }
+        } else {
+            row(
+                getString(R.string.logic_pick_part) + "：" +
+                    if (rule.part.isEmpty()) getString(R.string.logic_pick_any_part)
+                    else partText(rule.part)
+            ) { askRulePart(index) }
+        }
         row(getString(R.string.logic_cooldown, trim(rule.cooldown))) { askCooldown(index) }
         row((if (rule.once) "✓ " else "") + getString(R.string.logic_once)) {
             logicRules[index] = rule.copy(once = !rule.once)
@@ -2925,6 +3098,13 @@ class MainActivity : AppCompatActivity() {
         "stateOff" -> "关闭「" + stateName(a.state) + "」"
         "stateToggle" -> "切换「" + stateName(a.state) + "」"
         "spill" -> "喷" + liquidName(a.text) + " " + a.value.toInt()
+        "emit" -> "发信号：" + a.text
+        "pushProp" -> "推" + propName(a.prop) + " " + directionText(a.text) + " " + a.value.toInt()
+        "clear" -> if (a.text == "liquid" || Subjects.isLiquid(logicSubject)) {
+            "清掉液体"
+        } else {
+            "清掉" + propName(a.prop)
+        }
         else -> a.kind
     }
 
@@ -3001,6 +3181,14 @@ class MainActivity : AppCompatActivity() {
         ) { id ->
             putRule(index, rule.copy(on = id))
             true
+        }
+    }
+
+    /** A signal is a name, not a bone: same box, different question. */
+    private fun askRuleSignal(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        askText(getString(R.string.logic_pick_signal), rule.part) { text ->
+            putRule(index, rule.copy(part = text.trim()))
         }
     }
 
@@ -3313,6 +3501,45 @@ class MainActivity : AppCompatActivity() {
                 }
                 "seconds" -> askNumber(getString(R.string.logic_pick_value), existing?.value ?: 0.5f, 0f, 30f) { v ->
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, value = v))
+                }
+                // Pushing a prop: which one, how hard, and which way. The prop is named in
+                // the action rather than taken from the rule's subject, because "the pet
+                // kicks the ball" is a rule about the pet.
+                "propValue" -> pickList(
+                    getString(R.string.logic_pick_prop),
+                    props.map { it.id to it.name },
+                    getString(R.string.sandbox_props_empty),
+                    existing?.prop,
+                ) { propId ->
+                    askSigned(getString(R.string.logic_pick_value), existing?.value ?: 400f) { v ->
+                        pickList(
+                            getString(R.string.logic_pick_direction),
+                            DIRECTIONS.map { it.first to getString(it.second) },
+                            "",
+                            existing?.text ?: "up",
+                        ) { dir ->
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = dir, prop = propId, value = v),
+                            )
+                            true
+                        }
+                    }
+                    true
+                }
+                // Clearing: a prop by name, or the liquid the rule itself is about.
+                "clearWhat" -> pickList(
+                    getString(R.string.logic_pick_prop),
+                    props.map { it.id to it.name } +
+                        listOf("" to getString(R.string.logic_clear_liquid)),
+                    getString(R.string.sandbox_props_empty),
+                    existing?.prop,
+                ) { propId ->
+                    putAction(
+                        index, actionIndex, isElse,
+                        ActionSpec(kind.id, prop = propId, text = if (propId.isEmpty()) "liquid" else ""),
+                    )
+                    true
                 }
                 "state" -> pickState(getString(R.string.logic_pick_state)) { state ->
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, state = state))

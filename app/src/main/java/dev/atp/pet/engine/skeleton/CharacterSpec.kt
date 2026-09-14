@@ -20,16 +20,19 @@ data class BoneSpec(
     var parentName: String?,
     var head: Vec2,
     var tail: Vec2,
-    val minAngle: Float,
-    val maxAngle: Float,
+    // These five are mutable too: the attribute editor is where a joint's range of motion
+    // and its collider are decided, and both of them are things you tune by watching the
+    // figure move rather than by typing numbers into a file.
+    var minAngle: Float,
+    var maxAngle: Float,
     val springy: Boolean,
     val stiffness: Float,
     val damping: Float,
     val gravity: Float,
     /** "capsule" runs along the bone, "circle" sits at its midpoint. */
-    val colliderType: String,
+    var colliderType: String,
     /** Radius in canvas pixels; zero means "derive a default from the head height". */
-    val colliderRadius: Float,
+    var colliderRadius: Float,
 )
 
 /** A limb the user can drag by its end, solved as a two-segment chain. */
