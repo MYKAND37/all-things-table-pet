@@ -31,6 +31,7 @@ import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import dev.atp.pet.engine.logic.StateSpec
@@ -67,16 +68,16 @@ class MainActivity : AppCompatActivity() {
     private var summoned: CharacterFolder? = null
     private var opened: CharacterFolder? = null
     private var awaitingBone: String? = null
+
+    /** Set while importing a variant: the bone whose geometry to fit, and the file key. */
+    private var awaitingVariant: Pair<String, String>? = null
     private var railCollapsed = false
     private var stiffnessStep = 0
 
     /** Depth editing state, back-to-front. */
     private lateinit var depthScroll: View
     private lateinit var depthList: LinearLayout
-    private var depthBones = mutableListOf<String>()
-
-    /** Bone to the state its artwork needs. Empty means the part is always there. */
-    private val depthState = mutableMapOf<String, String>()
+    private var depthLayers = mutableListOf<LayerSpec>()
 
     /** The edited character's states, for the depth editor to choose from. */
     private var depthStates: List<StateSpec> = emptyList()
@@ -759,6 +760,11 @@ class MainActivity : AppCompatActivity() {
         row.addView(text)
 
         if (has) {
+            val variant = label(getString(R.string.part_variant), 11f, MUTED)
+            variant.setPadding(dp(10), dp(6), dp(10), dp(6))
+            variant.setOnClickListener { askAddVariant(folder, bone) }
+            row.addView(variant)
+
             val del = label(getString(R.string.part_clear), 11f, MUTED)
             del.setPadding(dp(10), dp(6), dp(10), dp(6))
             del.setOnClickListener {
@@ -775,6 +781,36 @@ class MainActivity : AppCompatActivity() {
             pickImage.launch(arrayOf("image/*"))
         }
         return row
+    }
+
+    /**
+     * A second drawing for a bone, shown only while a state is on.
+     *
+     * This is how a mechanical arm happens: the same bone, the same rig, two files, and a
+     * state that says which one is fitted.
+     */
+    private fun askAddVariant(folder: CharacterFolder, bone: String) {
+        val states = store.loadLogic(folder.id).states
+        if (states.isEmpty()) {
+            Toast.makeText(this, R.string.part_no_states, Toast.LENGTH_SHORT).show()
+            return
+        }
+        pickList(
+            title = getString(R.string.part_variant) + " · " + bone,
+            options = states.map { it.id to it.name },
+            hint = getString(R.string.part_variant_hint),
+            current = null,
+        ) { state ->
+            awaitingVariant = bone to (bone + "__" + state)
+            awaitingBone = bone
+            opened = folder
+            if (store.addVariant(folder.id, bone, state)) {
+                pickImage.launch(arrayOf("image/*"))
+            } else {
+                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            }
+            true
+        }
     }
 
     private fun onImagePicked(uri: Uri?) {
@@ -794,7 +830,9 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.align_failed), Toast.LENGTH_SHORT).show()
             return
         }
-        alignView.load(folder, bone, bitmap)
+        val variant = awaitingVariant
+        awaitingVariant = null
+        alignView.load(folder, bone, bitmap, variant?.second ?: bone)
         show(Pane.PART_ALIGN)
     }
 
@@ -852,16 +890,16 @@ class MainActivity : AppCompatActivity() {
             null
         } ?: return
 
-        depthBones = parsed.layers.sortedBy { it.z }.map { it.bone }.toMutableList()
+        depthLayers = parsed.layers.sortedBy { it.z }.toMutableList()
         // A bone with artwork but no layer entry is never drawn at all. The shoulders were
         // exactly that for a while, and "everything shows except these two" is a hard
         // thing to guess from the code, so anything missing is appended at the front where
         // it is at least visible.
         for (b in parsed.bones.map { it.name }) {
-            if (b !in depthBones && folder.partFile(b).isFile) depthBones.add(b)
+            if (depthLayers.none { it.bone == b } && folder.partFile(b).isFile) {
+                depthLayers.add(LayerSpec(b, 0))
+            }
         }
-        depthState.clear()
-        for ((bone, state) in parsed.stateOf()) depthState[bone] = state
         depthStates = store.loadLogic(folder.id).states
         depthRules = parsed.swaps.toMutableList()
         wizardStage = 0
@@ -894,9 +932,9 @@ class MainActivity : AppCompatActivity() {
         depthList.addView(label(getString(R.string.depth_hint), 11f, MUTED, top = 10, bottom = 10))
 
         // Front first: the top of the list is the part drawn last, so it covers the rest.
-        val frontFirst = depthBones.reversed()
-        for ((i, bone) in frontFirst.withIndex()) {
-            val realIndex = depthBones.size - 1 - i
+        val frontFirst = depthLayers.reversed()
+        for ((i, layer) in frontFirst.withIndex()) {
+            val realIndex = depthLayers.size - 1 - i
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -911,25 +949,33 @@ class MainActivity : AppCompatActivity() {
             row.layoutParams = lp
 
             val name = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            name.addView(label(bone, 13f, INK))
-            name.addView(label(boneLabel(bone), 10f, MUTED))
+            name.addView(label(layer.bone, 13f, INK))
+            // The artwork is what actually draws, and a variant is a different file on the
+            // same bone -- so the row has to say which file, or two rows look identical.
+            name.addView(
+                label(
+                    (if (layer.art.isEmpty()) boneLabel(layer.bone) else layer.art) +
+                        (if (layer.art.isEmpty()) "" else "  ·  " + boneLabel(layer.bone)),
+                    10f, MUTED,
+                )
+            )
             name.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             row.addView(name)
 
             // The state chip: which switch this part belongs to. Tapping it is how a
             // drawing becomes "the shirt" without the app having to know what a shirt is.
-            val stateChip = label(stateChipText(bone), 10f, MUTED)
+            val stateChip = label(stateChipText(layer), 10f, MUTED)
             stateChip.setPadding(dp(8), dp(6), dp(8), dp(6))
             stateChip.background = getDrawable(R.drawable.menu_item_idle)
-            stateChip.setOnClickListener { askPartState(bone) }
+            stateChip.setOnClickListener { askPartState(realIndex) }
             row.addView(stateChip)
 
             val up = label("▲", 13f, INK)
             up.setPadding(dp(10), dp(4), dp(10), dp(4))
             up.setOnClickListener {
-                if (realIndex < depthBones.size - 1) {
-                    val b = depthBones.removeAt(realIndex)
-                    depthBones.add(realIndex + 1, b)
+                if (realIndex < depthLayers.size - 1) {
+                    val b = depthLayers.removeAt(realIndex)
+                    depthLayers.add(realIndex + 1, b)
                     buildDepthPane()
                 }
             }
@@ -937,8 +983,8 @@ class MainActivity : AppCompatActivity() {
             down.setPadding(dp(10), dp(4), dp(10), dp(4))
             down.setOnClickListener {
                 if (realIndex > 0) {
-                    val b = depthBones.removeAt(realIndex)
-                    depthBones.add(realIndex - 1, b)
+                    val b = depthLayers.removeAt(realIndex)
+                    depthLayers.add(realIndex - 1, b)
                     buildDepthPane()
                 }
             }
@@ -1155,10 +1201,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun stateChipText(bone: String): String {
-        val state = depthState[bone] ?: return getString(R.string.depth_state_none)
-        val known = depthStates.firstOrNull { it.id == state }
-        return getString(R.string.depth_state) + (known?.name ?: state + "（已不存在）")
+    private fun stateChipText(layer: LayerSpec): String {
+        if (layer.state.isEmpty()) return getString(R.string.depth_state_none)
+        val off = layer.state.startsWith("!")
+        val id = layer.state.removePrefix("!")
+        val known = depthStates.firstOrNull { it.id == id }
+        return getString(R.string.depth_state) + (if (off) "不" else "") +
+            (known?.name ?: id + "（已不存在）")
     }
 
     /**
@@ -1168,16 +1217,20 @@ class MainActivity : AppCompatActivity() {
      * they are drawn at all — so "the clothes" is a list of bones this app never has to
      * understand. It only has to draw what the switch says.
      */
-    private fun askPartState(bone: String) {
+    private fun askPartState(index: Int) {
+        val layer = depthLayers.getOrNull(index) ?: return
         val options = mutableListOf("" to getString(R.string.depth_state_none))
-        for (s in depthStates) options.add(s.id to s.name)
+        for (s in depthStates) {
+            options.add(s.id to getString(R.string.depth_state) + s.name)
+            options.add("!" + s.id to getString(R.string.depth_state_not) + s.name)
+        }
         pickList(
-            title = getString(R.string.depth_state) + " · " + bone,
+            title = getString(R.string.depth_state) + " · " + layer.bone,
             options = options,
             hint = getString(R.string.depth_state_hint),
-            current = depthState[bone] ?: "",
+            current = layer.state,
         ) { id ->
-            if (id.isEmpty()) depthState.remove(bone) else depthState[bone] = id
+            depthLayers[index] = layer.copy(state = id)
             buildDepthPane()
             true
         }
@@ -1203,7 +1256,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveDepth(folder: CharacterFolder) {
-        val ok = store.saveDepth(folder.id, depthBones, depthRules, depthState)
+        val ok = store.saveDepth(folder.id, depthLayers, depthRules)
         Toast.makeText(
             this,
             getString(if (ok) R.string.depth_saved else R.string.depth_save_failed),

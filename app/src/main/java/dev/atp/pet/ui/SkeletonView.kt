@@ -160,7 +160,6 @@ class SkeletonView @JvmOverloads constructor(
             loaded,
             parsed.drawOrder(),
             parsed.swaps,
-            parsed.stateOf(),
         )
 
         handles.clear()

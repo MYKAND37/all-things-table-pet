@@ -25,6 +25,9 @@
     <string name="part_import">导入图片</string>
     <string name="part_replace">替换</string>
     <string name="part_clear">删除</string>
+    <string name="part_variant">状态版本</string>
+    <string name="part_variant_hint">给这根骨骼多一张图，只在那个状态打开时才画。原来那张会自动变成"没有那个状态"时画。</string>
+    <string name="part_no_states">先去「逻辑管理」加一个状态。</string>
     <string name="part_hint">点部位名即可从设备里选图。图片按整张画布导出即可，命名由 App 决定。</string>
     <string name="import_failed">导入失败，可能不是图片</string>
     <string name="import_ok">已导入</string>
@@ -163,6 +166,7 @@
     <string name="logic_cond_state">状态</string>
     <string name="depth_state">状态：</string>
     <string name="depth_state_none">总是画</string>
+    <string name="depth_state_not">没有 </string>
     <string name="depth_state_hint">选一个状态，这个部位就只在那个状态打开时才画出来。给衣服的每个部位都选「穿着」。</string>
 
     <string name="logic_rules">规则</string>

@@ -199,7 +199,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
             loaded,
             parsed.drawOrder(),
             parsed.swaps,
-            parsed.stateOf(),
         )
 
         ragdoll = Ragdoll(built, parsed, stiffness)

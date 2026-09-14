@@ -5,6 +5,7 @@ import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.prop.PropSpecs
 import dev.atp.pet.engine.skeleton.BoneSpec
+import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import org.json.JSONArray
@@ -150,6 +151,38 @@ class CharacterStore(private val context: Context) {
     }
 
     /**
+     * Add a second artwork for a bone, drawn only while [state] is on.
+     *
+     * The base layer is put on "not [state]" at the same time. Without that both drawings
+     * appear the instant the state turns on, which is the one thing a variant is for.
+     */
+    fun addVariant(id: String, bone: String, state: String): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.optJSONArray("layers") ?: JSONArray()
+            var top = 0
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                top = maxOf(top, l.optInt("z", 0))
+                if (l.getString("bone") == bone && l.optString("state", "").isEmpty()) {
+                    l.put("state", "!" + state)
+                }
+            }
+            arr.put(
+                JSONObject()
+                    .put("bone", bone).put("z", top + 10)
+                    .put("state", state).put("art", bone + VARIANT_SEPARATOR + state)
+            )
+            root.put("layers", arr)
+            root.put("version", root.optInt("version", 0) + 1)
+            writeSpec(folder, root)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
      * Write back the depth of every part, and the rules that change it.
      *
      * [backToFront] is the draw order: index 0 is drawn first and therefore ends up
@@ -158,20 +191,18 @@ class CharacterStore(private val context: Context) {
      */
     fun saveDepth(
         id: String,
-        backToFront: List<String>,
+        backToFront: List<LayerSpec>,
         swaps: List<SwapRuleSpec>,
-        /** Bone to the state it needs. A part with no state is always there. */
-        stateOf: Map<String, String> = emptyMap(),
     ): Boolean {
         val folder = folder(id) ?: return false
         return try {
             val root = JSONObject(folder.specText())
 
             val layers = JSONArray()
-            backToFront.forEachIndexed { index, bone ->
-                val o = JSONObject().put("bone", bone).put("z", 10 + index * 10)
-                val state = stateOf[bone]
-                if (!state.isNullOrEmpty()) o.put("state", state)
+            backToFront.forEachIndexed { index, layer ->
+                val o = JSONObject().put("bone", layer.bone).put("z", 10 + index * 10)
+                if (layer.state.isNotEmpty()) o.put("state", layer.state)
+                if (layer.art.isNotEmpty()) o.put("art", layer.art)
                 layers.put(o)
             }
             root.put("layers", layers)
@@ -566,6 +597,9 @@ class CharacterStore(private val context: Context) {
         const val LOGIC_FILE = "logic.json"
 
         private val RULE_LISTS = listOf("parts", "behind")
+
+        /** How a variant's file is named: upperarm_L__mech.png for the mech state. */
+        const val VARIANT_SEPARATOR = "__"
 
         /** Props are shared by every character, so they sit at the top level. */
         const val PROPS_DIR = "props"

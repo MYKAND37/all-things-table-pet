@@ -43,6 +43,7 @@ class PartAlignView @JvmOverloads constructor(
     private var library: PartLibrary? = null
     private var renderer: PartRenderer? = null
     private var bone: Bone? = null
+    private var saveKey = ""
     private var source: Bitmap? = null
 
     /** Where the source image sits in canvas space, and how big. */
@@ -90,7 +91,12 @@ class PartAlignView @JvmOverloads constructor(
 
     var onInfo: ((String) -> Unit)? = null
 
-    fun load(folder: CharacterFolder, boneName: String, bitmap: Bitmap) {
+    /**
+     * [fileKey] is the name the composited art is saved under, and it is not always the
+     * bone: a variant for a state is a second file for the same bone, and the geometry it
+     * has to line up with is still the bone's.
+     */
+    fun load(folder: CharacterFolder, boneName: String, bitmap: Bitmap, fileKey: String = boneName) {
         library?.release()
         val parsed = CharacterSpec.parse(folder.specText())
         val built = parsed.buildSkeleton()
@@ -98,6 +104,7 @@ class PartAlignView @JvmOverloads constructor(
         spec = parsed
         skeleton = built
         bone = built.find(boneName)
+        saveKey = fileKey
 
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
@@ -141,7 +148,7 @@ class PartAlignView @JvmOverloads constructor(
 
     fun currentScale(): Float = imageScale
 
-    fun targetBoneName(): String? = bone?.name
+    fun targetBoneName(): String? = if (bone == null) null else saveKey
 
     private fun centreOfCanvas(): Vec2 {
         val s = spec ?: return Vec2.ZERO

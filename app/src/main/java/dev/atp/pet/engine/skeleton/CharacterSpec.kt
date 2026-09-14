@@ -42,7 +42,27 @@ data class IkChainSpec(val upper: String, val lower: String, val bend: Float)
  * that state is on. That is what "穿衣服 / 不穿衣服" is — the same rig, wearing a different
  * set of artwork — and it costs one layer field rather than a whole second character.
  */
-data class LayerSpec(val bone: String, val z: Int, val state: String = "")
+data class LayerSpec(
+    val bone: String,
+    val z: Int,
+    /**
+     * Drawn only while this state is on — or, written with a leading "!", only while it is
+     * OFF. That is what makes a replacement work: the plain arm says "!mech" and the
+     * mechanical one says "mech", and exactly one of them is ever drawn.
+     */
+    val state: String = "",
+    /** Which artwork file, without .png. Empty means "the one named after the bone". */
+    val art: String = "",
+) {
+    val artKey: String get() = if (art.isEmpty()) bone else art
+
+    /** Does this layer draw, given the states that are on? Unknown states read as off. */
+    fun visible(states: Map<String, Boolean>): Boolean {
+        if (state.isEmpty()) return true
+        val on = states[state.removePrefix("!")] == true
+        return if (state.startsWith("!")) !on else on
+    }
+}
 
 /**
  * A depth rule: when [triggerBone] reaches past [referenceBone], the [parts] are drawn the
@@ -94,11 +114,7 @@ class CharacterSpec(
 ) {
 
     /** Back to front. Everything that draws asks for this rather than sorting layers. */
-    fun drawOrder(): List<String> = layers.sortedBy { it.z }.map { it.bone }
-
-    /** Bones that only draw while a named state is on. A bone missing here always draws. */
-    fun stateOf(): Map<String, String> =
-        layers.filter { it.state.isNotEmpty() }.associate { it.bone to it.state }
+    fun drawOrder(): List<LayerSpec> = layers.sortedBy { it.z }
 
     /**
      * Bake authored head/tail pairs into parent-relative rest transforms.
@@ -205,7 +221,10 @@ class CharacterSpec(
             val layersArr = o.optJSONArray("layers")
             val layers = (0 until (layersArr?.length() ?: 0)).map { i ->
                 val l = layersArr!!.getJSONObject(i)
-                LayerSpec(l.getString("bone"), l.getInt("z"), l.optString("state", ""))
+                LayerSpec(
+                    l.getString("bone"), l.getInt("z"),
+                    l.optString("state", ""), l.optString("art", ""),
+                )
             }.toMutableList()
 
             val swapsArr = o.optJSONArray("layerSwaps")

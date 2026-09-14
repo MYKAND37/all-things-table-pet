@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import dev.atp.pet.engine.math.Transform
+import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import kotlin.math.cos
@@ -24,11 +25,12 @@ import kotlin.math.sin
 class PartRenderer(
     private val skeleton: Skeleton,
     private val library: PartLibrary,
-    /** Bone names in back-to-front draw order. */
-    drawOrder: List<String>,
+    /**
+     * Back to front. A LAYER, not a bone: the same bone can have more than one, which is
+     * what lets a state swap the arm for a mechanical one instead of just hiding it.
+     */
+    layers: List<LayerSpec>,
     private val swaps: List<SwapRuleSpec> = emptyList(),
-    /** Bone name to the state it needs. Empty for a part that is always there. */
-    private val stateOf: Map<String, String> = emptyMap(),
 ) {
     /**
      * Bones whose artwork is gone: a broken part, or one the rules removed.
@@ -39,18 +41,14 @@ class PartRenderer(
      */
     var hidden: Set<String> = emptySet()
 
-    /**
-     * Which state each bone's artwork belongs to, and which states are on right now.
-     *
-     * A bone with no tag always draws. A bone tagged with a state the character no longer
-     * declares also always draws: a deleted state should show the artwork it was hiding,
-     * not hide it forever behind a name nobody can see any more.
-     */
+    /** Which states are on right now. A state nobody declares reads as off. */
     var states: Map<String, Boolean> = emptyMap()
 
     private val restWorld = HashMap<String, Transform>()
-    private val baseOrder = drawOrder.filter { library.parts.containsKey(it) }
-    private val order = ArrayList<String>(baseOrder.size)
+
+    /** Layers whose artwork actually exists on disk. A variant with no file draws nothing. */
+    private val baseOrder = layers.filter { library.parts.containsKey(it.artKey) }
+    private val order = ArrayList<LayerSpec>(baseOrder.size)
     private var lastTriggered = emptyList<Boolean>()
     private val matrix = Matrix()
     private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
@@ -76,7 +74,7 @@ class PartRenderer(
      * times a second for nothing is the kind of waste that shows up as battery drain
      * rather than as a bug.
      */
-    private fun currentOrder(): List<String> {
+    private fun currentOrder(): List<LayerSpec> {
         if (swaps.isEmpty()) return baseOrder
 
         var changed = lastTriggered.size != swaps.size
@@ -92,13 +90,17 @@ class PartRenderer(
         val list = ArrayList(baseOrder)
         for ((index, rule) in swaps.withIndex()) {
             if (!triggered[index]) continue
-            val moved = rule.parts.filter { list.contains(it) }
+            // Rules name BONES; a bone may own several layers, and they travel together.
+            val moved = rule.parts.filter { name -> list.any { it.bone == name } }
             if (moved.isEmpty()) continue
-            list.removeAll(moved)
+            val movedLayers = list.filter { it.bone in moved }
+            val rest = list.filter { it.bone !in moved }
+            list.clear()
+            list.addAll(rest)
 
             var anchor = -1
             for (i in list.indices) {
-                if (rule.behind.contains(list[i])) {
+                if (rule.behind.contains(list[i].bone)) {
                     if (rule.toFront) {
                         anchor = i + 1
                     } else {
@@ -109,10 +111,10 @@ class PartRenderer(
             }
             if (anchor < 0) {
                 // Nothing to swap against is in view; put the parts back where they were.
-                list.addAll(moved)
+                list.addAll(movedLayers)
                 continue
             }
-            list.addAll(anchor, moved)
+            list.addAll(anchor, movedLayers)
         }
 
         order.clear()
@@ -129,13 +131,12 @@ class PartRenderer(
     }
 
     fun draw(canvas: Canvas) {
-        for (name in currentOrder()) {
-            if (name in hidden) continue
-            val needed = stateOf[name]
-            if (needed != null && states[needed] == false) continue
-            val part = library.parts[name] ?: continue
-            val bone = skeleton.find(name) ?: continue
-            val rest = restWorld[name] ?: continue
+        for (layer in currentOrder()) {
+            if (layer.bone in hidden) continue
+            if (!layer.visible(states)) continue
+            val part = library.parts[layer.artKey] ?: continue
+            val bone = skeleton.find(layer.bone) ?: continue
+            val rest = restWorld[layer.bone] ?: continue
 
             val t = bone.worldTransform.compose(rest.inverse())
 
