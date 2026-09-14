@@ -92,6 +92,7 @@ data class SwapRuleSpec(
 class CharacterSpec(
     val id: String,
     val canvasWidth: Float,
+    /** The ART sheet the drawings were made on. The room the pet moves in is taller. */
     val canvasHeight: Float,
     val headHeight: Float,
     /** Mutable, and ordered parents-first: that is the order [buildSkeleton] requires. */
@@ -111,7 +112,33 @@ class CharacterSpec(
     val floorY: Float,
     /** Width of the play area. Wider than the canvas: the pet needs room to be thrown. */
     val worldWidth: Float,
+    /**
+     * How far below the artwork's own ground line the floor is, in px.
+     *
+     * The bones stay in the art canvas' coordinates — that is what the alignment view, the
+     * rig editor and the saved rig file all speak, and shifting them would make a rig drift
+     * down the canvas a little every time it was saved. The figure is stood on the real floor
+     * by moving its root down by this much instead. See [ROOM_AIR].
+     */
+    val standOffset: Float,
 ) {
+    companion object {
+        /**
+         * How much air the room has above the ground line, as a multiple of the figure's height.
+         *
+         * A room one figure tall is enough to stand in and nothing else. Picking the pet up by
+         * one ankle turns it over, and an inverted figure needs its whole length BELOW the hand
+         * holding it — so the hand has to go up by about a figure's height, and on a phone the
+         * finger has only the screen to travel across. The taller the room, the smaller the
+         * piece of the screen one pixel of lift costs, which is the whole reason this is a room
+         * and not a floor. Mirrors ROOM_AIR in tools/skeleton_tool.py.
+         */
+        const val ROOM_AIR = 1.0f
+
+        /** A room never gets less air than this, however small the figure is. */
+        const val MIN_AIR = 720f
+    }
+
 
     /** Back to front. Everything that draws asks for this rather than sorting layers. */
     fun drawOrder(): List<LayerSpec> = layers.sortedBy { it.z }
@@ -245,6 +272,17 @@ class CharacterSpec(
             val props = o.optJSONObject("proportions")
             val phys = o.optJSONObject("physics")
 
+            // A character drawn against the old, one-figure-tall template gets the deeper
+            // room too, which is why this is computed here and not left to each file. The
+            // value is derived, never written back: a rig round-trips through the editor in
+            // art coordinates and gains nothing.
+            val artFloor = phys?.optDouble("floorY")?.toFloat() ?: canvas.getDouble("height").toFloat()
+            val air = phys?.optDouble("roomAir")?.toFloat() ?: run {
+                val top = bones.minOf { kotlin.math.min(it.head.y, it.tail.y) }
+                val bottom = bones.maxOf { kotlin.math.max(it.head.y, it.tail.y) }
+                kotlin.math.max(MIN_AIR, (bottom - top) * ROOM_AIR)
+            }
+
             return CharacterSpec(
                 swaps = swaps,
                 id = o.optString("id", "unnamed"),
@@ -259,8 +297,9 @@ class CharacterSpec(
                 totalHeight = props?.optDouble("totalHeightPx")?.toFloat() ?: 0f,
                 bodyWidth = phys?.optDouble("bodyWidth")?.toFloat() ?: (canvasW * 0.32f),
                 gravity = phys?.optDouble("gravity")?.toFloat() ?: 2400f,
-                floorY = phys?.optDouble("floorY")?.toFloat() ?: canvas.getDouble("height").toFloat(),
+                floorY = artFloor + air,
                 worldWidth = phys?.optDouble("worldWidth")?.toFloat() ?: (canvasW * 3f),
+                standOffset = air,
             )
         }
     }

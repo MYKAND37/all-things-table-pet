@@ -184,9 +184,11 @@ class PartAlignView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         val s = spec ?: return
         val pad = 6f * density
-        viewScale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.floorY)
+        // The ART sheet, not the room: this is the view a drawing is lined up in, and the
+        // floor the pet stands on is a body's height below the bottom of the sheet.
+        viewScale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.canvasHeight)
         viewOffsetX = (w - s.canvasWidth * viewScale) / 2f
-        viewOffsetY = (h - s.floorY * viewScale) / 2f
+        viewOffsetY = (h - s.canvasHeight * viewScale) / 2f
     }
 
     private fun vx(x: Float) = viewOffsetX + x * viewScale

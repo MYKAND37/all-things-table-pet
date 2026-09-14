@@ -12,7 +12,7 @@ import json, math, os, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from skeleton_tool import bake
+from skeleton_tool import bake, room
 from ragdoll import Ragdoll
 
 SPEC = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
@@ -26,7 +26,7 @@ def report(label, ok, detail=""):
 
 
 def fresh(settle=180):
-    spec = json.load(open(SPEC))
+    spec = room(json.load(open(SPEC)))
     by_name, order = bake(spec["bones"])
     pet = Ragdoll(spec, by_name, order, stiffness=0.0)
     for _ in range(settle):

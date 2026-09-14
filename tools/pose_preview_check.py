@@ -11,7 +11,7 @@ import json, math, sys, os
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from skeleton_tool import bake, update, tip, clamp_rot
+from skeleton_tool import bake, update, tip, clamp_rot, room
 from PIL import Image, ImageDraw
 
 SPEC = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
@@ -59,7 +59,7 @@ def thumbnail(segs, px, colour):
     return img
 
 def main():
-    spec = json.load(open(SPEC))
+    spec = room(json.load(open(SPEC)))
     by_name, order = bake(spec["bones"])
     print("bones %d" % len(order))
 

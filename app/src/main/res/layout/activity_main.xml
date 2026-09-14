@@ -189,6 +189,21 @@
                     android:padding="12dp" />
             </ScrollView>
 
+            <!-- ── 桌宠管理：一个部位的文件夹 ───────── -->
+            <ScrollView
+                android:id="@+id/partFilesScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/partFilesList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
             <!-- ── 桌宠管理：图层深度 ───────────────── -->
             <ScrollView
                 android:id="@+id/depthScroll"
@@ -248,6 +263,26 @@
                         android:orientation="horizontal"
                         android:paddingTop="6dp"
                         android:paddingBottom="6dp" />
+                </HorizontalScrollView>
+
+                <!-- 液体管理：在逻辑栏下面，因为液体是规则喷出来的东西，是逻辑的一部分。
+                     但它是自己的一栏：液体有自己的名字、颜色和黏度，而且点一下就能喷出来
+                     看效果，不用先写一条规则。 -->
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/liquidBar"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:paddingTop="2dp"
+                        android:paddingBottom="8dp" />
                 </HorizontalScrollView>
             </LinearLayout>
 

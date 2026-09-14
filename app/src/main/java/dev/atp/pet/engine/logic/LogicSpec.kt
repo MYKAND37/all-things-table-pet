@@ -31,7 +31,36 @@ data class ConditionSpec(
     val value: Float,
     /** For kind = "state": which state, and [op] is "on" or "off". */
     val state: String = "",
+    /**
+     * How this clause joins the one BEFORE it: [Joins.AND] or [Joins.OR].
+     *
+     * A clause is a module, and the connector is the thing that was missing: with only one
+     * of them the IF could be a single clause and there was nothing to assemble. The first
+     * clause's join is never read — there is nothing before it to join to — and is kept only
+     * so the list stays a uniform shape.
+     */
+    val join: String = Joins.AND,
 )
+
+/**
+ * The two ways a clause can be joined to the one before it.
+ *
+ * The reading order is left to right with 而且 binding tighter, which is what anybody who
+ * has written "a and b or c" already expects: it is a list of AND-groups, and the rule runs
+ * if ANY group holds. "如果 痛苦 > 80 而且 状态 机械臂 或者 生命 < 20" is therefore
+ * (痛苦>80 而且 机械臂) 或者 (生命<20).
+ */
+object Joins {
+    const val AND = "and"
+    const val OR = "or"
+
+    fun of(id: String): String = if (id == OR) OR else AND
+
+    fun label(id: String): String = if (of(id) == OR) "或者" else "而且"
+
+    /** The other one. Tapping a connector flips it, so it only ever needs the complement. */
+    fun flip(id: String): String = if (of(id) == OR) AND else OR
+}
 
 /**
  * One thing a rule does.
@@ -185,6 +214,7 @@ class LogicSpec(
                             op = c.optString("op", ">="),
                             value = c.optDouble("value", 0.0).toFloat(),
                             state = c.optString("state", ""),
+                            join = c.optString("join", Joins.AND),
                         )
                     },
                     actions = (0 until (actArr?.length() ?: 0)).map { j ->
@@ -259,7 +289,7 @@ class LogicSpec(
                         JSONObject()
                             .put("kind", c.kind).put("stat", c.stat)
                             .put("op", c.op).put("value", c.value.toDouble())
-                            .put("state", c.state)
+                            .put("state", c.state).put("join", c.join)
                     )
                 }
                 val acts = JSONArray()
@@ -370,6 +400,15 @@ class LogicSpec(
       "if": [ { "kind": "state", "stat": "", "state": "dressed", "op": "on" } ],
       "then": [ { "kind": "say", "text": "好看吗？" } ],
       "else": [ { "kind": "say", "text": "干嘛？" } ]
+    },
+    {
+      "on": "tick", "part": "", "cooldown": 3.0, "once": false,
+      "if": [
+        { "kind": "stat", "stat": "P", "op": ">=", "value": 60 },
+        { "kind": "state", "stat": "", "state": "dressed", "op": "on", "join": "and" },
+        { "kind": "stat", "stat": "H", "op": "<=", "value": 20, "join": "or" }
+      ],
+      "then": [ { "kind": "say", "text": "……站不住了" } ]
     }
   ]
 }

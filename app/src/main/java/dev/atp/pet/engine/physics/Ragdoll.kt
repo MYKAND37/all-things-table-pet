@@ -115,7 +115,11 @@ class Ragdoll(
         // offset, so it cannot run before this.
         skeleton.rootTransform = Transform.IDENTITY
         skeleton.update()
-        rootHome = bones.first().worldPosition
+        // The room is deeper than the artwork's ground line and the figure stands on the
+        // FLOOR, not wherever the drawing's ground line happens to be: see CharacterSpec.air.
+        // The bones themselves stay in art coordinates, so a rig saved from the editor comes
+        // back exactly as it went in.
+        rootHome = bones.first().worldPosition + Vec2(0f, spec.standOffset)
         rootPos = rootHome
         applyAngles()
         standingSpan = spanOfFigure()
@@ -256,13 +260,15 @@ class Ragdoll(
         pinTargets = pins.map { it.target }
         applyAngles()
 
-        // Gravity torque about each bone's head, summed over everything hanging from it.
+        // Gravity torque about each bone's head, over the weight the joint is actually
+        // carrying -- which is not always its own subtree. See hangingSet.
+        val gripped = if (pins.size == 1) byName[pins[0].bone] else null
         val alpha = HashMap<String, Float>(bones.size)
         for (b in bones) {
             val hx = b.worldPosition.x
             var tau = 0f
             var inertia = 0f
-            for (d in subtrees[b.name]!!) {
+            for (d in hangingSet(b, gripped)) {
                 val c = com(d)
                 val m = mass[d.name] ?: 1f
                 tau += m * gravity * (c.x - hx)
@@ -358,8 +364,9 @@ class Ragdoll(
         if (noise > 0f) {
             rootVel = Vec2(rootVel.x + (random.nextFloat() * 2f - 1f) * LINEAR_NOISE * dt, rootVel.y)
         }
+        rootVel = Vec2(rootVel.x, rootVel.y + gravity * dt)
         val damp = 1f - LINEAR_DAMP * dt
-        rootVel = Vec2(rootVel.x * damp, rootVel.y * damp + gravity * dt)
+        rootVel = Vec2(rootVel.x * damp, rootVel.y * damp)
         val speed = rootVel.length()
         if (speed > MAX_SPEED) rootVel = rootVel / speed * MAX_SPEED
         rootPos = rootPos + rootVel * dt
@@ -370,8 +377,25 @@ class Ragdoll(
 
         if (pins.isNotEmpty()) {
             holdPins(dt, pins)
+            carryFloor(dt)
             applyAngles()
         }
+    }
+
+    /**
+     * The floor, for a figure somebody is holding up.
+     *
+     * Not a wall and not a cushion: the figure may hang CARRY_SINK below the line, and past
+     * that the floor is exactly as hard as it ever was. Deliberately NOT the per-bone
+     * resolution a standing figure gets — that one turns the deepest bone out of the floor
+     * about its own joint, and on a figure hanging head-down the deepest bone is the neck.
+     * Lifting the neck is the bow. The shape of a carried body is gravity's business.
+     */
+    private fun carryFloor(dt: Float) {
+        if (!hanging()) return
+        var deepest = 0f
+        for (b in bones) deepest = max(deepest, colliderLow(b) - floor)
+        if (deepest > CARRY_SINK) lift(deepest - CARRY_SINK, dt)
     }
 
     /**
@@ -383,6 +407,14 @@ class Ragdoll(
      * as rigid as the moment it landed.
      */
     private fun ground(dt: Float) {
+        if (hanging()) {
+            // Turned over and held by one finger: the finger has the weight, and the floor has
+            // nothing to say about where the head is. See carryFloor, which runs after the
+            // pins — the pins are what moves the figure, and a floor resolved before them is a
+            // floor the hand can push straight through.
+            walls()
+            return
+        }
         var settled = false
         for (pass in 0 until GROUND_PASSES) {
             var deepest = 0f
@@ -475,6 +507,24 @@ class Ragdoll(
     private fun holdPins(dt: Float, pins: List<Pin>) {
         // Gauss-Seidel over the fingers: one finger does not care, two fingers pulling in
         // opposite directions need a couple of rounds before they agree.
+        if (CARRY_GAIN > 0f) {
+            // The hand has taken the weight, so the body comes with it: see CARRY_GAIN.
+            var cx = 0f
+            var cy = 0f
+            var n = 0
+            for (pin in pins) {
+                val bone = byName[pin.bone] ?: continue
+                val p = gripPoint(bone, pin.offset)
+                cx += pin.target.x - p.x
+                cy += pin.target.y - p.y
+                n++
+            }
+            if (n > 0) {
+                rootPos = Vec2(rootPos.x + cx / n * CARRY_GAIN, rootPos.y + cy / n * CARRY_GAIN)
+                skeleton.update()
+            }
+        }
+
         for (round in 0 until PIN_OUTER) {
             for (pin in pins) {
                 byName[pin.bone]?.let { solvePin(it, pin.target, pin.offset) }
@@ -564,6 +614,48 @@ class Ragdoll(
      * Deliberately not "while airborne": a figure in free fall keeps its authored limits
      * so that it lands the way it always did. Losing that made every landing sprawl.
      */
+    /**
+     * What a joint is carrying: the bones whose weight pulls on it.
+     *
+     * This is the subtree — the marionette model, every joint feels what dangles from it —
+     * UNLESS the finger is holding something inside that subtree. Then the pull is on the far
+     * side: the joint is not holding that body up, that body is holding THE JOINT up, and the
+     * weight on it is everything else.
+     *
+     * Ignoring this is why picking the figure up by the ankle bent it like a bow instead of
+     * turning it over. The hip's subtree is the legs, so the hip felt the weight of a pair of
+     * legs and nothing else, and the torso — a separate branch off the same root — was never
+     * felt anywhere except at its own neck. So the hip had no reason to turn the body over,
+     * the torso had no reason to hang, and the figure folded at the waist, which is exactly
+     * what it looked like: bowing.
+     *
+     * Nothing changes while no finger is holding anything: the subtree is the answer, and a
+     * figure falling on its own behaves exactly as it always did.
+     */
+    private fun hangingSet(bone: Bone, gripped: Bone?): List<Bone> {
+        val sub = subtrees[bone.name]!!
+        if (gripped == null) return sub
+        if (!sub.contains(gripped)) return sub
+        return bones.filter { !sub.contains(it) }
+    }
+
+    /**
+     * Is this figure hanging off the finger rather than resting on the ground?
+     *
+     * It matters because the floor resolves the two completely differently, and getting it
+     * wrong is visible in both directions: a hanging figure whose head the floor insists on
+     * lifting turns over into a bow, and a figure that is merely being dragged along the
+     * ground — limp enough that it flops while you pull it — must still land on the floor
+     * rather than sink through it.
+     *
+     * Orientation is the whole test, and it is the honest one. A figure turned past this far
+     * over is not standing on anything: everything under the finger is below the finger.
+     */
+    private fun hanging(): Boolean {
+        if (!pinned) return false
+        return abs(normalizeAngle(angle[bones.first().name] ?: 0f)) > UPSIDE_DOWN
+    }
+
     private fun lowLimit(bone: Bone): Float =
         if (bone.parent == null && pinned) -FULL_TURN else bone.minAngle
 
@@ -688,6 +780,41 @@ class Ragdoll(
          * ROOT_PIN_GAIN in tools/ragdoll.py, where tools/drag_check.py pins both ends.
          */
         const val ROOT_PIN_GAIN = 0.15f
+
+        /**
+         * How much of the finger's pull the ROOT takes, before the chain is solved at all.
+         *
+         * This is the difference between POSING a limb and CARRYING the figure, and it is the
+         * whole of "I grab its leg and lift, and the pet comes up with my hand and hangs". The
+         * chain solve can always reach the finger by bending something — grab an ankle and
+         * lift and it rotates the hip, which lifts the foot and leaves the body standing on
+         * the other leg, leaning, exactly like a bow. The body only comes up if the ROOT takes
+         * part of the pull.
+         *
+         * Not 1.0: pulling the root all the way is exact and leaves the chain with nothing to
+         * do, so a limb can never be posed and a hanging arm keeps whatever shape it had. Not
+         * 0.0: the figure never leaves the ground and cannot be picked up at all. Mirrors
+         * CARRY_GAIN in tools/ragdoll.py, where tools/carry_check.py pins it down.
+         */
+        const val CARRY_GAIN = 0.85f
+
+        /**
+         * How far a hanging figure may dip below the floor line, in px.
+         *
+         * A body picked up by one ankle only needs about a figure's height of lift to turn
+         * right over, and less than that leaves its head below the floor line on the way. The
+         * floor is still a floor — see carryFloor — but it is not in the way of a body hanging
+         * off a hand.
+         */
+        const val CARRY_SINK = 460f
+
+        /**
+         * How far over a figure must be turned before the finger, and not the floor, is what
+         * is holding it up, in radians. Not a quarter turn: a figure laid on its side is on
+         * the floor, and the floor resolves it exactly as it always did. This is the line
+         * between standing on the ground and hanging off a hand.
+         */
+        const val UPSIDE_DOWN = 2.0f
 
         /** Half a turn, the widest a joint can be when the ground is not the boss of it. */
         private const val FULL_TURN = 3.1415927f

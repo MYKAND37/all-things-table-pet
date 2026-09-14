@@ -24,6 +24,7 @@ import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.prop.PropWorld
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.render.PartLibrary
 import dev.atp.pet.render.PartRenderer
@@ -64,6 +65,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var propArt: PartLibrary? = null
     private var world: PropWorld? = null
     private val particles = Particles()
+
+    /** The layers as loaded, so the 状态 panel can count what hangs off each state. */
+    private var layersNow: List<LayerSpec> = emptyList()
 
     /** Liquid, if any has been spilled. Created with the world: it needs the floor. */
     private var fluid: Fluid? = null
@@ -202,6 +206,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         )
 
         ragdoll = Ragdoll(built, parsed, stiffness)
+        layersNow = parsed.drawOrder()
         liquids = logic.liquids
         this.propSpecs = propSpecs
         propArt?.release()
@@ -228,6 +233,41 @@ class PhysicsSandboxView @JvmOverloads constructor(
         fire(GameEvent(EventType.SPAWN))
         invalidate()
     }
+
+    /**
+     * The switches the character owns, as they are right now.
+     *
+     * A state is not only something a rule reads — it is a thing somebody can flip to see
+     * what the other drawing looks like, and there is no way to write a rule about an arm
+     * you have never seen fitted.
+     */
+    fun stateOn(id: String): Boolean = engine?.stateOn(id) == true
+
+    fun toggleState(id: String) {
+        val e = engine ?: return
+        e.states[id] = !(e.states[id] ?: false)
+        invalidate()
+    }
+
+    /**
+     * Pour some of a liquid out, from a button rather than from a rule.
+     *
+     * Liquid was the one system with no way in except writing a rule and waiting for it to
+     * fire, which is a strange thing to ask of somebody who just wants to know what their
+     * slime looks like. The rules still spill; so does the button.
+     */
+    fun spill(id: String, count: Int = 40) {
+        val liquid = Liquids.of(id, liquids)
+        fluid?.spill(liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity)
+        invalidate()
+    }
+
+    /** How many drops are on the bench, so the 液体 bar can say whether anything is there. */
+    fun dropCount(): Int = fluid?.drops?.size ?: 0
+
+    /** How many drawings hang off a state, so the 状态 panel can say whether it is used. */
+    fun stateLayerCount(id: String): Int =
+        layersNow.count { it.state.removePrefix("!") == id }
 
     /** Where the character stands, in canvas coordinates: spawns and bursts land here. */
     private fun homeX(): Float = ragdoll?.rootPos?.x ?: (spec?.centreX ?: 0f)

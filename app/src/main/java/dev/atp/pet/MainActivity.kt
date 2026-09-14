@@ -25,6 +25,7 @@ import dev.atp.pet.engine.logic.ActionKind
 import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.CompareOp
 import dev.atp.pet.engine.logic.ConditionSpec
+import dev.atp.pet.engine.logic.Joins
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleSpec
 import dev.atp.pet.engine.prop.PropKind
@@ -42,6 +43,7 @@ import dev.atp.pet.ui.LogicGraphView
 import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.PosePreview
 import dev.atp.pet.ui.SkeletonView
+import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -59,7 +61,7 @@ import kotlin.math.roundToInt
 class MainActivity : AppCompatActivity() {
 
     private enum class Pane {
-        PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_RIG, PART_ALIGN, PET_DEPTH,
+        PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_PART_FILES, PET_RIG, PART_ALIGN, PET_DEPTH,
         PET_PROPS, PET_LOGIC
     }
 
@@ -116,6 +118,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var petListScroll: View
     private lateinit var petList: LinearLayout
     private lateinit var partListScroll: View
+    private lateinit var liquidBar: LinearLayout
+    private lateinit var partFilesScroll: View
+    private lateinit var partFilesList: android.widget.LinearLayout
     private lateinit var partList: LinearLayout
     private lateinit var propListScroll: View
     private lateinit var propList: LinearLayout
@@ -160,6 +165,9 @@ class MainActivity : AppCompatActivity() {
         petListScroll = findViewById(R.id.petListScroll)
         petList = findViewById(R.id.petList)
         partListScroll = findViewById(R.id.partListScroll)
+        liquidBar = findViewById(R.id.liquidBar)
+        partFilesScroll = findViewById(R.id.partFilesScroll)
+        partFilesList = findViewById(R.id.partFilesList)
         partList = findViewById(R.id.partList)
         propListScroll = findViewById(R.id.propListScroll)
         propList = findViewById(R.id.propList)
@@ -168,9 +176,11 @@ class MainActivity : AppCompatActivity() {
         logicBar = findViewById(R.id.logicBar)
         logicGraph.onTap = { rule, node ->
             when (node.role) {
-                0 -> askRuleSettings(rule)
-                1 -> askCondition(rule, node.index)
-                else -> askAction(rule, node.index, node.role == 3)
+                LogicGraphView.Node.WHEN -> askRuleSettings(rule)
+                LogicGraphView.Node.IF -> askCondition(rule, node.index)
+                LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index)
+                LogicGraphView.Node.ADD -> addModule(rule, node.index)
+                else -> askAction(rule, node.index, node.role == LogicGraphView.Node.ELSE)
             }
         }
         skeletonView = findViewById(R.id.skeletonView)
@@ -291,6 +301,7 @@ class MainActivity : AppCompatActivity() {
         sandboxPane.visibility = if (pane == Pane.SANDBOX) View.VISIBLE else View.GONE
         petListScroll.visibility = if (pane == Pane.PET_LIST) View.VISIBLE else View.GONE
         partListScroll.visibility = if (pane == Pane.PET_PARTS) View.VISIBLE else View.GONE
+        partFilesScroll.visibility = if (pane == Pane.PET_PART_FILES) View.VISIBLE else View.GONE
         rigRow.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         alignPane.visibility = if (pane == Pane.PART_ALIGN) View.VISIBLE else View.GONE
         depthScroll.visibility = if (pane == Pane.PET_DEPTH) View.VISIBLE else View.GONE
@@ -304,13 +315,14 @@ class MainActivity : AppCompatActivity() {
         }
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN ||
-                pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC
+                pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES
             ) View.VISIBLE else View.GONE
 
         when (pane) {
             Pane.SANDBOX -> statusLine.text = "拖起来甩出去 · 双击复位 · 上面选桌宠"
             Pane.PET_LIST -> statusLine.text = ""
             Pane.PET_PARTS -> statusLine.text = ""
+            Pane.PET_PART_FILES -> statusLine.text = getString(R.string.part_files_hint)
             Pane.PET_RIG -> rigHint()
             Pane.PART_ALIGN -> Unit
             Pane.PET_DEPTH -> statusLine.text = getString(R.string.depth_hint)
@@ -391,6 +403,34 @@ class MainActivity : AppCompatActivity() {
         ).apply { marginEnd = dp(10) }
         propChip.setOnClickListener { showPropPicker() }
         petChooser.addView(propChip)
+
+        // The switches the character owns, right here on the bench.
+        //
+        // Half of what a state is for is being flipped by hand while you look at it: there
+        // is no way to write a rule about a mechanical arm you have never seen fitted, and
+        // no way to see it fitted except by writing a rule. So they are chips, and tapping
+        // one turns it on.
+        val states = summoned?.let { store.loadLogic(it.id).states } ?: emptyList()
+        for (state in states) {
+            val on = sandboxView.stateOn(state.id)
+            val chip = label((if (on) "● " else "○ ") + state.name, 12f, if (on) INK else MUTED)
+            chip.background = getDrawable(
+                if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            chip.setPadding(dp(10), dp(6), dp(10), dp(6))
+            val sp2 = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            )
+            sp2.marginEnd = dp(6)
+            chip.layoutParams = sp2
+            chip.setOnClickListener {
+                sandboxView.toggleState(state.id)
+                buildPetChooser()
+                buildLogicPaneIfOpen()
+            }
+            petChooser.addView(chip)
+        }
 
         for (folder in characters) {
             val chip = label(folder.id, 12f, if (folder == summoned) INK else MUTED)
@@ -735,6 +775,182 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** The bone whose folder the 部位文件夹 pane is showing. */
+    private var partFolderBone: String = ""
+
+    /**
+     * A bone's folder: every drawing it owns, in one place, with the state each one belongs
+     * to written on it.
+     *
+     * This is the answer to "a part should open into a folder holding its base drawing and
+     * the drawings for each state, and I should be able to SEE it while managing it". Before
+     * this the drawings were invisible: you imported one, and after that the only evidence
+     * it existed was that the pet looked different.
+     */
+    private fun openPartFiles(folder: CharacterFolder, bone: String) {
+        partFolderBone = bone
+        opened = folder
+        buildPartFiles(folder)
+        show(Pane.PET_PART_FILES)
+    }
+
+    private fun buildPartFiles(folder: CharacterFolder) {
+        val bone = partFolderBone
+        partFilesList.removeAllViews()
+
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val back = label(getString(R.string.pet_back), 13f, INK)
+        back.setPadding(dp(12), dp(6), dp(12), dp(6))
+        back.background = getDrawable(R.drawable.menu_item_idle)
+        back.setOnClickListener {
+            buildPartList(folder)
+            show(Pane.PET_PARTS)
+        }
+        header.addView(back)
+        header.addView(
+            label("  " + bone + "  ·  " + getString(R.string.part_files_title), 15f, INK)
+        )
+        partFilesList.addView(header)
+
+        if (boneLabel(bone).isNotEmpty()) {
+            partFilesList.addView(label(boneLabel(bone), 11f, MUTED, top = 6, bottom = 8))
+        }
+
+        // Which state each drawing is for comes out of the LAYERS, because that is where the
+        // decision actually lives: a file on its own does not know when it is drawn.
+        val layers = try {
+            dev.atp.pet.engine.skeleton.CharacterSpec.parse(folder.specText())
+                .layers.filter { it.bone == bone }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        fun layerOf(artKey: String) = layers.firstOrNull { it.artKey == artKey }
+
+        val states = store.loadLogic(folder.id).states
+        val drawings = store.partDrawings(folder.id, bone)
+        if (drawings.isEmpty()) {
+            partFilesList.addView(label(getString(R.string.part_files_none), 11f, MUTED, bottom = 10))
+        }
+
+        fun importInto(artKey: String, state: String) {
+            awaitingBone = bone
+            awaitingVariant = if (state.isEmpty()) null else bone to artKey
+            opened = folder
+            if (state.isNotEmpty() && !store.addVariant(folder.id, bone, state)) {
+                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                return
+            }
+            pickImage.launch(arrayOf("image/*"))
+        }
+
+        for (drawing in drawings) {
+            val layer = layerOf(drawing.artKey)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                isClickable = true
+                isFocusable = true
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+
+            val box = dp(56)
+            val thumb = android.widget.ImageView(this)
+            thumb.layoutParams = LinearLayout.LayoutParams(box, box).apply { marginEnd = dp(10) }
+            thumb.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            thumb.setImageBitmap(thumbnail(drawing.file, box))
+            row.addView(thumb)
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            text.addView(label(drawing.file.name, 12f, INK))
+            val whenText = when {
+                layer == null -> getString(R.string.part_files_unused)
+                layer.state.isEmpty() -> getString(R.string.part_files_always)
+                layer.state.startsWith("!") -> {
+                    val id = layer.state.substring(1)
+                    getString(R.string.part_files_when_off, stateName(id))
+                }
+                else -> getString(R.string.part_files_when_on, stateName(layer.state))
+            }
+            text.addView(label(whenText, 10f, MUTED))
+            row.addView(text)
+
+            if (layer != null && layer.state == "" && states.isNotEmpty()) {
+                val fit = label(getString(R.string.part_variant), 11f, MUTED)
+                fit.setPadding(dp(8), dp(6), dp(8), dp(6))
+                fit.setOnClickListener { askAddVariant(folder, bone) }
+                row.addView(fit)
+            }
+
+            val del = label(getString(R.string.part_files_delete), 11f, MUTED)
+            del.setPadding(dp(8), dp(6), dp(8), dp(6))
+            del.setOnClickListener {
+                store.deleteDrawing(folder.id, bone, drawing.artKey)
+                buildPartFiles(folder)
+                reloadSummoned(folder)
+                if (rigRow.visibility == View.VISIBLE) skeletonView.load(folder)
+            }
+            row.addView(del)
+
+            // Tapping the row replaces that drawing -- the same file, new picture.
+            row.setOnClickListener { importInto(drawing.artKey, drawing.state) }
+            partFilesList.addView(row)
+        }
+
+        // The modules that are not there yet: one for the base drawing, and one per state
+        // that has no drawing of its own.
+        val have = drawings.map { it.artKey }.toSet()
+        if (bone !in have) {
+            partFilesList.addView(
+                addTile(getString(R.string.part_files_add)) { importInto(bone, "") }
+            )
+        }
+        for (state in states) {
+            val key = bone + CharacterStore.VARIANT_SEPARATOR + state.id
+            if (key in have) continue
+            partFilesList.addView(
+                addTile(getString(R.string.part_files_add_state, state.name)) {
+                    importInto(key, state.id)
+                }
+            )
+        }
+    }
+
+    /** A drawing small enough to put in a list. Sampling is a power of two, as ever. */
+    private fun thumbnail(file: File, box: Int): android.graphics.Bitmap? = try {
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= box && bounds.outHeight / (sample * 2) >= box) {
+            sample *= 2
+        }
+        android.graphics.BitmapFactory.decodeFile(
+            file.path,
+            android.graphics.BitmapFactory.Options().apply { inSampleSize = sample },
+        )
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun addTile(text: String, onClick: () -> Unit): View {
+        val view = label(text, 12f, INK)
+        view.setPadding(dp(12), dp(10), dp(12), dp(10))
+        view.background = getDrawable(R.drawable.menu_item_selected)
+        view.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(6) }
+        view.setOnClickListener { onClick() }
+        return view
+    }
+
     private fun partRow(folder: CharacterFolder, bone: String): View {
         val has = folder.partFile(bone).isFile
         val row = LinearLayout(this).apply {
@@ -752,9 +968,16 @@ class MainActivity : AppCompatActivity() {
         params.bottomMargin = dp(6)
         row.layoutParams = params
 
+        val count = store.partDrawings(folder.id, bone).size
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         text.addView(label(bone, 13f, INK))
-        text.addView(label(boneLabel(bone) + " · " + if (has) "已导入" else "未导入", 10f, MUTED))
+        text.addView(
+            label(
+                boneLabel(bone) + " · " +
+                    if (count == 0) "未导入" else count.toString() + " 张图",
+                10f, MUTED,
+            )
+        )
         val tp = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         text.layoutParams = tp
         row.addView(text)
@@ -764,22 +987,12 @@ class MainActivity : AppCompatActivity() {
             variant.setPadding(dp(10), dp(6), dp(10), dp(6))
             variant.setOnClickListener { askAddVariant(folder, bone) }
             row.addView(variant)
-
-            val del = label(getString(R.string.part_clear), 11f, MUTED)
-            del.setPadding(dp(10), dp(6), dp(10), dp(6))
-            del.setOnClickListener {
-                store.clearPart(folder.id, bone)
-                buildPartList(folder)
-                reloadSummoned(folder)
-                if (rigRow.visibility == View.VISIBLE) skeletonView.load(folder)
-            }
-            row.addView(del)
         }
 
-        row.setOnClickListener {
-            awaitingBone = bone
-            pickImage.launch(arrayOf("image/*"))
-        }
+        // Into the folder, not straight into the photo picker: a part with a base drawing
+        // and two states has three pictures, and importing has to be able to say which one
+        // it is replacing.
+        row.setOnClickListener { openPartFiles(folder, bone) }
         return row
     }
 
@@ -1917,30 +2130,69 @@ class MainActivity : AppCompatActivity() {
         for ((ri, rule) in logicRules.withIndex()) {
             val row = mutableListOf<LogicGraphView.Node>()
             val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
-            row.add(LogicGraphView.Node(0, listOf(EventType.of(rule.on).label + where), ri))
+            row.add(LogicGraphView.Node(LogicGraphView.Node.WHEN, listOf(EventType.of(rule.on).label + where), ri))
+
+            // 如果 is a list of MODULES: each clause is a box, and the connector between two
+            // of them is a box of its own that can be flipped. A rule with no clause at all
+            // still reads as one, and says so.
             if (rule.conditions.isEmpty()) {
-                row.add(LogicGraphView.Node(1, listOf("总是"), -1))
+                row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1))
             } else {
                 for ((ci, c) in rule.conditions.withIndex()) {
-                    row.add(LogicGraphView.Node(1, listOf(conditionText(c)), ci))
+                    if (ci > 0) {
+                        row.add(
+                            LogicGraphView.Node(
+                                LogicGraphView.Node.CONNECTOR, listOf(Joins.label(c.join)), ci,
+                            )
+                        )
+                    }
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf(conditionText(c)), ci))
                 }
             }
+            row.add(
+                LogicGraphView.Node(
+                    LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
+                    LogicGraphView.Node.ADD_CONDITION,
+                )
+            )
+
             for ((ai, a) in rule.actions.withIndex()) {
-                row.add(LogicGraphView.Node(2, listOf(actionText(a)), ai))
+                row.add(LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai))
             }
+            row.add(
+                LogicGraphView.Node(
+                    LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
+                LogicGraphView.Node.ADD_ACTION,
+                )
+            )
+
             // The else branch continues the same line rather than branching geometrically.
             // A row that reads left to right is still unambiguous, and a real fork would
             // need a layout that reserves space for the shorter side -- which is a lot of
             // machinery for a box that says 否则 on it.
-            if (rule.elseActions.isNotEmpty()) {
-                row.add(LogicGraphView.Node(3, listOf("都不成立时"), -1))
+            if (rule.elseActions.isEmpty()) {
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else)),
+                        LogicGraphView.Node.ADD_ELSE,
+                    )
+                )
+            } else {
+                row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf("都不成立时"), -1))
                 for ((ai, a) in rule.elseActions.withIndex()) {
-                    row.add(LogicGraphView.Node(3, listOf(actionText(a)), ai))
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf(actionText(a)), ai))
                 }
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
+                        LogicGraphView.Node.ADD_ELSE,
+                    )
+                )
             }
             graph.add(row)
         }
         logicGraph.setRules(graph)
+        buildLiquidBar()
 
         logicBar.removeAllViews()
         logicBar.addView(small(getString(R.string.logic_add_rule)) {
@@ -1974,6 +2226,51 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton(R.string.depth_cancel, null)
                 .show()
         })
+    }
+
+    /**
+     * The liquid bar: one chip per liquid, under the rule bar.
+     *
+     * Tapping a chip spills some of it on the bench, because "does blood read as blood at
+     * this size" is a question you answer by looking. The 液体 button above is where the
+     * colours and the names are edited.
+     */
+    private fun buildLiquidBar() {
+        liquidBar.removeAllViews()
+        for (liquid in logicLiquids) {
+            val chip = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(10), dp(6), dp(10), dp(6))
+                isClickable = true
+                isFocusable = true
+            }
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(6) }
+            chip.addView(swatch(liquid.colour, 12))
+            chip.addView(label(liquid.name, 12f, INK))
+            chip.setOnClickListener {
+                sandboxView.spill(liquid.id)
+                Toast.makeText(this, getString(R.string.liquid_spilled, liquid.name), Toast.LENGTH_SHORT).show()
+            }
+            chip.setOnLongClickListener {
+                showLiquidsDialog()
+                true
+            }
+            liquidBar.addView(chip)
+        }
+        val drops = sandboxView.dropCount()
+        liquidBar.addView(
+            label(
+                if (drops == 0) getString(R.string.liquid_none)
+                else getString(R.string.liquid_drops, drops),
+                10f, MUTED,
+            )
+        )
+        liquidBar.addView(small(getString(R.string.logic_add_liquid)) { askEditLiquid(null) { buildLogicPane() } })
     }
 
     /** The 当 box: everything about the rule that is not a node of its own. */
@@ -2306,16 +2603,23 @@ class MainActivity : AppCompatActivity() {
         text.layoutParams = LinearLayout.LayoutParams(
             0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
         )
+        val art = sandboxView.stateLayerCount(state.id)
+        val rules = logicRules.count { rule ->
+            rule.conditions.any { it.kind == "state" && it.state == state.id } ||
+                (rule.actions + rule.elseActions).any { it.state == state.id }
+        }
         text.addView(label(state.name, 14f, INK))
         text.addView(
             label(
                 "代号 " + state.id + " · 一开始是" +
-                    getString(if (state.initial) R.string.logic_state_on else R.string.logic_state_off),
+                    getString(if (state.initial) R.string.logic_state_on else R.string.logic_state_off) +
+                    " · " + getString(R.string.state_use_layers, art) +
+                    " · " + getString(R.string.state_use_rules, rules),
                 10f, MUTED,
             )
         )
         row.addView(text)
-        row.setOnClickListener { askEditState(state) { onChanged() } }
+        row.setOnClickListener { showStateUse(state, onChanged) }
 
         val remove = label(getString(R.string.action_delete), 11f, MUTED)
         remove.setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -2327,6 +2631,87 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(remove)
         return row
+    }
+
+    /**
+     * Everything a state is for, in one place.
+     *
+     * The complaint this answers is "the state system only adds states and then what". A
+     * state is three things — a drawing that shows only while it is on, a fact a rule can
+     * read, and a switch something can flip — and none of the three is discoverable from a
+     * dialog that only lets you rename it. So the row opens this instead.
+     */
+    private fun showStateUse(state: StateSpec, onChanged: () -> Unit) {
+        val folder = summoned ?: opened
+        val actions = mutableListOf<Pair<String, () -> Unit>>()
+
+        actions.add(getString(R.string.state_use_flip) to {
+            sandboxView.toggleState(state.id)
+            val on = sandboxView.stateOn(state.id)
+            Toast.makeText(
+                this,
+                state.name + getString(if (on) R.string.logic_state_on else R.string.logic_state_off),
+                Toast.LENGTH_SHORT,
+            ).show()
+            buildPetChooser()
+            onChanged()
+        })
+
+        actions.add(getString(R.string.state_use_edit) to { askEditState(state) { onChanged() } })
+
+        if (folder != null) {
+            actions.add(getString(R.string.state_use_art) to {
+                val hits = boneNames(folder).filter { bone ->
+                    store.partDrawings(folder.id, bone)
+                        .any { it.artKey == bone + CharacterStore.VARIANT_SEPARATOR + state.id }
+                }
+                if (hits.isEmpty()) {
+                    Toast.makeText(this, R.string.state_use_art_none, Toast.LENGTH_LONG).show()
+                } else {
+                    pickList(
+                        title = getString(R.string.state_use_art),
+                        options = hits.map { it to (boneLabel(it).ifEmpty { it }) },
+                        hint = "",
+                        current = null,
+                    ) { bone ->
+                        openPartFiles(folder, bone)
+                        true
+                    }
+                }
+            })
+        }
+
+        actions.add(getString(R.string.state_use_rule) to {
+            logicRules.add(
+                RuleSpec(
+                    on = EventType.CLICK.id,
+                    part = "",
+                    conditions = listOf(
+                        ConditionSpec(kind = "state", stat = "", op = "on", value = 0f, state = state.id)
+                    ),
+                    actions = listOf(ActionSpec("say", text = "……")),
+                    cooldown = 0.5f,
+                    once = false,
+                )
+            )
+            saveLogic()
+            openLogic()
+        })
+
+        actions.add(getString(R.string.action_delete) to {
+            logicStates.removeAll { it.id == state.id }
+            saveLogic()
+            buildLogicPane()
+            onChanged()
+        })
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.state_use_title, state.name))
+            .setItems(actions.map { it.first }.toTypedArray()) { _, which ->
+                actions.getOrNull(which)?.second?.invoke()
+            }
+            .setNegativeButton(R.string.action_close, null)
+            .show()
     }
 
     private fun askEditState(existing: StateSpec?, after: (() -> Unit)? = null) {
@@ -2535,6 +2920,62 @@ class MainActivity : AppCompatActivity() {
         else -> a.kind
     }
 
+    /**
+     * Flip the connector in front of a clause: 而且 becomes 或者 and back.
+     *
+     * This is the whole of putting a rule's IF together. Everything either side of the
+     * connector is a module that was added on its own, and the connector is the only thing
+     * that says how they go together — so it gets a box of its own and a tap of its own.
+     */
+    private fun flipJoin(index: Int, condIndex: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val clause = rule.conditions.getOrNull(condIndex) ?: return
+        val conditions = rule.conditions.toMutableList()
+        conditions[condIndex] = clause.copy(join = Joins.flip(clause.join))
+        putRule(index, rule.copy(conditions = conditions))
+    }
+
+    /**
+     * Add a module to a rule: another 如果, another thing to do, or the 否则 branch.
+     *
+     * It lands with a default value and the editor opens straight away, because "add a
+     * module" and "say what it does" are one action as far as anybody using this is
+     * concerned.
+     */
+    private fun addModule(index: Int, what: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        when (what) {
+            LogicGraphView.Node.ADD_CONDITION -> {
+                val conditions = rule.conditions.toMutableList()
+                conditions.add(
+                    ConditionSpec(
+                        kind = "stat",
+                        stat = logicStats.firstOrNull()?.id ?: "",
+                        op = ">=",
+                        value = 0f,
+                        join = Joins.AND,
+                    )
+                )
+                putRule(index, rule.copy(conditions = conditions))
+                askCondition(index, conditions.size - 1)
+            }
+
+            LogicGraphView.Node.ADD_ELSE -> {
+                val actions = rule.elseActions.toMutableList()
+                actions.add(ActionSpec("say", text = "……"))
+                putRule(index, rule.copy(elseActions = actions))
+                askAction(index, actions.size - 1, isElse = true)
+            }
+
+            else -> {
+                val actions = rule.actions.toMutableList()
+                actions.add(ActionSpec("say", text = "……"))
+                putRule(index, rule.copy(actions = actions))
+                askAction(index, actions.size - 1)
+            }
+        }
+    }
+
     private fun putRule(index: Int, rule: RuleSpec) {
         if (index !in logicRules.indices) return
         logicRules[index] = rule
@@ -2592,6 +3033,7 @@ class MainActivity : AppCompatActivity() {
         var op = existing?.op ?: ">="
         var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
         var stateOn = existing?.op != "off"
+        var join = Joins.of(existing?.join ?: Joins.AND)
 
         // Declared before the chips that switch between them: those listeners close over
         // these two, and a local has to exist before anything can capture it.
@@ -2708,11 +3150,35 @@ class MainActivity : AppCompatActivity() {
         stateBox.addView(label(getString(R.string.logic_state_is), 11f, MUTED, top = 10, bottom = 6))
         stateBox.addView(onOffChips)
 
+        // The connector, first, because it is the one thing about a clause that is about the
+        // clause's NEIGHBOURS rather than about the clause. The first clause has nothing
+        // before it to join to, so it is not offered one.
+        val joinChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val joinViews = mutableListOf<TextView>()
+        for (id in listOf(Joins.AND, Joins.OR)) {
+            val chip = label(Joins.label(id), 12f, INK)
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                join = id
+                paintChips(joinViews, listOf(Joins.AND, Joins.OR), { join })
+            }
+            joinViews.add(chip)
+            joinChips.addView(chip)
+        }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }
-        box.addView(label(getString(R.string.logic_cond_kind), 11f, MUTED, bottom = 6))
+        if (condIndex > 0) {
+            box.addView(label(getString(R.string.logic_join), 11f, MUTED, bottom = 6))
+            box.addView(joinChips)
+        }
+        box.addView(label(getString(R.string.logic_cond_kind), 11f, MUTED, top = 10, bottom = 6))
         box.addView(kindChips)
         box.addView(statBox)
         box.addView(stateBox)
@@ -2725,10 +3191,12 @@ class MainActivity : AppCompatActivity() {
                 val spec = if (kind == "state") {
                     ConditionSpec(
                         kind = "state", stat = "", op = if (stateOn) "on" else "off",
-                        value = 0f, state = state,
+                        value = 0f, state = state, join = join,
                     )
                 } else {
-                    ConditionSpec(kind = "stat", stat = stat, op = op, value = valueOf())
+                    ConditionSpec(
+                        kind = "stat", stat = stat, op = op, value = valueOf(), join = join,
+                    )
                 }
                 if (condIndex in conditions.indices) conditions[condIndex] = spec else conditions.add(spec)
                 putRule(index, rule.copy(conditions = conditions))
@@ -2747,6 +3215,7 @@ class MainActivity : AppCompatActivity() {
         paintChips(opViews, CompareOp.values().map { it.id }, { op })
         paintChips(stateViews, logicStates.map { it.id }, { state })
         paintChips(onOffViews, listOf("on", "off"), { if (stateOn) "on" else "off" })
+        paintChips(joinViews, listOf(Joins.AND, Joins.OR), { join })
         statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
         stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
     }

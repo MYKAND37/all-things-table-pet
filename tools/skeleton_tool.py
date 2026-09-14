@@ -73,6 +73,49 @@ def bake(bones_spec):
     return by_name, order
 
 
+# ------------------------------- the room -------------------------------
+
+#: How much air the room has above the ground line, as a multiple of the figure's height.
+#:
+#: A room one figure tall is enough to stand in and nothing else. Picking the pet up by one
+#: ankle turns it over, and an inverted figure needs its whole length BELOW the hand holding
+#: it -- so the hand has to go up by about a figure's height, and on a phone the finger has
+#: only the screen to travel across. The taller the room, the smaller the piece of the screen
+#: one pixel of lift costs, which is the whole reason this is a room and not a floor.
+ROOM_AIR = 1.0
+
+
+def figure_span(spec):
+    """Height of the figure in its rest pose, feet to crown, straight off the authored bones."""
+    low = max(max(s["head"][1], s["tail"][1]) for s in spec["bones"])
+    high = min(min(s["head"][1], s["tail"][1]) for s in spec["bones"])
+    return low - high
+
+
+def room(spec, air=ROOM_AIR):
+    """
+    Deepen the room and stand the figure on the new floor.
+
+    Only the ROOM moves. The bones are untouched and stay in the art canvas' own coordinates,
+    which is what the drawing tools, the alignment view and the saved rig file all speak, and
+    what keeps a rig round-tripping through the editor without drifting a pixel. The figure
+    is stood on the new floor by the ragdoll, which starts its root at the authored position
+    plus roomAir.
+
+    Doing it here rather than leaving it to each character file means a character drawn
+    against the old template still gets a room it can be picked up in.
+    """
+    physics = spec.setdefault("physics", {})
+    if "roomAir" in physics:
+        return spec
+    lift = max(720.0, figure_span(spec) * air)
+    physics["floorY"] = float(physics.get("floorY", 2048.0)) + lift
+    physics["roomAir"] = lift
+    canvas = spec.setdefault("canvas", {})
+    canvas["height"] = float(canvas.get("height", 2048.0)) + lift
+    return spec
+
+
 def update(order, root_offset=(0.0, 0.0)):
     """Forward kinematics: world = world(parent) composed with local(bone).
 

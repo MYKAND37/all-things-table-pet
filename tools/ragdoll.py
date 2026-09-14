@@ -26,7 +26,7 @@ import math
 import random
 import sys
 
-from skeleton_tool import bake, update, tip, norm_angle
+from skeleton_tool import bake, update, tip, norm_angle, room
 
 # Angular spring constant at stiffness = 1.0, in 1/s^2. At this value a bone returns to
 # its target in roughly a tenth of a second: holding a pose, not a stiff servo.
@@ -65,6 +65,21 @@ PIN_MODE = "aim"
 # a figure held by the ankle stops hanging. tools/drag_check.py pins both ends down.
 ROOT_PIN_GAIN = 0.15
 
+# How much of the finger's pull the ROOT takes, before the chain is solved at all.
+#
+# This is the difference between POSING a limb and CARRYING the figure, and it is the whole
+# of "I grab its leg and lift, and the pet comes up with my hand and hangs". The chain solve
+# below can always reach the finger by bending something -- grab an ankle and lift and it
+# rotates the hip, which lifts the foot and leaves the body standing on the other leg,
+# leaning, exactly like a bow. The body only comes up if the ROOT takes part of the pull.
+#
+# Not 1.0: pulling the root all the way is exact and leaves the chain with nothing to do, so
+# a limb can never be posed and a hanging arm keeps whatever shape it had. Not 0.0: the
+# figure never leaves the ground and cannot be picked up at all. What is left of the error
+# after this is solved by the chain, and the last of it by sliding the root -- so the grip
+# still lands exactly on the finger, it just gets there with the body behind it.
+CARRY_GAIN = 0.85
+
 # Floor resolution passes per step, and the largest turn one pass may apply.
 GROUND_PASSES = 4
 MAX_TURN_STEP = 0.35
@@ -98,6 +113,30 @@ LINEAR_NOISE = 0.6         # px/s^2
 # nothing ever disturbs it. Applied only when limp, grounded and nearly still, so it never
 # fights a drag or a throw.
 COLLAPSE_GAIN = 6.0
+
+#: How far over a figure has to be turned before the finger, and not the floor, is what is
+#: holding it up, in radians. Not a quarter turn: a figure that has been laid on its side is
+#: on the floor, and the floor resolves it exactly as it always did. This is the line
+#: between standing on the ground and hanging off a hand.
+UPSIDE_DOWN = 2.0
+
+# How far a CARRIED figure may hang below the floor line, in px.
+#
+# This is the whole difference between "picked up by the ankle and hanging upside down" and
+# "bent over at the waist". The figure is 1690px tall and its head is 1300px from its ankle,
+# so hanging head-down needs the ankle 1300px above the floor -- and the arena is only 1980
+# deep. Lifting the ankle by anything less leaves the head on the floor first, where the
+# ground does what it is supposed to do and turns the spine out of the way: the figure folds
+# instead of turning over, and no amount of gravity about the finger can help, because the
+# head is standing on the ground.
+#
+# A hand that has taken the weight is holding the figure up. The floor has nothing left to
+# say about it, and it says it anyway -- which is the bug. So while a finger holds the
+# figure the floor stops being a wall and becomes a cushion: the figure may hang this far
+# below the line, and only past that does the floor push back. It is still a floor, so a
+# figure cannot be shoved through it, but it is no longer in the way of a body hanging off
+# a hand.
+CARRY_SINK = 460.0
 
 # Hard ceilings on the integrator itself. Not physics: an explicit integrator that is
 # fed a bad number should saturate rather than turn the figure into NaN.
@@ -153,6 +192,7 @@ class Ragdoll:
             if b.parent is not None:
                 self.children[b.parent.name].append(b)
         self.subtrees = {}
+        self.subtree_names = {}
         for b in order:
             out = []
 
@@ -163,9 +203,12 @@ class Ragdoll:
 
             walk(b)
             self.subtrees[b.name] = out
+            self.subtree_names[b.name] = set(x.name for x in out)
 
         update(order)
-        self.root_home = order[0].wpos
+        # The room is deeper than the artwork's ground line, and the figure stands on the
+        # FLOOR, not where the drawing's ground line happens to be: see skeleton_tool.room.
+        self.root_home = (order[0].wpos[0], order[0].wpos[1] + physics.get("roomAir", 0.0))
         self.root_pos = list(self.root_home)
         # The root carries an explicit velocity. A Verlet integrator reads any positional
         # correction as velocity, and one large correction then squares its way to
@@ -243,6 +286,33 @@ class Ragdoll:
             return (-math.pi, math.pi)
         return (bone.min_a, bone.max_a)
 
+    def _hanging_set(self, bone, gripped):
+        """
+        What a joint is carrying: the bones whose weight pulls on it.
+
+        This is the subtree -- the marionette model, every joint feels what dangles from it
+        -- UNLESS the finger is holding something inside that subtree. Then the pull is on
+        the far side: the joint is not holding that body up, that body is holding THE JOINT
+        up, and the weight on it is everything ELSE.
+
+        Ignoring this is why picking the figure up by the ankle bent it like a bow instead of
+        turning it over. The hip's subtree is the legs, so the hip felt the weight of a pair
+        of legs and nothing else -- and the torso, which is a separate branch off the same
+        root, was never felt anywhere except at its own neck. So the hip had no reason to
+        turn the body over, the torso had no reason to hang, and the whole figure folded at
+        the waist, which is exactly what it looked like: bowing.
+
+        Nothing changes while no finger is holding anything: the subtree is the answer, and
+        a figure falling on its own behaves exactly as it always did.
+        """
+        if gripped is None:
+            return self.subtree(bone)
+        sub = self.subtree(bone)
+        if gripped.name not in self.subtree_names[bone.name]:
+            return sub
+        skip = self.subtree_names[bone.name]
+        return [b for b in self.order if b.name not in skip]
+
     def chain_to_root(self, bone):
         """The bone plus every ancestor, which is what the pin's force acts through."""
         out = []
@@ -269,14 +339,16 @@ class Ragdoll:
         self.pin_chain = []
         g = self.gravity
 
-        # Gravity torque about each bone's head, summed over everything hanging from it,
-        # plus the share of the pin force that reaches this joint.
+        # Gravity torque about each bone's head, over the weight the joint is actually
+        # carrying -- which is not always its own subtree. See _hanging_set.
+        one_pin = len(self.pin_targets) == 1
+        gripped = self.by_name.get(held[0][0]) if (one_pin and held) else None
         alpha = {}
         for b in self.order:
             hx, hy = b.wpos
             tau = 0.0
             inertia = 0.0
-            for d in self.subtree(b):
+            for d in self._hanging_set(b, gripped):
                 cx, cy = self.com(d)
                 m = self.mass[d.name]
                 tau += m * g * (cx - hx)
@@ -320,11 +392,17 @@ class Ragdoll:
         slow = abs(self.root_vel[0]) < 30.0 and abs(self.root_vel[1]) < 30.0
         span = (max(self.collider_low(b) for b in self.order)
                 - min(b.wpos[1] for b in self.order))
-        # Deliberately not while a finger is holding the figure: "a limp body that has come
-        # to rest standing up should fall over" is a statement about a body standing on its
-        # own. One that is being carried is not standing, and the feedback here is strong
-        # enough that firing it mid-hang throws the figure out of the pose entirely.
-        giving = (self.figure_stiffness < 0.25 and self.grounded and slow and not self.pinned
+        # Not while the figure is HANGING: the feedback here is strong enough that firing it
+        # mid-hang throws the figure out of the pose entirely, and a body dangling from a
+        # finger has already fallen as far as it is going to.
+        #
+        # It IS allowed while a finger holds a figure that is still on its feet, and that is
+        # the whole reason lifting an ankle is reliable rather than a coin toss. A limp body
+        # held up by one ankle and still standing on the other is balanced on a support
+        # polygon: correct physics, and a genuine equilibrium, so whether it topples depends
+        # on which way the noise happened to nudge it. A real ragdoll has no balance to lose.
+        giving = (self.figure_stiffness < 0.25 and self.grounded and slow
+                  and not self.hanging()
                   and span > 0.55 * self.standing_span)
         give = COLLAPSE_GAIN * (1.0 - self.figure_stiffness) if giving else 0.0
 
@@ -396,6 +474,7 @@ class Ragdoll:
         held = self._normalise(pin)
         if held:
             self._pins(dt, held)
+            self.carry_floor(dt)
 
         self.fk()
 
@@ -468,6 +547,21 @@ class Ragdoll:
         heavy joints are now left to gravity, which is what actually swings a body you
         pick up by the leg.
         """
+        if CARRY_GAIN > 0.0:
+            dx = dy = 0.0
+            for name, target, offset in pins:
+                bone = self.by_name.get(name)
+                if bone is None:
+                    continue
+                p = self._grip(bone, offset)
+                dx += target[0] - p[0]
+                dy += target[1] - p[1]
+            dx /= len(pins)
+            dy /= len(pins)
+            self.root_pos[0] += dx * CARRY_GAIN
+            self.root_pos[1] += dy * CARRY_GAIN
+            self.fk()
+
         for _ in range(PIN_OUTER):
             for name, target, offset in pins:
                 bone = self.by_name.get(name)
@@ -610,6 +704,14 @@ class Ragdoll:
         only a part that cannot be helped by turning -- a bone hanging straight down, or
         one already at its joint limit -- hands its share to the root.
         """
+        if self.hanging():
+            # Turned over and held by one finger: the finger has the weight, and the floor
+            # has nothing to say about where the head is. See carry_floor, which runs after
+            # the pins -- the pins are what moves the figure, and a floor resolved before
+            # them is a floor the hand can push straight through.
+            self._walls()
+            return
+
         settled = False
         for _ in range(GROUND_PASSES):
             deepest, target = 0.0, None
@@ -669,6 +771,42 @@ class Ragdoll:
         self.root_vel[0] *= (1.0 - self.ground_friction * dt)
         self.fk()
 
+    def hanging(self):
+        """
+        Is this figure hanging off the finger rather than resting on the ground?
+
+        It matters because the floor resolves the two completely differently, and getting it
+        wrong is visible in both directions: a hanging figure whose head the floor insists on
+        lifting turns over into a bow, and a figure that is merely being dragged along the
+        ground -- limp enough that it flops over while you pull it -- must still land on the
+        floor rather than sink through it.
+
+        Orientation is the whole test, and it is the honest one. A figure turned past this
+        far over is not standing on anything: everything under the finger is below the finger.
+        """
+        if not self.pinned:
+            return False
+        root = self.order[0].name
+        return abs(norm_angle(self.ang[root])) > UPSIDE_DOWN
+
+    def carry_floor(self, dt):
+        """
+        The floor, for a figure somebody is holding up.
+
+        Not a wall and not a cushion: the figure may hang CARRY_SINK below the line, and past
+        that the floor is exactly as hard as it ever was. Deliberately NOT the per-bone
+        resolution a standing figure gets -- that one turns the deepest bone out of the floor
+        about its own joint, and on a figure hanging head-down the deepest bone is the neck.
+        Lifting the neck is the bow. The shape of a carried body is gravity's business.
+        """
+        if not self.hanging():
+            return
+        deepest = 0.0
+        for b in self.order:
+            deepest = max(deepest, self.collider_low(b) - self.floor)
+        if deepest > CARRY_SINK:
+            self._lift(deepest - CARRY_SINK, dt)
+
     def _walls(self):
         r = self.collider[self.order[0].name][1]
         if self.root_pos[0] - r < self.wall_left:
@@ -692,7 +830,7 @@ def _report(label, value, ok):
 
 
 def run(spec_path):
-    spec = json.load(open(spec_path, encoding="utf-8"))
+    spec = room(json.load(open(spec_path, encoding="utf-8")))
     by_name, order = bake(spec["bones"])
     ok = True
 

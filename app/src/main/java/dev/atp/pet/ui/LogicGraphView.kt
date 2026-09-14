@@ -35,8 +35,35 @@ class LogicGraphView @JvmOverloads constructor(
     defStyle: Int = 0,
 ) : View(context, attrs, defStyle) {
 
-    /** One box. [role] is 0 for 当, 1 for 如果, 2 for 就 — which is also its colour. */
-    class Node(val role: Int, val lines: List<String>, val index: Int)
+    /**
+     * One box. [role] is 0 for 当, 1 for 如果, 2 for 就, 3 for 否则 — which is also its colour.
+     *
+     * Two more roles, and they are what makes the graph an assembly rather than a readout:
+     *
+     *   * [CONNECTOR] is the small pill between two 如果 boxes that says 而且 or 或者. Its
+     *     [index] is the clause it sits in front of, because that is the clause whose join
+     *     it shows, and tapping it flips that join.
+     *   * [ADD] is a module that is not there yet: "＋ 加一个如果", "＋ 加一个动作". Its
+     *     [index] says what to add — [ADD_CONDITION], [ADD_ACTION] or [ADD_ELSE] — because
+     *     an action belongs to one of two branches and a box in a row cannot say which.
+     *
+     * The view still does not know what any of it means; it reports the box and lets the
+     * caller decide, which is the whole reason the drawing is testable by looking at it.
+     */
+    class Node(val role: Int, val lines: List<String>, val index: Int) {
+        companion object {
+            const val WHEN = 0
+            const val IF = 1
+            const val THEN = 2
+            const val ELSE = 3
+            const val CONNECTOR = 4
+            const val ADD = 5
+
+            const val ADD_CONDITION = 1
+            const val ADD_ACTION = 2
+            const val ADD_ELSE = 3
+        }
+    }
 
     private class Placed(val node: Node, val rule: Int, val rect: RectF)
 
@@ -102,29 +129,44 @@ class LogicGraphView @JvmOverloads constructor(
     }
 
     private fun colourOf(role: Int): Int = when (role) {
-        0 -> 0xFF6C4CE0.toInt()
-        1 -> 0xFFE08A2E.toInt()
-        2 -> 0xFF2E9E6B.toInt()
-        else -> 0xFF7A7A88.toInt()
+        Node.WHEN -> 0xFF6C4CE0.toInt()
+        Node.IF -> 0xFFE08A2E.toInt()
+        Node.THEN -> 0xFF2E9E6B.toInt()
+        Node.ELSE -> 0xFF7A7A88.toInt()
+        Node.CONNECTOR -> 0xFFB0752A.toInt()
+        else -> 0xFF9AA0AE.toInt()
     }
 
     private fun labelOf(role: Int): String = when (role) {
-        0 -> "当"
-        1 -> "如果"
-        2 -> "就"
-        else -> "否则"
+        Node.WHEN -> "当"
+        Node.IF -> "如果"
+        Node.THEN -> "就"
+        Node.ELSE -> "否则"
+        Node.CONNECTOR -> ""
+        else -> "＋"
     }
+
+    /** A connector is a pill, not a box: no header, one line, and much smaller. */
+    private fun isPill(role: Int): Boolean = role == Node.CONNECTOR
 
     // -- layout -------------------------------------------------------------
 
     private fun nodeWidth(node: Node): Float {
+        if (isPill(node.role)) {
+            var w = 0f
+            for (line in node.lines) w = max(w, bodyPaint.measureText(line))
+            return w + 26f * density
+        }
         var w = bodyPaint.measureText(labelOf(node.role)) + 24f * density
         for (line in node.lines) w = max(w, bodyPaint.measureText(line) + 28f * density)
         return min(w, MAX_W * density)
     }
 
-    private fun nodeHeight(node: Node): Float =
+    private fun nodeHeight(node: Node): Float = if (isPill(node.role)) {
+        PILL_H * density
+    } else {
         (TITLE_H + node.lines.size * LINE_H) * density
+    }
 
     private fun layout() {
         placed.clear()
@@ -247,6 +289,17 @@ class LogicGraphView @JvmOverloads constructor(
         canvas.drawRoundRect(r, radius, radius, fill)
         canvas.restore()
 
+        if (isPill(p.node.role)) {
+            // The text sits in the middle of the card, on the wire, where the join belongs:
+            // the connector is read as part of the sentence, not as another box.
+            bodyPaint.color = accent
+            val y = r.centerY() + bodyPaint.textSize * 0.36f
+            for (line in p.node.lines) {
+                canvas.drawText(line, r.left + 13f * density, y, bodyPaint)
+            }
+            return
+        }
+
         titlePaint.color = accent
         canvas.drawText(
             labelOf(p.node.role),
@@ -352,8 +405,9 @@ class LogicGraphView @JvmOverloads constructor(
 
     companion object {
         private const val TITLE_H = 22f
+        private const val PILL_H = 30f
         private const val LINE_H = 26f
-        private const val GAP = 44f
+        private const val GAP = 30f
         private const val ROW_GAP = 26f
         private const val MAX_W = 300f
     }

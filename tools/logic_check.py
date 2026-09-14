@@ -81,23 +81,35 @@ class Engine:
         return self.states.get(sid, False)
 
     def holds(self, rule):
-        for c in rule.get("if", []):
-            if c.get("kind") == "state":
-                # A state the character does not declare reads as off, not as an error:
-                # deleting a state should not make every rule that mentioned it explode.
-                if self.state_on(c.get("state", "")) != (c.get("op", "on") != "off"):
-                    return False
-                continue
-            if c.get("kind") != "stat":
-                return False
-            v = self.value.get(c.get("stat"), 0.0)
-            t = c.get("value", 0.0)
-            op = c.get("op", ">=")
-            ok = {">": v > t, ">=": v >= t, "<": v < t, "<=": v <= t,
-                  "=": abs(v - t) < 0.001}.get(op, False)
-            if not ok:
-                return False
-        return True
+        """
+        Left to right, 而且 binding tighter than 或者: a list of AND-groups, and the rule runs
+        if ANY group holds. No conditions at all is "always", which is what makes 当……就 a
+        rule somebody can write.
+        """
+        conds = rule.get("if", [])
+        if not conds:
+            return True
+        group = True
+        any_group = False
+        for i, c in enumerate(conds):
+            if i > 0 and c.get("join", "and") == "or":
+                any_group = any_group or group
+                group = True
+            group = group and self.holds_one(c)
+        return any_group or group
+
+    def holds_one(self, c):
+        if c.get("kind") == "state":
+            # A state the character does not declare reads as off, not as an error:
+            # deleting a state should not make every rule that mentioned it explode.
+            return self.state_on(c.get("state", "")) == (c.get("op", "on") != "off")
+        if c.get("kind") != "stat":
+            return False
+        v = self.value.get(c.get("stat"), 0.0)
+        t = c.get("value", 0.0)
+        op = c.get("op", ">=")
+        return {">": v > t, ">=": v >= t, "<": v < t, "<=": v <= t,
+                "=": abs(v - t) < 0.001}.get(op, False)
 
     def run(self, actions):
         out = []
@@ -247,6 +259,48 @@ def main():
     report("an exact name still works", says(out) == ["别打头"])
     out = e.handle("impact")
     report("a whole-body event matches no part rule", says(out) == [])
+
+    print("\nconditions joined with 而且 and 或者")
+    mod = {"stats": [{"id": "H", "name": "H", "value": 50, "min": 0, "max": 100},
+                     {"id": "P", "name": "P", "value": 10, "min": 0, "max": 100}]}
+
+    def joined(conds, values, states=None):
+        spec = dict(mod)
+        spec["rules"] = [{"on": "tick", "cooldown": 0.0, "if": conds,
+                          "then": [{"kind": "say", "text": "yes"}]}]
+        spec["states"] = [{"id": "mech", "name": "mech", "on": False}]
+        eng = Engine(spec)
+        eng.value.update(values)
+        if states:
+            eng.states.update(states)
+        return says(eng.handle("tick")) == ["yes"]
+
+    H_hi = {"kind": "stat", "stat": "H", "op": ">=", "value": 40}
+    H_lo = {"kind": "stat", "stat": "H", "op": "<=", "value": 20}
+    P_hi = {"kind": "stat", "stat": "P", "op": ">=", "value": 50}
+    report("no conditions means always", joined([], {"H": 50.0, "P": 0.0}))
+    report("one condition, one way", joined([H_hi], {"H": 50.0}))
+    report("one condition, the other", not joined([H_hi], {"H": 10.0}))
+    report("而且 needs both", joined([H_hi, dict(P_hi, join="and")], {"H": 50.0, "P": 60.0}))
+    report("而且 refuses one", not joined([H_hi, dict(P_hi, join="and")], {"H": 50.0, "P": 10.0}))
+    report("a plain second clause is an 而且", joined([H_hi, P_hi], {"H": 50.0, "P": 60.0}))
+    report("或者 needs only one",
+           joined([H_hi, dict(P_hi, join="or")], {"H": 10.0, "P": 60.0}))
+    report("或者 still refuses zero",
+           not joined([H_hi, dict(P_hi, join="or")], {"H": 10.0, "P": 10.0}))
+    # (a 而且 b) 或者 c: the AND binds tighter, so a failing a does not sink the group.
+    report("而且 binds tighter than 或者",
+           joined([H_hi, dict(P_hi, join="and"), dict(H_lo, join="or")],
+                  {"H": 10.0, "P": 0.0}))
+    report("and the whole thing can still be false",
+           not joined([H_hi, dict(P_hi, join="and"), dict(H_lo, join="or")],
+                      {"H": 30.0, "P": 0.0}))
+    report("a state clause joins like any other",
+           joined([H_hi, {"kind": "state", "state": "mech", "op": "on", "join": "and"}],
+                  {"H": 50.0}, {"mech": True}))
+    report("mixed clause kinds, 或者",
+           joined([{"kind": "state", "state": "mech", "op": "on"},
+                   dict(H_lo, join="or")], {"H": 10.0}, {"mech": False}))
 
     print("\nconditions")
     e = Engine(default)

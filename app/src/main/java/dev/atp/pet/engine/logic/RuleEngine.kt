@@ -123,26 +123,48 @@ class RuleEngine(val spec: LogicSpec) {
      * cannot stop the rest of the file from running.
      */
     private fun holds(rule: RuleSpec): Boolean {
-        for (c in rule.conditions) {
-            if (c.kind == "state") {
-                val on = stateOn(c.state)
-                val want = c.op != "off"
-                if (on != want) return false
-                continue
+        // No IF at all is "always", not "never": that is what makes 当……就 a rule somebody
+        // can write, and it is the shape most rules in the defaults already have.
+        if (rule.conditions.isEmpty()) return true
+
+        // Left to right, 而且 binding tighter than 或者: a list of AND-groups, and the rule
+        // runs if ANY of them holds. See Joins.
+        var group = true
+        var anyGroup = false
+        for ((i, c) in rule.conditions.withIndex()) {
+            if (i > 0 && Joins.of(c.join) == Joins.OR) {
+                if (group) anyGroup = true
+                group = true
             }
-            if (c.kind != "stat") return false
-            val v = stats.get(c.stat)
-            val ok = when (c.op) {
-                ">" -> v > c.value
-                ">=" -> v >= c.value
-                "<" -> v < c.value
-                "<=" -> v <= c.value
-                "=" -> abs(v - c.value) < 0.001f
-                else -> false
-            }
-            if (!ok) return false
+            group = group && holdsOne(c)
         }
-        return true
+        return anyGroup || group
+    }
+
+    /**
+     * One clause on its own.
+     *
+     * Two kinds, and they are the two things a character can be asked about: a number it
+     * carries ("is pain over 80") and a fact about it ("is it wearing clothes"). An unknown
+     * kind is false rather than fatal, so a rule from a newer version of the app cannot stop
+     * the rest of the file from running.
+     */
+    private fun holdsOne(c: ConditionSpec): Boolean {
+        if (c.kind == "state") {
+            val on = stateOn(c.state)
+            val want = c.op != "off"
+            return on == want
+        }
+        if (c.kind != "stat") return false
+        val v = stats.get(c.stat)
+        return when (c.op) {
+            ">" -> v > c.value
+            ">=" -> v >= c.value
+            "<" -> v < c.value
+            "<=" -> v <= c.value
+            "=" -> abs(v - c.value) < 0.001f
+            else -> false
+        }
     }
 
     /**

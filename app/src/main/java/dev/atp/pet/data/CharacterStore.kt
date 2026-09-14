@@ -545,6 +545,75 @@ class CharacterStore(private val context: Context) {
         return temp.renameTo(folder.specFile)
     }
 
+    /**
+     * Every drawing one bone owns, base first.
+     *
+     * The files ARE the folder: shin_L.png is the base drawing, shin_L__mech.png is the one
+     * that only shows while 机械臂 is on. Reading the directory rather than the layers means
+     * a drawing nothing points at still shows up here — which is exactly the file somebody
+     * copied into the folder by hand and now wants to assign to a state.
+     */
+    fun partDrawings(id: String, bone: String): List<PartDrawing> {
+        val folder = folder(id) ?: return emptyList()
+        val files = folder.partsDir.listFiles() ?: return emptyList()
+        return files
+            .filter { it.isFile && it.name.endsWith(".png") }
+            .map { PartDrawing(it.name.removeSuffix(".png"), it) }
+            .filter { it.artKey == bone || it.artKey.startsWith(bone + VARIANT_SEPARATOR) }
+            .sortedBy { it.artKey }
+    }
+
+    /**
+     * Delete one drawing, and put the part back the way it was.
+     *
+     * Two things have to go with the file. A LAYER that pointed at it would draw nothing at
+     * all — a hole in the file that nothing can ever fill — and the base drawing of a part
+     * that has a variant is usually marked "not while that state is on", so deleting the
+     * variant without clearing that marker would leave the plain arm missing whenever the
+     * state was on, which reads as a bug in the app rather than as a drawing that was
+     * removed.
+     */
+    fun deleteDrawing(id: String, bone: String, artKey: String): Boolean {
+        val folder = folder(id) ?: return false
+        return try {
+            File(folder.partsDir, artKey + ".png").delete()
+            val root = JSONObject(folder.specText())
+            val old = root.optJSONArray("layers") ?: JSONArray()
+            val state = if (artKey.startsWith(bone + VARIANT_SEPARATOR)) {
+                artKey.removePrefix(bone + VARIANT_SEPARATOR)
+            } else {
+                ""
+            }
+            val arr = JSONArray()
+            for (i in 0 until old.length()) {
+                val l = old.getJSONObject(i)
+                if (l.optString("bone") == bone && l.optString("art", bone) == artKey) continue
+                if (state.isNotEmpty() && l.optString("bone") == bone &&
+                    l.optString("state", "") == "!" + state
+                ) {
+                    l.remove("state")
+                }
+                arr.put(l)
+            }
+            root.put("layers", arr)
+            root.put("version", root.optInt("version", 0) + 1)
+            writeSpec(folder, root)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** One drawing on disk, and the key the layers call it by. */
+    class PartDrawing(val artKey: String, val file: File) {
+        /** The state this drawing is for, or "" for the base drawing. */
+        val state: String
+            get() = if (artKey.contains(VARIANT_SEPARATOR)) {
+                artKey.substringAfter(VARIANT_SEPARATOR)
+            } else {
+                ""
+            }
+    }
+
     fun clearPart(id: String, bone: String): Boolean {
         val folder = folder(id) ?: return false
         return folder.partFile(bone).delete()
