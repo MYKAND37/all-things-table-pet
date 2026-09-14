@@ -220,19 +220,36 @@
             </ScrollView>
 
             <!-- ── 逻辑管理 ─────────────────────────── -->
-            <ScrollView
-                android:id="@+id/logicScroll"
+            <LinearLayout
+                android:id="@+id/logicPane"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:orientation="vertical"
                 android:visibility="gone">
 
-                <LinearLayout
-                    android:id="@+id/logicList"
+                <dev.atp.pet.ui.LogicGraphView
+                    android:id="@+id/logicGraph"
+                    android:layout_width="match_parent"
+                    android:layout_height="0dp"
+                    android:layout_weight="1" />
+
+                <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="12dp" />
-            </ScrollView>
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/logicBar"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp" />
+                </HorizontalScrollView>
+            </LinearLayout>
 
             <!-- ── 桌宠管理：导入对齐 ───────────────── -->
             <FrameLayout

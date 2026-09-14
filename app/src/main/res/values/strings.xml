@@ -152,6 +152,7 @@
     <string name="logic_rules_hint">点任何一个方块改它。「当」是发生了什么事，「如果」是还要满足什么，「就」是做什么。</string>
     <string name="logic_add_stat">＋ 加数值</string>
     <string name="logic_add_rule">＋ 添加规则</string>
+    <string name="logic_rule_settings">规则设置</string>
     <string name="logic_add_if">＋如果</string>
     <string name="logic_add_then">＋就</string>
     <string name="logic_always">如果：总是</string>
