@@ -2050,6 +2050,16 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(picture)
 
+        // The way in from this end. 道具管理 is where a prop is made, and "does this one use
+        // logic of its own" is a question that comes up here rather than three screens away.
+        val logic = label(getString(R.string.menu_logic), 11f, MUTED)
+        logic.setPadding(dp(8), dp(6), dp(8), dp(6))
+        logic.setOnClickListener {
+            openLogic(Subjects.prop(spec.id))
+            show(Pane.PET_LOGIC)
+        }
+        card.addView(logic)
+
         val remove = label(getString(R.string.action_delete), 11f, MUTED)
         remove.setPadding(dp(8), dp(6), dp(8), dp(6))
         remove.setOnClickListener {
@@ -2223,10 +2233,12 @@ class MainActivity : AppCompatActivity() {
         logicSubject = subject
         val folder = summoned
         val spec = when {
-            folder == null -> LogicSpec(emptyList(), emptyList())
-            subject == Subjects.PET -> store.loadLogic(folder.id)
-            else -> store.loadObjectLogic()[subject]
+            // An object's logic does not need a character to be summoned: it lives in the
+            // shared props directory, and 道具管理 is a perfectly good place to open it from.
+            subject != Subjects.PET -> store.loadObjectLogic()[subject]
                 ?: LogicSpec.parseObject(LogicSpec.OBJECT_DEFAULT)
+            folder == null -> LogicSpec(emptyList(), emptyList())
+            else -> store.loadLogic(folder.id)
         }
         logicStats = spec.stats.toMutableList()
         logicRules = spec.rules.toMutableList()
@@ -2621,6 +2633,15 @@ class MainActivity : AppCompatActivity() {
                     dialog.dismiss()
                     askEditLiquid(liquid) { fill() }
                 }
+                val logic = label(getString(R.string.menu_logic), 11f, MUTED)
+                logic.setPadding(dp(8), dp(6), dp(8), dp(6))
+                logic.setOnClickListener {
+                    dialog.dismiss()
+                    openLogic(Subjects.liquid(liquid.id))
+                    show(Pane.PET_LOGIC)
+                }
+                row.addView(logic)
+
                 val remove = label(getString(R.string.action_delete), 11f, MUTED)
                 remove.setPadding(dp(8), dp(6), dp(8), dp(6))
                 remove.setOnClickListener {
