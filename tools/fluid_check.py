@@ -1,0 +1,289 @@
+
+"""A liquid, tested before it is drawn.
+
+The thing that makes a heap of particles look like a liquid is not the particles, it is
+that they push each other apart: gravity pulls them into a pile and the crowding flattens
+the pile into a puddle. Get that wrong in either direction and it is obvious -- too weak
+and the liquid is a pile of balls, too strong and it detonates.
+
+    python3 tools/fluid_check.py
+"""
+import math, random, sys
+
+FAILURES = []
+
+
+def report(label, ok, detail=""):
+    print(("  ok   " if ok else "  FAIL ") + label + ("   " + detail if detail else ""))
+    if not ok:
+        FAILURES.append(label)
+
+
+# ------------------------------- mirror of Fluid.kt -------------------------------
+
+RADIUS = 15.0          # px, a drop
+SPACING = 15.0         # px, the distance drops want to keep
+STIFFNESS = 0.45       # how hard they push back
+COHESION = 0.10        # how hard they pull together once they are apart
+COHESION_RANGE = 1.9   # in multiples of SPACING
+MAX_CORRECTION = 0.5   # one pass may not move a drop further than this, in spacings
+
+# The range at which a drop stops being pushed away and starts being pulled back. Without
+# it the drops only ever push, nothing ever pulls, and a puddle spreads until it hits a
+# wall: it is not surface tension, but it is the same job, and a liquid without it looks
+# like a bag of marbles let go on a table.
+PASSES = 2             # relaxation passes per step
+MAX_DROPS = 600
+FLOOR_FRICTION = 6.0
+AIR_DRAG = 0.4
+
+
+class Drop:
+    __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy")
+
+    def __init__(self, x, y, vx, vy, colour, r):
+        self.x, self.y, self.vx, self.vy = x, y, vx, vy
+        self.px, self.py = x, y
+        self.dx, self.dy = 0.0, 0.0
+        self.colour, self.r, self.age = colour, r, 0.0
+
+
+class Fluid:
+    def __init__(self, floor_y, world_width):
+        self.floor = floor_y
+        self.width = world_width
+        self.drops = []
+        self.rng = random.Random(4242)
+
+    def spill(self, x, y, count, colour, speed=260.0, spread=1.0):
+        # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
+        # bleeding has to keep bleeding, and a spill that silently does nothing because the
+        # pool is full is worse than one that pushes the old liquid out.
+        for _ in range(count):
+            a = self.rng.uniform(0, math.tau)
+            v = speed * self.rng.uniform(0.2, 1.0) * spread
+            self.drops.append(
+                Drop(x + self.rng.uniform(-6, 6), y + self.rng.uniform(-6, 6),
+                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS)
+            )
+        while len(self.drops) > MAX_DROPS:
+            self.drops.pop(0)
+
+    def step(self, dt, gravity, bones=(), radius_of=None):
+        """bones: [(a, b, radius)] capsules the liquid must run around."""
+        for d in self.drops:
+            d.age += dt
+            d.px, d.py = d.x, d.y
+            d.vy += gravity * dt
+            d.vx *= max(0.0, 1.0 - AIR_DRAG * dt)
+            d.vy *= max(0.0, 1.0 - AIR_DRAG * dt)
+            d.x += d.vx * dt
+            d.y += d.vy * dt
+
+        # Crowding first: it is what makes a heap into a puddle.
+        for _ in range(PASSES):
+            self._separate()
+
+        for d in self.drops:
+            self._borders(d)
+            for (a, b, r) in bones:
+                self._bone(d, a, b, r)
+
+        # Velocity is where the drop ENDED UP, not what it was pushed with.
+        #
+        # This is the difference between a puddle and a bag of angry balls. Gravity adds
+        # 40px/s every step to a drop sitting on the floor; the floor puts it back; if the
+        # velocity is left alone it accumulates forever and every drop in the pool reports
+        # itself as moving at 300px/s while going nowhere. Reading it off the displacement
+        # also means the floor and the crowding both damp for free, which is what "settled"
+        # actually is.
+        if dt > 1e-6:
+            for d in self.drops:
+                d.vx = (d.x - d.px) / dt
+                d.vy = (d.y - d.py) / dt
+
+    def _separate(self):
+        """
+        One relaxation pass, as a Jacobi step with a speed limit.
+
+        Every pair contributes to a total displacement per drop which is applied at the
+        end, rather than each pair moving the drop as it is found. Both halves matter:
+
+        Jacobi, because otherwise the answer depends on which neighbour the grid happens
+        to hand back first, and a puddle that piles up differently depending on iteration
+        order is a puddle that twitches.
+
+        The speed limit, because a spill drops a hundred drops within a few pixels of each
+        other, every pair of them is maximally overlapping, and without a cap the sum of a
+        hundred corrections is a detonation. Capping it is the difference between a splash
+        and a grenade.
+        """
+        grid = {}
+        cell = SPACING
+        for d in self.drops:
+            d.dx = 0.0
+            d.dy = 0.0
+            grid.setdefault((int(d.x // cell), int(d.y // cell)), []).append(d)
+
+        for (gx, gy), bucket in grid.items():
+            for ox in (-1, 0, 1):
+                for oy in (-1, 0, 1):
+                    other = grid.get((gx + ox, gy + oy))
+                    if not other:
+                        continue
+                    for d in bucket:
+                        for o in other:
+                            if o is d:
+                                continue
+                            dx, dy = o.x - d.x, o.y - d.y
+                            dist = math.hypot(dx, dy)
+                            if dist < 1e-5 or dist >= SPACING * COHESION_RANGE:
+                                continue
+                            ux, uy = dx / dist, dy / dist
+                            if dist < SPACING:
+                                move = (SPACING - dist) * 0.5 * STIFFNESS
+                                d.dx -= ux * move
+                                d.dy -= uy * move
+                                o.dx += ux * move
+                                o.dy += uy * move
+                            else:
+                                # Apart, so pull them together -- but with a force that goes
+                                # to zero exactly at SPACING, so the resting distance is the
+                                # spacing and not a point.
+                                move = (dist - SPACING) * 0.5 * COHESION
+                                d.dx += ux * move
+                                d.dy += uy * move
+                                o.dx -= ux * move
+                                o.dy -= uy * move
+
+        limit = SPACING * MAX_CORRECTION
+        for d in self.drops:
+            m = math.hypot(d.dx, d.dy)
+            if m > limit:
+                d.dx, d.dy = d.dx / m * limit, d.dy / m * limit
+            d.x += d.dx
+            d.y += d.dy
+
+    def _borders(self, d):
+        if d.y + d.r > self.floor:
+            d.y = self.floor - d.r
+            if d.vy > 0:
+                d.vy = 0.0
+            d.vx *= max(0.0, 1.0 - FLOOR_FRICTION * (1 / 60))
+        if d.x - d.r < 0:
+            d.x = d.r
+            d.vx = abs(d.vx) * 0.2
+        elif d.x + d.r > self.width:
+            d.x = self.width - d.r
+            d.vx = -abs(d.vx) * 0.2
+
+    def _bone(self, d, a, b, r):
+        abx, aby = b[0] - a[0], b[1] - a[1]
+        l2 = abx * abx + aby * aby
+        if l2 < 1e-6:
+            cx, cy = a
+        else:
+            t = max(0.0, min(1.0, ((d.x - a[0]) * abx + (d.y - a[1]) * aby) / l2))
+            cx, cy = a[0] + abx * t, a[1] + aby * t
+        dx, dy = d.x - cx, d.y - cy
+        dist = math.hypot(dx, dy)
+        gap = d.r + r
+        if dist >= gap or dist < 1e-5:
+            return
+        ux, uy = dx / dist, dy / dist
+        d.x, d.y = cx + ux * gap, cy + uy * gap
+        into = d.vx * ux + d.vy * uy
+        if into < 0:
+            d.vx -= ux * into
+            d.vy -= uy * into
+
+
+def main():
+    print("a drop in the air falls")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 200, 1, 0xFF0000)
+    d = f.drops[0]
+    d.vx = d.vy = 0.0
+    for _ in range(30):
+        f.step(1 / 60, 2400.0)
+    report("it went down", d.y > 200.0 + 20, "y=%.0f" % d.y)
+
+    print("a puddle forms on the floor and stops")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 1000, 120, 0xFF0000)
+    for _ in range(300):
+        f.step(1 / 60, 2400.0)
+    early = max(d.x for d in f.drops) - min(d.x for d in f.drops)
+    for _ in range(900):
+        f.step(1 / 60, 2400.0)
+    worst = max(d.y for d in f.drops)
+    lowest = min(d.y for d in f.drops)
+    spread = max(d.x for d in f.drops) - min(d.x for d in f.drops)
+    report("nothing sank through the floor", worst <= 2000.0 - RADIUS + 0.5,
+           "lowest %.1f (floor %.0f)" % (worst, 2000.0))
+    report("the pile is a puddle, not a tower", spread > 300.0, "%.0f px wide" % spread)
+    # The point of pooling is that it STOPS. A liquid that keeps widening is a liquid with
+    # nothing holding it together, and it ends up as a film one molecule thick.
+    report("it stopped spreading", spread < early * 1.05,
+           "%.0f px at 5s, %.0f px at 20s" % (early, spread))
+    report("and it is shallow", worst - lowest < 6 * SPACING,
+           "%.0f px deep" % (worst - lowest))
+    moving = [d for d in f.drops if math.hypot(d.vx, d.vy) > 40.0]
+    report("it came to rest", len(moving) <= 10, "%d still moving" % len(moving))
+    report("no drop left the arena",
+           all(-1 <= d.x <= 3001 for d in f.drops))
+
+    print("nothing detonates")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 1990, 300, 0xFF0000)
+    bad = 0
+    for i in range(900):
+        f.step(1 / 60, 2400.0)
+        for d in f.drops:
+            if not (math.isfinite(d.x) and math.isfinite(d.y)) or abs(d.x) > 1e6 or abs(d.y) > 1e6:
+                bad += 1
+                break
+        if bad:
+            break
+    report("600 drops for 15 seconds stay finite and in place", bad == 0)
+    # 600 drops packed at their resting distance need about 135,000 px^2, which in a
+    # 3000-wide arena is a layer or three. A tower of 600 would be thousands of pixels
+    # deep; a liquid that never separated would be one drop wide. Both are obvious here.
+    depth = max(d.y for d in f.drops) - min(d.y for d in f.drops)
+    report("it spread out instead of stacking up", 5.0 < depth < 200.0,
+           "%.0f px deep" % depth)
+
+    print("liquid runs around a body instead of through it")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 400, 60, 0xFF0000)
+    bone = ((1500.0, 900.0), (1500.0, 1900.0), 60.0)   # a leg standing in the way
+    for _ in range(600):
+        f.step(1 / 60, 2400.0, [bone], None)
+    inside = [d for d in f.drops
+              if 1500.0 - 60.0 < d.x < 1500.0 + 60.0 and 900.0 < d.y < 1900.0]
+    report("no drop is inside the bone", len(inside) == 0, "%d inside" % len(inside))
+    report("it piled up around the bone",
+           max(d.x for d in f.drops) - min(d.x for d in f.drops) > 150.0)
+
+    print("the cap holds and the newest is the one kept")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1000, 1000, 400, 0x00FF00)
+    f.spill(2000, 1000, 400, 0x0000FF)
+    report("the pool is capped", len(f.drops) == MAX_DROPS, str(len(f.drops)))
+    greens = sum(1 for d in f.drops if d.colour == 0x00FF00)
+    blues = sum(1 for d in f.drops if d.colour == 0x0000FF)
+    report("and it is the older liquid that was dropped", greens < blues,
+           "green %d blue %d" % (greens, blues))
+
+    print("")
+    if FAILURES:
+        print("%d FAILED" % len(FAILURES))
+        for f2 in FAILURES:
+            print("  " + f2)
+        return 1
+    print("all fluid tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

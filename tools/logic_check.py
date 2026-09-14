@@ -199,6 +199,11 @@ def main():
            "unknown: " + str(used_states - state_ids))
     report("the shipped file declares the states its own rules use",
            len(used_states) > 0, str(used_states))
+    liquid_ids = {l["id"] for l in default.get("liquids", [])}
+    used_liquids = {a.get("text") for r in default["rules"] for a in r.get("then", [])
+                    if a.get("kind") == "spill"}
+    report("every liquid spilled exists", used_liquids <= liquid_ids,
+           "unknown: " + str(used_liquids - liquid_ids))
     report("stats have sane ranges",
            all(s["min"] <= s["value"] <= s["max"] for s in default["stats"]))
     report("every rule has at least one action",

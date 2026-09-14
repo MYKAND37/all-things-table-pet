@@ -20,6 +20,7 @@ import androidx.appcompat.app.AppCompatActivity
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.engine.event.EventType
+import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.logic.ActionKind
 import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.CompareOp
@@ -129,6 +130,7 @@ class MainActivity : AppCompatActivity() {
     private var logicStats: MutableList<StatSpec> = mutableListOf()
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
     private var logicStates: MutableList<StateSpec> = mutableListOf()
+    private var logicLiquids: MutableList<LiquidSpec> = mutableListOf()
     private lateinit var skeletonView: SkeletonView
     private lateinit var rigRow: View
     private lateinit var rigBonePanel: LinearLayout
@@ -1812,11 +1814,13 @@ class MainActivity : AppCompatActivity() {
             logicStats = mutableListOf()
             logicRules = mutableListOf()
             logicStates = mutableListOf()
+            logicLiquids = mutableListOf()
         } else {
             val spec = store.loadLogic(folder.id)
             logicStats = spec.stats.toMutableList()
             logicRules = spec.rules.toMutableList()
             logicStates = spec.states.toMutableList()
+            logicLiquids = spec.liquids.toMutableList()
         }
         buildLogicPane()
     }
@@ -1832,7 +1836,10 @@ class MainActivity : AppCompatActivity() {
         val folder = summoned ?: return
         store.saveLogic(
             folder.id,
-            LogicSpec(logicStats.toList(), logicRules.toList(), logicStates.toList()),
+            LogicSpec(
+                logicStats.toList(), logicRules.toList(),
+                logicStates.toList(), logicLiquids.toList(),
+            ),
         )
     }
 
@@ -1880,6 +1887,7 @@ class MainActivity : AppCompatActivity() {
         })
         logicBar.addView(small(getString(R.string.logic_stats)) { showStatsDialog() })
         logicBar.addView(small(getString(R.string.logic_states)) { showStatesDialog() })
+        logicBar.addView(small(getString(R.string.logic_liquids)) { showLiquidsDialog() })
         logicBar.addView(small(getString(R.string.logic_reset)) {
             AlertDialog.Builder(this)
                 .setTitle(R.string.logic_reset)
@@ -1992,6 +2000,165 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+
+    /** A round swatch, so a liquid can be recognised before its name is read. */
+    private fun swatch(colour: Int, size: Int): View {
+        val view = View(this)
+        val shape = android.graphics.drawable.GradientDrawable().apply {
+            setColor(colour)
+            this.shape = android.graphics.drawable.GradientDrawable.OVAL
+        }
+        view.background = shape
+        view.layoutParams = LinearLayout.LayoutParams(dp(size), dp(size)).apply {
+            marginEnd = dp(8)
+        }
+        return view
+    }
+
+    private fun showLiquidsDialog() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.logic_liquids)
+            .setView(box)
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+        fun fill() {
+            box.removeAllViews()
+            box.addView(label(getString(R.string.logic_liquids_hint), 10f, MUTED, bottom = 8))
+            for (liquid in logicLiquids.toList()) {
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background = getDrawable(R.drawable.menu_item_idle)
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    isClickable = true
+                    isFocusable = true
+                }
+                row.layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(5) }
+                row.addView(swatch(liquid.colour, 16))
+                val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+                text.layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+                )
+                text.addView(label(liquid.name, 14f, INK))
+                text.addView(
+                    label(
+                        "代号 " + liquid.id + " · 黏度 " + "%.2f".format(liquid.viscosity),
+                        10f, MUTED,
+                    )
+                )
+                row.addView(text)
+                row.setOnClickListener {
+                    dialog.dismiss()
+                    askEditLiquid(liquid) { fill() }
+                }
+                val remove = label(getString(R.string.action_delete), 11f, MUTED)
+                remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+                remove.setOnClickListener {
+                    logicLiquids.removeAll { it.id == liquid.id }
+                    saveLogic()
+                    buildLogicPane()
+                    fill()
+                }
+                row.addView(remove)
+                box.addView(row)
+            }
+            val add = label(getString(R.string.logic_add_liquid), 12f, INK)
+            add.setPadding(dp(12), dp(9), dp(12), dp(9))
+            add.background = getDrawable(R.drawable.menu_item_selected)
+            add.setOnClickListener {
+                dialog.dismiss()
+                askEditLiquid(null) { fill() }
+            }
+            box.addView(add)
+        }
+        fill()
+        dialog.show()
+    }
+
+    private fun askEditLiquid(existing: LiquidSpec?, after: (() -> Unit)? = null) {
+        var colour = existing?.colour ?: LIQUID_PALETTE[0]
+        val idInput = EditText(this).apply {
+            setText(existing?.id ?: nextLiquidId())
+            hint = getString(R.string.logic_stat_id)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val nameInput = EditText(this).apply {
+            setText(existing?.name ?: "")
+            hint = getString(R.string.logic_stat_name)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+
+        val chipViews = mutableListOf<View>()
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (c in LIQUID_PALETTE) {
+            val chip = View(this)
+            chip.background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(c)
+                cornerRadius = dp(6).toFloat()
+                setStroke(dp(1), 0x33000000)
+            }
+            chip.layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
+                marginEnd = dp(6)
+            }
+            chip.setOnClickListener {
+                colour = c
+                paintSwatches(chipViews, LIQUID_PALETTE, colour)
+            }
+            chipViews.add(chip)
+            chips.addView(chip)
+        }
+
+        val (viscosityRow, viscosityOf) = stepperRow(
+            getString(R.string.logic_liquid_viscosity), existing?.viscosity ?: 0f, 0.1f, 0f, 1f,
+        ) { "%.2f".format(it) }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        box.addView(idInput)
+        box.addView(nameInput)
+        box.addView(label(getString(R.string.logic_liquid_colour), 11f, MUTED, top = 8, bottom = 6))
+        box.addView(chips)
+        box.addView(viscosityRow)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) R.string.logic_add_liquid else R.string.logic_liquids)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextLiquidId() }
+                val name = nameInput.text.toString().trim().ifEmpty { id }
+                logicLiquids.removeAll { it.id == id || (existing != null && it.id == existing.id) }
+                logicLiquids.add(LiquidSpec(id, name, colour, viscosityOf()))
+                saveLogic()
+                buildLogicPane()
+                after?.invoke()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+        paintSwatches(chipViews, LIQUID_PALETTE, colour)
+    }
+
+    private fun paintSwatches(views: List<View>, colours: List<Int>, current: Int) {
+        for ((i, view) in views.withIndex()) {
+            val picked = colours[i] == current
+            (view.background as? android.graphics.drawable.GradientDrawable)?.setStroke(
+                dp(if (picked) 3 else 1),
+                if (picked) INK else 0x33000000,
+            )
+        }
+    }
+
+    private fun nextLiquidId(): String {
+        val taken = logicLiquids.map { it.id }.toSet()
+        var n = 1
+        while (("liquid" + n) in taken) n++
+        return "liquid" + n
+    }
 
     private fun statRow(stat: StatSpec, onChanged: () -> Unit): View {
         val row = LinearLayout(this).apply {
@@ -2137,6 +2304,9 @@ class MainActivity : AppCompatActivity() {
         return "state" + n
     }
 
+    private fun liquidName(id: String): String =
+        logicLiquids.firstOrNull { it.id == id }?.name ?: id
+
     private fun stateName(id: String): String =
         logicStates.firstOrNull { it.id == id }?.name ?: id
 
@@ -2268,6 +2438,7 @@ class MainActivity : AppCompatActivity() {
         "stateOn" -> "打开「" + stateName(a.state) + "」"
         "stateOff" -> "关闭「" + stateName(a.state) + "」"
         "stateToggle" -> "切换「" + stateName(a.state) + "」"
+        "spill" -> "喷" + liquidName(a.text) + " " + a.value.toInt()
         else -> a.kind
     }
 
@@ -2561,6 +2732,23 @@ class MainActivity : AppCompatActivity() {
                 "state" -> pickState(getString(R.string.logic_pick_state)) { state ->
                     putAction(index, actionIndex, ActionSpec(kind.id, state = state))
                 }
+                "liquid" -> pickList(
+                    getString(R.string.logic_pick_liquid),
+                    logicLiquids.map { it.id to it.name },
+                    getString(R.string.logic_no_liquids),
+                    existing?.text,
+                ) { liquid ->
+                    askNumber(
+                        getString(R.string.logic_pick_amount),
+                        existing?.value ?: 24f, 1f, 200f,
+                    ) { amount ->
+                        putAction(
+                            index, actionIndex,
+                            ActionSpec(kind.id, text = liquid, value = amount),
+                        )
+                    }
+                    true
+                }
                 else -> putAction(index, actionIndex, ActionSpec(kind.id))
             }
             true
@@ -2799,6 +2987,13 @@ class MainActivity : AppCompatActivity() {
         val MUTED = Color.parseColor("#A6171528")
 
         /** The stick figure in an action-list row: solid when it is the one being held. */
+        /** The colours a liquid can be. A palette, not a picker: eight swatches is a
+         *  decision, a colour wheel is a hobby. */
+        val LIQUID_PALETTE = listOf(
+            0xFFB4212B.toInt(), 0xFFE2557B.toInt(), 0xFFE08A2E.toInt(), 0xFFE8C33C.toInt(),
+            0xFF5FA83C.toInt(), 0xFF3D8FD1.toInt(), 0xFF6C4CE0.toInt(), 0xFF23202E.toInt(),
+        )
+
         val FIGURE_ON = Color.parseColor("#FF5B4BC4")
         val FIGURE_OFF = Color.parseColor("#806E56CF")
 

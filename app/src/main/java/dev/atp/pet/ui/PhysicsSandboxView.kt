@@ -10,6 +10,9 @@ import android.view.View
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
+import dev.atp.pet.engine.fluid.Fluid
+import dev.atp.pet.engine.fluid.LiquidSpec
+import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleEngine
@@ -61,6 +64,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var propArt: PartLibrary? = null
     private var world: PropWorld? = null
     private val particles = Particles()
+
+    /** Liquid, if any has been spilled. Created with the world: it needs the floor. */
+    private var fluid: Fluid? = null
+    private var liquids: List<LiquidSpec> = Liquids.DEFAULTS
 
     /** Parts whose artwork is gone. The bones are still there; only the drawing is not. */
     private val broken = HashSet<String>()
@@ -186,10 +193,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         )
 
         ragdoll = Ragdoll(built, parsed, stiffness)
+        liquids = logic.liquids
         this.propSpecs = propSpecs
         propArt?.release()
         propArt = propsDir?.let { PartLibrary.loadFree(it) }
         world = PropWorld(parsed.floorY, parsed.worldWidth)
+        fluid = Fluid(parsed.floorY, parsed.worldWidth)
         broken.clear()
         renderer?.hidden = broken
         particles.clear()
@@ -267,6 +276,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldProp = null
         world?.clear()
         particles.clear()
+        fluid?.clear()
         broken.clear()
         renderer?.hidden = broken
         engine?.reset()
@@ -305,6 +315,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     spawn(it, Vec2(homeX() - 200f, homeY() - 900f), Vec2(120f, 60f))
                 }
                 "burst" -> particles.burst(a.text, pointOf(event), a.value.toInt())
+                "spill" -> {
+                    val liquid = Liquids.of(a.text, liquids)
+                    fluid?.spill(
+                        liquid.colour, pointOf(event),
+                        a.value.toInt(), liquid.viscosity,
+                    )
+                }
                 "impulse" -> {
                     val rag = ragdoll ?: continue
                     val sk = skeleton ?: continue
@@ -452,6 +469,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         wasGrounded = grounded
 
         particles.step(dt, s.floorY)
+        // Liquid runs around the body: the same capsules the props collide with.
+        fluid?.step(dt, s.gravity, sk) { rag.colliderRadius(it) }
     }
 
     private fun lowestBone(): Bone? {
@@ -507,6 +526,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         particles.draw(canvas, worldPaint)
 
+        drawFluid(canvas)
         drawCharacter(canvas, sk)
         drawProps(canvas)
         drawBalance(canvas, sk)
@@ -537,6 +557,27 @@ class PhysicsSandboxView @JvmOverloads constructor(
             jointPaint.color = bonePaint.color
             canvas.drawCircle(h.x, h.y, 4f, jointPaint)
         }
+    }
+
+    /**
+     * The liquid, as overlapping discs.
+     *
+     * Each drop is drawn twice: a wide faint one and a solid core. Overlapping faint discs
+     * merge into one body of liquid where the drops are packed and fade out at the edges,
+     * which is the whole of the surface-tension look and costs one more draw call.
+     */
+    private fun drawFluid(canvas: Canvas) {
+        val f = fluid ?: return
+        if (f.drops.isEmpty()) return
+        worldPaint.style = Paint.Style.FILL
+        for (d in f.drops) {
+            worldPaint.color = d.colour
+            worldPaint.alpha = 120
+            canvas.drawCircle(d.x, d.y, d.radius * 1.9f, worldPaint)
+            worldPaint.alpha = 215
+            canvas.drawCircle(d.x, d.y, d.radius, worldPaint)
+        }
+        worldPaint.alpha = 255
     }
 
     private fun drawProps(canvas: Canvas) {

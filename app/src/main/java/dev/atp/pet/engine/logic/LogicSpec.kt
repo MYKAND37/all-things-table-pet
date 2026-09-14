@@ -1,5 +1,8 @@
 package dev.atp.pet.engine.logic
 
+import dev.atp.pet.engine.fluid.LiquidSpec
+import dev.atp.pet.engine.fluid.Liquids
+import dev.atp.pet.engine.fluid.parseColour
 import dev.atp.pet.engine.state.StatSpec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -77,7 +80,8 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     WAIT("wait", "等一会儿", "seconds"),
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),
-    STATE_TOGGLE("stateToggle", "切换状态", "state");
+    STATE_TOGGLE("stateToggle", "切换状态", "state"),
+    SPILL("spill", "喷液体", "liquid");
 
     companion object {
         fun of(id: String): ActionKind = values().firstOrNull { it.id == id } ?: SAY
@@ -108,6 +112,8 @@ class LogicSpec(
     val stats: List<StatSpec>,
     val rules: List<RuleSpec>,
     val states: List<StateSpec> = emptyList(),
+    /** The liquids a rule can spill. Editable, because "blood" is a decision. */
+    val liquids: List<LiquidSpec> = Liquids.DEFAULTS,
 ) {
 
     fun rule(index: Int): RuleSpec? = rules.getOrNull(index)
@@ -134,6 +140,22 @@ class LogicSpec(
                 val s = stateArr!!.getJSONObject(i)
                 val id = s.optString("id", "state" + i)
                 StateSpec(id, s.optString("name", id), s.optBoolean("on", false))
+            }
+
+            val liquidArr = o.optJSONArray("liquids")
+            val liquids = if (liquidArr == null || liquidArr.length() == 0) {
+                Liquids.DEFAULTS
+            } else {
+                (0 until liquidArr.length()).map { i ->
+                    val l = liquidArr.getJSONObject(i)
+                    val id = l.optString("id", "liquid" + i)
+                    LiquidSpec(
+                        id = id,
+                        name = l.optString("name", id),
+                        colour = parseColour(l.optString("colour", ""), 0xFFB4212B.toInt()),
+                        viscosity = l.optDouble("viscosity", 0.0).toFloat(),
+                    )
+                }
             }
 
             val ruleArr = o.optJSONArray("rules")
@@ -171,7 +193,7 @@ class LogicSpec(
                 )
             }
             if (stats.isEmpty()) return parse(DEFAULT)
-            return LogicSpec(stats, rules, states)
+            return LogicSpec(stats, rules, states, liquids)
         }
 
         fun toJson(spec: LogicSpec): String {
@@ -194,6 +216,17 @@ class LogicSpec(
                 states.put(JSONObject().put("id", s.id).put("name", s.name).put("on", s.initial))
             }
             root.put("states", states)
+
+            val liquids = JSONArray()
+            for (l in spec.liquids) {
+                liquids.put(
+                    JSONObject()
+                        .put("id", l.id).put("name", l.name)
+                        .put("colour", String.format("#%06X", l.colour and 0xFFFFFF))
+                        .put("viscosity", l.viscosity.toDouble())
+                )
+            }
+            root.put("liquids", liquids)
 
             val rules = JSONArray()
             for (r in spec.rules) {
@@ -243,6 +276,12 @@ class LogicSpec(
     { "id": "dressed", "name": "穿着", "on": false },
     { "id": "hurt", "name": "受伤", "on": false }
   ],
+  "liquids": [
+    { "id": "blood", "name": "血", "colour": "#B4212B", "viscosity": 0.35 },
+    { "id": "water", "name": "水", "colour": "#3D8FD1", "viscosity": 0.0 },
+    { "id": "slime", "name": "史莱姆", "colour": "#5FA83C", "viscosity": 0.8 },
+    { "id": "ink", "name": "墨", "colour": "#23202E", "viscosity": 0.15 }
+  ],
   "rules": [
     {
       "on": "thrown", "part": "", "cooldown": 1.0, "once": false,
@@ -280,7 +319,8 @@ class LogicSpec(
       "then": [
         { "kind": "say", "text": "……" },
         { "kind": "clearPose", "text": "" },
-        { "kind": "burst", "text": "blood", "value": 14 }
+        { "kind": "burst", "text": "blood", "value": 14 },
+        { "kind": "spill", "text": "blood", "value": 40 }
       ]
     },
     {

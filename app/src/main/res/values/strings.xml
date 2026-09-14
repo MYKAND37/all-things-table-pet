@@ -141,6 +141,14 @@
     <string name="logic_state_is_off"> 关着</string>
     <string name="logic_no_states">还没有状态。去「逻辑管理」上面加一个。</string>
     <string name="logic_pick_state">哪个状态</string>
+    <string name="logic_pick_liquid">哪种液体</string>
+    <string name="logic_pick_amount">多少滴</string>
+    <string name="logic_no_liquids">还没有液体。去「逻辑管理 → 液体」加一个。</string>
+    <string name="logic_liquids">液体</string>
+    <string name="logic_add_liquid">＋ 加液体</string>
+    <string name="logic_liquid_colour">颜色</string>
+    <string name="logic_liquid_viscosity">黏度（0 像水，1 像史莱姆）</string>
+    <string name="logic_liquids_hint">液体是规则能"喷"出来的东西。黏度决定它是摊开还是抱成一团。</string>
     <string name="logic_cond_kind">测什么</string>
     <string name="logic_cond_stat">数值</string>
     <string name="logic_cond_state">状态</string>
