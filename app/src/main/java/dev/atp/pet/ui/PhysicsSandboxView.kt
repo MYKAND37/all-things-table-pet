@@ -843,8 +843,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
             else -> "空中"
         }
         val props = world?.live?.size ?: 0
+        // Which switches are on, on the HUD as well as on the chip row: a state that changes
+        // what is drawn is invisible until you know it is on, and "the pet looks wrong" is
+        // usually "a state I forgot about".
+        val on = engine?.states?.filterValues { it }?.keys?.toList().orEmpty()
+        val switches = if (on.isEmpty()) "" else " · 开：" + on.joinToString(" ")
         canvas.drawText(
-            "刚度 " + mode + " · " + state + " · 道具 " + props +
+            "刚度 " + mode + " · " + state + " · 道具 " + props + switches +
                 " · 缩放 " + (viewScale / defaultScale * 100).toInt() + "%",
             10f * density, 16f * density, textPaint
         )

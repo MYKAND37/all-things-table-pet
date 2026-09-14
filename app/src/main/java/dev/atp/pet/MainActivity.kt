@@ -832,11 +832,19 @@ class MainActivity : AppCompatActivity() {
             partFilesList.addView(label(getString(R.string.part_files_none), 11f, MUTED, bottom = 10))
         }
 
-        fun importInto(artKey: String, state: String) {
+        /**
+         * Pick a new drawing for one of a bone's slots.
+         *
+         * [create] adds the layer as well, and is only true for a slot that does not exist
+         * yet: replacing the drawing of a state that already has one must not leave a second
+         * layer pointing at the same file, which draws the same picture twice and shows up
+         * as a duplicate in 图层与深度.
+         */
+        fun importInto(artKey: String, state: String, create: Boolean) {
             awaitingBone = bone
             awaitingVariant = if (state.isEmpty()) null else bone to artKey
             opened = folder
-            if (state.isNotEmpty() && !store.addVariant(folder.id, bone, state)) {
+            if (create && state.isNotEmpty() && !store.addVariant(folder.id, bone, state)) {
                 Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
                 return
             }
@@ -900,7 +908,7 @@ class MainActivity : AppCompatActivity() {
             row.addView(del)
 
             // Tapping the row replaces that drawing -- the same file, new picture.
-            row.setOnClickListener { importInto(drawing.artKey, drawing.state) }
+            row.setOnClickListener { importInto(drawing.artKey, drawing.state, create = false) }
             partFilesList.addView(row)
         }
 
@@ -909,7 +917,7 @@ class MainActivity : AppCompatActivity() {
         val have = drawings.map { it.artKey }.toSet()
         if (bone !in have) {
             partFilesList.addView(
-                addTile(getString(R.string.part_files_add)) { importInto(bone, "") }
+                addTile(getString(R.string.part_files_add)) { importInto(bone, "", create = false) }
             )
         }
         for (state in states) {
@@ -917,7 +925,7 @@ class MainActivity : AppCompatActivity() {
             if (key in have) continue
             partFilesList.addView(
                 addTile(getString(R.string.part_files_add_state, state.name)) {
-                    importInto(key, state.id)
+                    importInto(key, state.id, create = true)
                 }
             )
         }
