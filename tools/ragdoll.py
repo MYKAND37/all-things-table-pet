@@ -40,6 +40,31 @@ ANGULAR_DAMP = 0.9         # per second, on every joint
 # More iterations reach further up the chain; six settles well inside a frame.
 PIN_IK_ITERATIONS = 6
 
+# Gauss-Seidel passes over the pins. One finger does not care; two fingers pulling in
+# opposite directions need a couple of rounds before they agree.
+PIN_OUTER = 3
+
+# How much of the position error the JOINTS take, against the root taking it all.
+#
+# 1.0 is the least-squares solution: the cheapest rotation set that lands on the finger.
+# It is also wrong on its own -- it folds whatever is cheapest (a knee) rather than
+# letting the body hang, because folding a knee is cheaper than turning a body. The root
+# translation is exact, so the joints do not have to do anything at all, and the shape of
+# a hanging figure is gravity's business, not the finger's. A little joint give is kept
+# for the cases where the hand should drag a limb along with it rather than the body.
+PIN_JOINT_GAIN = 1.0
+
+# "aim" = cyclic coordinate descent: every joint turns to line up with the pull, which is
+#         what straightens a limp limb you dangle by its end.
+# "lss" = least squares: moves the least body, which means folding whatever folds cheapest.
+PIN_MODE = "aim"
+
+# How much of its turn the ROOT takes, against every other joint in the chain.
+# 0.15 is where both behaviours survive: below about 0.1 a pair of legs cannot be splayed
+# against the hip's own limits, above about 0.3 the pin starts winning against gravity and
+# a figure held by the ankle stops hanging. tools/drag_check.py pins both ends down.
+ROOT_PIN_GAIN = 0.15
+
 # Floor resolution passes per step, and the largest turn one pass may apply.
 GROUND_PASSES = 4
 MAX_TURN_STEP = 0.35
@@ -158,6 +183,12 @@ class Ragdoll:
         self.pin_point = (0.0, 0.0)
         self.pin_chain = []
         self.pin_last = None
+        # Subtree inertia about each joint, filled in every step. The pin solver needs it
+        # to know what each joint would have to swing.
+        self.inertia = dict((b.name, 1.0) for b in order)
+        self.pin_last_target = None
+        self.pinned = False
+        self.pin_targets = []
         # Velocity of the finger, handed to the caller so a release can throw.
         self.pin_vel = [0.0, 0.0]
 
@@ -193,6 +224,25 @@ class Ragdoll:
             return self.com(bone)[1] + r
         return max(bone.wpos[1], tip(bone)[1]) + r
 
+    def limits_of(self, bone):
+        """
+        What this joint is allowed to do, which is not always what the file says.
+
+        The root bone's rotation IS the figure's global orientation. Its authored limits
+        are a stand-in for the one thing that actually has an opinion about that -- the
+        ground -- so they apply whenever the figure is on its own. While a finger is
+        holding it, the authored limit is what stopped a figure picked up by the ankle
+        from hanging: the solver could rotate every joint EXCEPT the one that would have
+        turned the body over, so it folded the legs instead and left the torso sticking
+        out sideways.
+
+        Deliberately not "while airborne": a figure in free fall keeps its authored limits
+        so that it lands the way it always did. Losing that made every landing sprawl.
+        """
+        if bone.parent is None and self.pinned:
+            return (-math.pi, math.pi)
+        return (bone.min_a, bone.max_a)
+
     def chain_to_root(self, bone):
         """The bone plus every ancestor, which is what the pin's force acts through."""
         out = []
@@ -205,7 +255,14 @@ class Ragdoll:
     # -- the step -----------------------------------------------------------
 
     def step(self, dt, pin=None):
-        """pin: None, or (bone_name, (x, y)) pulling that bone's head towards a finger."""
+        """pin: None, a single (bone_name, (x, y)), or a list of them.
+
+        One finger or five; the solver is the same, and it runs them against each other
+        so two hands pulling in opposite directions both get their say.
+        """
+        held = self._normalise(pin)
+        self.pinned = bool(held)
+        self.pin_targets = [p[1] for p in held]
         self.fk()
 
         self.pin_chain = []
@@ -225,7 +282,31 @@ class Ragdoll:
                 dx, dy = cx - hx, cy - hy
                 inertia += m * (dx * dx + dy * dy)
             alpha[b.name] = tau / max(inertia, 1e-6)
+            # Kept as well: the pin solver distributes the correction over the chain by
+            # how much body each joint would have to move, and this is that quantity.
+            self.inertia[b.name] = max(inertia, 1e-6)
         self.alpha = alpha
+
+        if len(self.pin_targets) == 1:
+            # A body held at ONE point is a pendulum about that point, and that is the only
+            # thing left with an opinion about which way up the figure is: its feet are off
+            # the ground and the pin does not care about orientation at all. Without this,
+            # gravity's torque about the PELVIS is the only term there is, and a figure
+            # hanging from an ankle settles with its weight below its pelvis -- folded up
+            # next to the hand -- instead of below the hand.
+            #
+            # Two pins are not a pendulum, they are a hanger: the body is held at both ends
+            # and there is nothing left to swing about, so the torque is not applied.
+            px, py = self.pin_targets[0]
+            tau = 0.0
+            inertia = 0.0
+            for b in self.order:
+                cx, cy = self.com(b)
+                m = self.mass[b.name]
+                tau += m * g * (cx - px)
+                dx, dy = cx - px, cy - py
+                inertia += m * (dx * dx + dy * dy)
+            self.alpha[self.order[0].name] = tau / max(inertia, 1e-6)
 
         # Joints.
         noise = ANGULAR_NOISE * (1.0 - self.figure_stiffness)
@@ -267,10 +348,11 @@ class Ragdoll:
                 c = 2.0 * math.sqrt(k) * SPRING_ZETA
                 a += -k * (theta - self.target[name]) - c * (omega / dt)
             new_theta = theta + omega * (1.0 - ANGULAR_DAMP * dt) + a * dt * dt
-            if new_theta < b.min_a:
-                new_theta = b.min_a
-            elif new_theta > b.max_a:
-                new_theta = b.max_a
+            lo, hi = self.limits_of(b)
+            if new_theta < lo:
+                new_theta = lo
+            elif new_theta > hi:
+                new_theta = hi
             # Keep the angle we came FROM. Verlet reads the difference between the two
             # stored angles as the velocity, so writing anything else here (for instance
             # the old previous value, which reads like the same thing) freezes the
@@ -301,16 +383,25 @@ class Ragdoll:
         # exactly whatever the ground just did.
         self.fk()
 
-        if pin is not None:
-            self._pin(dt, pin)
+        held = self._normalise(pin)
+        if held:
+            self._pins(dt, held)
 
         self.fk()
 
-    def _pin(self, dt, pin):
-        """
-        Hold the grabbed joint under the finger.
+    def _normalise(self, pins):
+        """One finger, five fingers, or nothing at all."""
+        if pins is None:
+            return []
+        if isinstance(pins, tuple) and pins and isinstance(pins[0], str):
+            return [pins]
+        return list(pins)
 
-        Two things had to be got right here, and the first two attempts each got one.
+    def _pins(self, dt, pins):
+        """
+        Hold every grabbed joint under its finger.
+
+        Three attempts got here, and each one is worth knowing about.
 
         A pure FORCE at the grabbed point is what a mouse joint normally is, and it was
         tried first. It does not converge on a limp articulated body: the equilibrium is
@@ -319,23 +410,80 @@ class Ragdoll:
         to be. The figure drifted into the ceiling and stayed there, and every gain, every
         stiffness and every cap produced the byte-identical wrong pose.
 
-        Translating the root instead is exact and stable, but it is too clever by half:
-        the chain never has to move at all, because dragging the root drags the hand with
-        it. Grab the hand of a limp figure that way and the arm stays hanging exactly
-        where it was, so the body ends up balanced ABOVE the finger instead of dangling
-        below it -- which a limp arm cannot physically do.
+        Translating the root is exact and stable, but it is too clever by half: the chain
+        never has to move at all, because dragging the root drags the hand with it. Grab
+        the hand of a limp figure that way and the arm stays hanging exactly where it was,
+        so the body ends up balanced ABOVE the finger instead of dangling below it.
 
-        So: solve the chain first. Cyclic coordinate descent rotates the grabbed bone's
-        whole ancestry -- hand, forearm, upper arm, shoulder, spine, hip -- until the
-        grabbed point reaches the finger, which is what actually happens when you lift a
-        ragdoll by one hand. Only the leftover the chain cannot cover is taken up by
-        sliding the root. Joint limits are respected at every step, so a chain that runs
-        out of reach hands the remainder to the root rather than tearing.
+        Plain cyclic coordinate descent then solved the chain, joint by joint, from the
+        grabbed bone up to the root. It reaches the finger, but it has no idea how heavy
+        anything is: the hip is a joint like any other, and rotating the hip swings the
+        WHOLE body. So grabbing an ankle and lifting made the solver spin the entire
+        figure around rather than let it hang -- it chose the most expensive joint in the
+        rig for the job, and then fought gravity for it every frame.
+
+        What fixes it is distributing the correction by inertia, which is the least
+        squares solution rather than CCD's greedy one:
+
+            the rotation set that moves the fewest pixels of body
+
+        for every joint, theta_i = lambda * (e . perp(r_i)) / I_i, with lambda chosen so
+        the sum lands exactly on the target. The hip's I is the whole figure, so it barely
+        moves; the ankle's is a foot, so it does the work. Rotating a single bone reduces
+        to exactly the old CCD answer, so nothing that worked stopped working -- and the
+        heavy joints are now left to gravity, which is what actually swings a body you
+        pick up by the leg.
         """
-        name, target = pin
-        bone = self.by_name[name]
-        chain = self.chain_to_root(bone)
+        for _ in range(PIN_OUTER):
+            for name, target in pins:
+                bone = self.by_name.get(name)
+                if bone is not None:
+                    self._solve_pin(bone, target)
 
+        # Whatever the joints could not reach, the root carries -- split between the pins,
+        # so two hands pulling opposite ways do not fight over one translation.
+        dx = dy = 0.0
+        for name, target in pins:
+            p = self.by_name[name].wpos
+            dx += target[0] - p[0]
+            dy += target[1] - p[1]
+        dx /= len(pins)
+        dy /= len(pins)
+        self.root_pos[0] += dx
+        self.root_pos[1] += dy
+        self.pin_point = self.by_name[pins[0][0]].wpos
+
+        # The finger's own speed, not the leftover: the leftover is nearly zero once the
+        # chain reaches, so measuring the throw by it meant a flick threw nothing.
+        target = pins[0][1]
+        if self.pin_last_target is not None and dt > 1e-6:
+            a = 0.35
+            self.pin_vel[0] += ((target[0] - self.pin_last_target[0]) / dt - self.pin_vel[0]) * a
+            self.pin_vel[1] += ((target[1] - self.pin_last_target[1]) / dt - self.pin_vel[1]) * a
+        self.pin_last_target = target
+        self.pin_last = self.pin_point
+
+    def _pin_chain(self, bone):
+        """
+        The grabbed bone and every ancestor, the root included.
+
+        The root is in the chain because two fingers pulling a pair of legs apart need it:
+        the hip's own limits will not splay a leg far enough on their own. It is held on a
+        short leash by ROOT_PIN_GAIN, because the root's rotation is the figure's whole
+        orientation and gravity has the stronger claim on that.
+        """
+        return self.chain_to_root(bone)
+
+    def _solve_pin_aim(self, bone, target):
+        """
+        The greedy solve: every joint in the chain turns to line its tip up with the finger.
+
+        This is cyclic coordinate descent, and for a chain held by its end it is the one
+        that STRAIGHTENS -- each link lines up with the pull, which is what a limp limb
+        does when you dangle it. The least-squares solve minimises movement instead, and
+        minimising movement means folding whatever folds cheapest, which is a knee.
+        """
+        chain = self._pin_chain(bone)
         for _ in range(PIN_IK_ITERATIONS):
             if math.hypot(target[0] - bone.wpos[0], target[1] - bone.wpos[1]) < 0.5:
                 break
@@ -346,32 +494,72 @@ class Ragdoll:
                     continue
                 current = math.atan2(end[1] - py, end[0] - px)
                 wanted = math.atan2(target[1] - py, target[0] - px)
-                turn = norm_angle(wanted - current)
+                turn = norm_angle(wanted - current) * PIN_JOINT_GAIN
+                if b.parent is None:
+                    # The root owns the figure's whole orientation, and gravity has the
+                    # stronger claim on it. A little give lets two fingers splay a pair of
+                    # legs that the hip's own limits would not allow on their own; a lot of
+                    # give is the pin and gravity undoing each other every frame, which is
+                    # what stopped a figure held by the ankle from hanging.
+                    turn *= ROOT_PIN_GAIN
+                if abs(turn) < 1e-9:
+                    continue
                 turned = b.rotation + turn
-                if turned < b.min_a:
-                    turned = b.min_a
-                elif turned > b.max_a:
-                    turned = b.max_a
+                lo, hi = self.limits_of(b)
+                if turned < lo:
+                    turned = lo
+                elif turned > hi:
+                    turned = hi
                 if turned != b.rotation:
                     b.rotation = turned
                     self.ang[b.name] = turned
                     self.fk()
 
-        # Whatever the chain could not reach, the root carries.
-        p = bone.wpos
-        self.pin_point = p
-        dx = target[0] - p[0]
-        dy = target[1] - p[1]
-        self.root_pos[0] += dx
-        self.root_pos[1] += dy
+    def _solve_pin(self, bone, target):
+        """Pull one point of the figure to the finger, in the cheapest way available."""
+        if PIN_MODE == "aim":
+            self._solve_pin_aim(bone, target)
+            return
+        chain = self._pin_chain(bone)
+        for _ in range(PIN_IK_ITERATIONS):
+            ex = target[0] - bone.wpos[0]
+            ey = target[1] - bone.wpos[1]
+            if math.hypot(ex, ey) < 0.5:
+                break
 
-        # Remember how fast the finger is moving so letting go throws the figure rather
-        # than dropping it dead. Smoothed, because a raw per-step delta is noisy.
-        if self.pin_last is not None:
-            a = 0.25
-            self.pin_vel[0] += (dx / dt - self.pin_vel[0]) * a
-            self.pin_vel[1] += (dy / dt - self.pin_vel[1]) * a
-        self.pin_last = (p[0], p[1])
+            terms = []
+            total = 0.0
+            for b in chain:
+                rx = bone.wpos[0] - b.wpos[0]
+                ry = bone.wpos[1] - b.wpos[1]
+                # Rotating b by theta moves the pinned point by theta * perp(r).
+                px, py = -ry, rx
+                dot = ex * px + ey * py
+                inv = 1.0 / self.inertia[b.name]
+                terms.append((b, dot * inv))
+                total += dot * dot * inv
+            if total < 1e-9:
+                break
+
+            lam = (ex * ex + ey * ey) / total * PIN_JOINT_GAIN
+            moved = False
+            for b, term in terms:
+                turn = lam * term
+                if abs(turn) < 1e-9:
+                    continue
+                turned = b.rotation + turn
+                lo, hi = self.limits_of(b)
+                if turned < lo:
+                    turned = lo
+                elif turned > hi:
+                    turned = hi
+                if turned != b.rotation:
+                    b.rotation = turned
+                    self.ang[b.name] = turned
+                    moved = True
+            if not moved:
+                break
+            self.fk()
 
     def _ground(self, dt):
         """

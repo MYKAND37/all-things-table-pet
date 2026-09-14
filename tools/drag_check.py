@@ -1,0 +1,154 @@
+
+"""What a drag actually feels like, tested rather than eyeballed.
+
+The complaint this file exists for: grab a limp figure by the ankle and lift, and it has
+to HANG -- the whole body swings until it dangles below the hand. The old solver rotated
+whatever joint reached the target, and the hip is the joint that reaches everything, so it
+spun the entire figure instead of letting it hang, and then fought gravity for it.
+
+    python3 tools/drag_check.py
+"""
+import json, math, os, sys
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+from skeleton_tool import bake
+from ragdoll import Ragdoll
+
+SPEC = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
+FAILURES = []
+
+
+def report(label, ok, detail=""):
+    print(("  ok   " if ok else "  FAIL ") + label + ("   " + detail if detail else ""))
+    if not ok:
+        FAILURES.append(label)
+
+
+def fresh(settle=180):
+    spec = json.load(open(SPEC))
+    by_name, order = bake(spec["bones"])
+    pet = Ragdoll(spec, by_name, order, stiffness=0.0)
+    for _ in range(settle):
+        pet.step(1.0 / 60.0)
+    return pet, by_name
+
+
+def hold(pet, by_name, name, target, seconds=4.0):
+    """Hold one point at the target and let the body do whatever physics says."""
+    for _ in range(int(seconds * 60)):
+        pet.step(1.0 / 60.0, [(name, target)])
+
+
+def main():
+    print("standing still is still standing")
+    pet, bn = fresh()
+    hip, head = bn["hip"], bn["head"]
+    report("the head starts above the hip", head.wpos[1] < hip.wpos[1],
+           "head %.0f hip %.0f" % (head.wpos[1], hip.wpos[1]))
+
+    print("\nlifting a limp figure by the ankle makes it hang")
+    pet, bn = fresh()
+    hip, head, foot = bn["hip"], bn["head"], bn["foot_L"]
+    target = (foot.wpos[0], foot.wpos[1] - 700.0)
+    hold(pet, bn, "foot_L", target)
+    risen = foot.wpos[1] - target[1]
+    report("the ankle went where the finger is", abs(risen) < 12.0, "%.1f px off" % risen)
+    # Hanging means the body is BELOW the hand. Screen y grows downwards.
+    report("the hip ended up below the ankle", hip.wpos[1] > foot.wpos[1] + 20.0,
+           "ankle %.0f hip %.0f" % (foot.wpos[1], hip.wpos[1]))
+    report("and the head below the hip", head.wpos[1] > hip.wpos[1] + 20.0,
+           "hip %.0f head %.0f" % (hip.wpos[1], head.wpos[1]))
+    report("the figure is upside down, not folded up",
+           abs(head.wpos[1] - foot.wpos[1]) > 500.0,
+           "ankle-to-head %.0f px" % abs(head.wpos[1] - foot.wpos[1]))
+
+    print("\nthe other leg hangs too, rather than staying folded")
+    other = bn["foot_R"]
+    report("the free foot is below the hip as well", other.wpos[1] > hip.wpos[1] - 40.0,
+           "hip %.0f other foot %.0f" % (hip.wpos[1], other.wpos[1]))
+
+    print("\nlifting by a hand still works")
+    pet, bn = fresh()
+    hand, hip, head = bn["hand_L"], bn["hip"], bn["head"]
+    target = (hand.wpos[0] + 500.0, hand.wpos[1] - 500.0)
+    hold(pet, bn, "hand_L", target, seconds=6.0)
+    off = math.hypot(hand.wpos[0] - target[0], hand.wpos[1] - target[1])
+    report("the hand reaches the finger", off < 40.0, "%.1f px off" % off)
+    # The body should follow the hand, not be left behind: a limp arm cannot hold a body
+    # out sideways, so the hip ends up roughly under the hand.
+    report("the body came with it", abs(hip.wpos[0] - target[0]) < 420.0,
+           "hip x %.0f target x %.0f" % (hip.wpos[0], target[0]))
+
+    print("\ntwo fingers can pull a figure apart")
+    pet, bn = fresh()
+    left, right = bn["foot_L"], bn["foot_R"]
+    x0 = (left.wpos[0] + right.wpos[0]) / 2.0
+    y0 = min(left.wpos[1], right.wpos[1])
+    tl = (x0 - 420.0, y0 - 120.0)
+    tr = (x0 + 420.0, y0 - 120.0)
+    for _ in range(int(6.0 * 60)):
+        pet.step(1.0 / 60.0, [("foot_L", tl), ("foot_R", tr)])
+    dl = math.hypot(left.wpos[0] - tl[0], left.wpos[1] - tl[1])
+    dr = math.hypot(right.wpos[0] - tr[0], right.wpos[1] - tr[1])
+    report("both feet reached their fingers", dl < 60.0 and dr < 60.0,
+           "left %.0f right %.0f px off" % (dl, dr))
+    spread = abs(left.wpos[0] - right.wpos[0])
+    report("the legs are actually apart", spread > 500.0, "%.0f px" % spread)
+    report("the figure did not simply fly sideways",
+           abs((left.wpos[0] + right.wpos[0]) / 2.0 - x0) < 500.0)
+
+    print("\none finger pulled one way, another the other way")
+    pet, bn = fresh()
+    lh, rh = bn["hand_L"], bn["hand_R"]
+    cx = (lh.wpos[0] + rh.wpos[0]) / 2.0
+    y = min(lh.wpos[1], rh.wpos[1]) - 200.0
+    for _ in range(int(4.0 * 60)):
+        pet.step(1.0 / 60.0, [("hand_L", (cx - 430.0, y)), ("hand_R", (cx + 430.0, y))])
+    report("both hands reached their fingers",
+           math.hypot(lh.wpos[0] - (cx - 430.0), lh.wpos[1] - y) < 90.0 and
+           math.hypot(rh.wpos[0] - (cx + 430.0), rh.wpos[1] - y) < 90.0,
+           "L %.0f R %.0f" % (math.hypot(lh.wpos[0] - (cx - 430.0), lh.wpos[1] - y),
+                              math.hypot(rh.wpos[0] - (cx + 430.0), rh.wpos[1] - y)))
+
+    print("\nletting go throws with the finger's speed")
+    pet, bn = fresh()
+    hand = bn["hand_L"]
+    x = hand.wpos[0]
+    y = hand.wpos[1]
+    for i in range(40):
+        pet.step(1.0 / 60.0, [("hand_L", (x + i * 14.0, y - i * 4.0))])
+    speed = math.hypot(pet.pin_vel[0], pet.pin_vel[1])
+    report("the recorded finger speed is the real one", 700.0 < speed < 1100.0,
+           "%.0f px/s" % speed)
+    pet.release()
+    report("and letting go hands it to the body",
+           math.hypot(pet.root_vel[0], pet.root_vel[1]) > 500.0,
+           "%.0f px/s" % math.hypot(pet.root_vel[0], pet.root_vel[1]))
+
+    print("\nnothing exploded")
+    pet, bn = fresh()
+    for i in range(600):
+        pet.step(1.0 / 60.0, [("foot_L", (600.0, 400.0)), ("hand_R", (900.0, 500.0))])
+        for b in bn.values():
+            if not (math.isfinite(b.wpos[0]) and math.isfinite(b.wpos[1])):
+                report("positions stay finite", False, "at step %d" % i)
+                break
+        else:
+            continue
+        break
+    else:
+        report("positions stay finite", True)
+
+    print("")
+    if FAILURES:
+        print("%d FAILED" % len(FAILURES))
+        for f in FAILURES:
+            print("  " + f)
+        return 1
+    print("all drag tests passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

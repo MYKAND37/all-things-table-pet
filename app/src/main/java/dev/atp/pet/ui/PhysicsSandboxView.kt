@@ -84,9 +84,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var defaultScale = 1f
     private var framed = false
 
-    private var heldBone: String? = null
+    /**
+     * One finger per pointer.
+     *
+     * Pulling two limbs at once is the whole point of a map here: a real hand has five
+     * fingers and a ragdoll has two legs, and "hold both thighs and pull" is a thing
+     * anybody tries within a minute of picking the pet up.
+     */
+    private val heldBones = HashMap<Int, String>()
+    private val heldTargets = HashMap<Int, Vec2>()
     private var heldProp: Prop? = null
-    private var pinTarget = Vec2.ZERO
+    /** Which finger is carrying the prop, so it follows that one and not the first. */
+    private var propPointer = -1
 
     /** A press on a bone that has not turned into a drag yet: a tap is a click. */
     private var tapBone: String? = null
@@ -186,7 +195,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         prevRootY = built.root.worldPosition.y
         wasGrounded = true
 
-        heldBone = null
+        heldBones.clear()
+        heldTargets.clear()
         heldProp = null
         framed = false
         lastFrameNs = System.nanoTime()
@@ -245,7 +255,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
     fun resetWorld() {
         val rag = ragdoll ?: return
         rag.reset()
-        heldBone = null
+        heldBones.clear()
+        heldTargets.clear()
         heldProp = null
         world?.clear()
         particles.clear()
@@ -397,7 +408,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val actions = engine?.step(dt) ?: emptyList()
         if (actions.isNotEmpty()) perform(actions, null)
 
-        rag.step(dt, heldBone, pinTarget)
+        val pins = heldBones.entries.mapNotNull { entry ->
+            heldTargets[entry.key]?.let { Ragdoll.Pin(entry.value, it) }
+        }
+        rag.step(dt, pins)
 
         world?.let { w ->
             val hits = w.step(
@@ -577,7 +591,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val carrying = heldProp
         val state = when {
             carrying != null -> "拿着" + carrying.spec.name
-            heldBone != null -> "抓住"
+            heldBones.isNotEmpty() -> "抓住 " + heldBones.size + " 处"
             rag.grounded -> "着地"
             else -> "空中"
         }
@@ -660,29 +674,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     return true
                 }
                 lastTapAt = now
-                val p = toWorld(event.x, event.y)
-
-                // A prop under the finger wins: it is on top of the character in the
-                // drawing, so it has to be on top of it here too.
-                val prop = world?.grabAt(p)
-                if (prop != null) {
-                    heldProp = prop
-                    prop.beginDrag()
-                    lastFrameNs = System.nanoTime()
-                    postInvalidateOnAnimation()
-                    return true
-                }
-
-                val bone = rag.grabAt(p)
-                if (bone != null) {
-                    heldBone = bone.name
-                    pinTarget = p
-                    tapBone = bone.name
-                    tapX = event.x
-                    tapY = event.y
-                    tapAt = now
-                    fire(GameEvent(EventType.GRAB, part = bone.name))
-                } else {
+                if (!beginGrab(rag, event.getPointerId(0), event.x, event.y)) {
                     // Nothing under the finger: the finger is moving the window.
                     panning = true
                     lastPanX = event.x
@@ -694,18 +686,46 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_POINTER_DOWN -> {
-                // A second finger always means zoom, whatever the first one was doing.
-                if (heldBone != null) rag.release()
-                heldBone = null
-                heldProp?.endDrag()
-                heldProp = null
+                // A finger that lands ON the pet pulls it; one that lands on nothing is the
+                // start of a pinch. That is how "pull both thighs apart" and "zoom out" can
+                // both be two-fingered gestures without either getting in the other's way.
+                val index = event.actionIndex
+                beginGrab(rag, event.getPointerId(index), event.getX(index), event.getY(index))
                 panning = false
-                tapBone = null
-                pinchSpan = span(event)
+                pinchSpan = if (heldBones.isEmpty() && heldProp == null) span(event) else 0f
+                lastFrameNs = System.nanoTime()
+                postInvalidateOnAnimation()
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
+                var grabbing = false
+                for (i in 0 until event.pointerCount) {
+                    val id = event.getPointerId(i)
+                    if (heldBones.containsKey(id)) {
+                        heldTargets[id] = toWorld(event.getX(i), event.getY(i))
+                        grabbing = true
+                        if (tapBone != null &&
+                            hypot(event.getX(i) - tapX, event.getY(i) - tapY) > 12f * density
+                        ) {
+                            tapBone = null
+                        }
+                    }
+                }
+                val prop = heldProp
+                if (prop != null) {
+                    val index = pointerIndex(event, propPointer)
+                    if (index >= 0) {
+                        prop.dragTo(toWorld(event.getX(index), event.getY(index)), 1f / 60f)
+                        grabbing = true
+                    }
+                }
+                if (grabbing) {
+                    postInvalidateOnAnimation()
+                    return true
+                }
+
+                // Nothing is being held, so two fingers mean zoom.
                 if (event.pointerCount >= 2) {
                     val s = span(event)
                     if (pinchSpan > 1f && s > 1f) {
@@ -723,16 +743,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     return true
                 }
 
-                if (tapBone != null && hypot(event.x - tapX, event.y - tapY) > 12f * density) {
-                    tapBone = null
-                }
-
-                val prop = heldProp
-                if (prop != null) {
-                    prop.dragTo(toWorld(event.x, event.y), 1f / 60f)
-                } else if (heldBone != null) {
-                    pinTarget = toWorld(event.x, event.y)
-                } else if (panning) {
+                if (panning) {
                     panX -= (event.x - lastPanX) / viewScale
                     panY -= (event.y - lastPanY) / viewScale
                     lastPanX = event.x
@@ -743,28 +754,40 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 return true
             }
 
+            MotionEvent.ACTION_POINTER_UP -> {
+                endGrab(rag, event.getPointerId(event.actionIndex))
+                pinchSpan = 0f
+                postInvalidateOnAnimation()
+                return true
+            }
+
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                val prop = heldProp
-                if (prop != null) {
-                    releaseProp(prop)
-                } else if (heldBone != null) {
-                    val speed = rag.releaseSpeed()
-                    heldBone = null
-                    rag.release()
+                heldProp?.let { releaseProp(it) }
+                heldProp = null
+                propPointer = -1
+
+                val tapped = tapBone
+                val wasHolding = heldBones.isNotEmpty()
+                // Read the speed BEFORE letting go: release() hands it to the body and then
+                // forgets it.
+                val speed = if (wasHolding) rag.releaseSpeed() else 0f
+                for (id in heldBones.keys.toList()) endGrab(rag, id)
+                if (wasHolding) {
                     if (speed > THROW_SPEED) {
-                        fire(GameEvent(EventType.THROWN, part = tapBone ?: "", value = speed))
+                        fire(GameEvent(EventType.THROWN, part = tapped ?: "", value = speed))
                     } else {
-                        fire(GameEvent(EventType.RELEASE, part = tapBone ?: ""))
+                        fire(GameEvent(EventType.RELEASE, part = tapped ?: ""))
                     }
                 }
+
                 // A press that never became a drag is a click: that is how "被点一下" is
                 // told apart from "被抓起", which are very different things to react to.
-                val tapped = tapBone
-                if (tapped != null && System.currentTimeMillis() - tapAt < 300) {
+                if (tapped != null && System.currentTimeMillis() - tapAt < 300 &&
+                    hypot(event.x - tapX, event.y - tapY) < 12f * density
+                ) {
                     fire(GameEvent(EventType.CLICK, part = tapped))
                 }
                 tapBone = null
-                heldProp = null
                 panning = false
                 pinchSpan = 0f
                 lastFrameNs = System.nanoTime()
@@ -773,6 +796,44 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
         return super.onTouchEvent(event)
+    }
+
+    /**
+     * Take hold of whatever is under this finger. False when there is nothing there.
+     *
+     * A prop wins over a bone: it is drawn on top of the character, so it has to be on top
+     * of it here too, or the hammer you just threw becomes impossible to pick back up.
+     */
+    private fun beginGrab(rag: Ragdoll, id: Int, x: Float, y: Float): Boolean {
+        val p = toWorld(x, y)
+        val prop = world?.grabAt(p)
+        if (prop != null) {
+            heldProp = prop
+            propPointer = id
+            prop.beginDrag()
+            return true
+        }
+        val bone = rag.grabAt(p) ?: return false
+        heldBones[id] = bone.name
+        heldTargets[id] = p
+        tapBone = bone.name
+        tapX = x
+        tapY = y
+        tapAt = System.currentTimeMillis()
+        fire(GameEvent(EventType.GRAB, part = bone.name))
+        return true
+    }
+
+    /** Let go with one finger. The body is only released once the last one is gone. */
+    private fun endGrab(rag: Ragdoll, id: Int) {
+        if (heldBones.remove(id) == null) return
+        heldTargets.remove(id)
+        if (heldBones.isEmpty()) rag.release()
+    }
+
+    private fun pointerIndex(e: MotionEvent, id: Int): Int {
+        for (i in 0 until e.pointerCount) if (e.getPointerId(i) == id) return i
+        return -1
     }
 
     /**

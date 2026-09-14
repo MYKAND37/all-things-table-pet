@@ -69,6 +69,11 @@ class Ragdoll(
     private var pinLast: Vec2? = null
     private var pinVel = Vec2.ZERO
 
+    /** The finger positions from last step, and where the fingers are now. */
+    private var pinLastTarget: Vec2? = null
+    private var pinTargets: List<Vec2> = emptyList()
+    private var pinned = false
+
     init {
         for (b in bones) {
             children[b.name] = mutableListOf()
@@ -181,7 +186,9 @@ class Ragdoll(
 
     // -- the step -----------------------------------------------------------
 
-    fun step(dt: Float, pinBone: String? = null, pinTarget: Vec2? = null) {
+    fun step(dt: Float, pins: List<Pin> = emptyList()) {
+        pinned = pins.isNotEmpty()
+        pinTargets = pins.map { it.target }
         applyAngles()
 
         // Gravity torque about each bone's head, summed over everything hanging from it.
@@ -199,6 +206,30 @@ class Ragdoll(
                 inertia += m * (dx * dx + dy * dy)
             }
             alpha[b.name] = tau / max(inertia, 1e-6f)
+        }
+
+        if (pinTargets.size == 1) {
+            // A body held at ONE point is a pendulum about that point, and that is the
+            // only thing left with an opinion about which way up the figure is: its feet
+            // are off the ground and the pin does not care about orientation at all.
+            // Without this, gravity's torque about the PELVIS is the only term there is,
+            // and a figure hanging from an ankle settles with its weight below its pelvis
+            // — folded up beside the hand — instead of below the hand.
+            //
+            // Two pins are not a pendulum, they are a hanger: the body is held at both
+            // ends, there is nothing left to swing about, and the torque is not applied.
+            val pin = pinTargets[0]
+            var tau = 0f
+            var inertia = 0f
+            for (b in bones) {
+                val c = com(b)
+                val m = mass[b.name] ?: 1f
+                tau += m * gravity * (c.x - pin.x)
+                val dx = c.x - pin.x
+                val dy = c.y - pin.y
+                inertia += m * (dx * dx + dy * dy)
+            }
+            alpha[bones.first().name] = tau / max(inertia, 1e-6f)
         }
 
         val noise = ANGULAR_NOISE * (1f - stiffness)
@@ -240,7 +271,7 @@ class Ragdoll(
             }
 
             var next = theta + omega * (1f - ANGULAR_DAMP * dt) + a * dt * dt
-            next = next.coerceIn(b.minAngle, b.maxAngle)
+            next = next.coerceIn(lowLimit(b), highLimit(b))
 
             // Keep the angle we came FROM. Verlet reads the difference between the two
             // stored angles as the velocity, so writing anything else freezes the velocity
@@ -263,8 +294,8 @@ class Ragdoll(
         ground(dt)
         applyAngles()
 
-        if (pinBone != null && pinTarget != null) {
-            pin(dt, pinBone, pinTarget)
+        if (pins.isNotEmpty()) {
+            holdPins(dt, pins)
             applyAngles()
         }
     }
@@ -367,10 +398,59 @@ class Ragdoll(
      * exact and stable but leaves the arm hanging exactly where it was, so the body ends
      * up balanced above the finger, which a limp arm cannot do.
      */
-    private fun pin(dt: Float, boneName: String, target: Vec2) {
-        val bone = byName[boneName] ?: return
-        val chain = chainToRoot(bone)
+    private fun holdPins(dt: Float, pins: List<Pin>) {
+        // Gauss-Seidel over the fingers: one finger does not care, two fingers pulling in
+        // opposite directions need a couple of rounds before they agree.
+        for (round in 0 until PIN_OUTER) {
+            for (pin in pins) {
+                byName[pin.bone]?.let { solvePin(it, pin.target) }
+            }
+        }
 
+        // Whatever the joints could not reach, the root carries — split between the pins,
+        // so two hands pulling opposite ways do not fight over one translation.
+        var dx = 0f
+        var dy = 0f
+        for (pin in pins) {
+            val p = byName[pin.bone]?.worldPosition ?: continue
+            dx += pin.target.x - p.x
+            dy += pin.target.y - p.y
+        }
+        dx /= pins.size
+        dy /= pins.size
+        rootPos = Vec2(rootPos.x + dx, rootPos.y + dy)
+
+        // The finger's own speed, not the leftover: the leftover is nearly zero once the
+        // chain reaches, so measuring a throw by it meant a flick threw nothing.
+        val target = pins[0].target
+        val last = pinLastTarget
+        if (last != null && dt > 1e-6f) {
+            val a = 0.35f
+            pinVel = Vec2(
+                pinVel.x + ((target.x - last.x) / dt - pinVel.x) * a,
+                pinVel.y + ((target.y - last.y) / dt - pinVel.y) * a,
+            )
+        }
+        pinLastTarget = target
+        pinLast = byName[pins[0].bone]?.worldPosition
+    }
+
+    /**
+     * Pull one point of the figure to the finger.
+     *
+     * Every joint in the chain turns to line its tip up with the finger — cyclic
+     * coordinate descent, which is the solve that STRAIGHTENS a chain held by its end,
+     * the way a limp limb lines up with the pull when you dangle it.
+     *
+     * The root is in the chain because two fingers pulling a pair of legs apart need it:
+     * the hip's own limits will not splay a leg far enough on their own. It is held on a
+     * short leash, because the root's rotation is the figure's whole orientation and
+     * gravity has the stronger claim on that. Take the leash off entirely and the pin and
+     * gravity undo each other every frame; a figure held by the ankle then sticks at
+     * whatever angle they happen to cancel at, with its torso out sideways.
+     */
+    private fun solvePin(bone: Bone, target: Vec2) {
+        val chain = chainToRoot(bone)
         for (iteration in 0 until PIN_IK_ITERATIONS) {
             val end = bone.worldPosition
             if (hypot(target.x - end.x, target.y - end.y) < 0.5f) break
@@ -381,8 +461,9 @@ class Ragdoll(
                 if (hypot(e.x - px, e.y - py) < 1e-6f) continue
                 val current = atan2(e.y - py, e.x - px)
                 val wanted = atan2(target.y - py, target.x - px)
-                val turn = normalizeAngle(wanted - current)
-                val turned = (b.rotation + turn).coerceIn(b.minAngle, b.maxAngle)
+                var turn = normalizeAngle(wanted - current)
+                if (b.parent == null) turn *= ROOT_PIN_GAIN
+                val turned = (b.rotation + turn).coerceIn(lowLimit(b), highLimit(b))
                 if (turned != b.rotation) {
                     b.rotation = turned
                     angle[b.name] = turned
@@ -390,21 +471,26 @@ class Ragdoll(
                 }
             }
         }
-
-        val p = bone.worldPosition
-        val dx = target.x - p.x
-        val dy = target.y - p.y
-        rootPos = Vec2(rootPos.x + dx, rootPos.y + dy)
-
-        pinLast?.let {
-            val a = 0.25f
-            pinVel = Vec2(
-                pinVel.x + (dx / dt - pinVel.x) * a,
-                pinVel.y + (dy / dt - pinVel.y) * a,
-            )
-        }
-        pinLast = p
     }
+
+    /**
+     * What this joint is allowed to do, which is not always what the file says.
+     *
+     * The root bone's rotation IS the figure's global orientation. Its authored limits are
+     * a stand-in for the one thing that actually has an opinion about that — the ground —
+     * so they apply whenever the figure is on its own. While a finger is holding it, the
+     * authored limit is what stopped a figure picked up by the ankle from hanging: the
+     * solver could rotate every joint EXCEPT the one that would have turned the body over,
+     * so it folded the legs instead and left the torso sticking out sideways.
+     *
+     * Deliberately not "while airborne": a figure in free fall keeps its authored limits
+     * so that it lands the way it always did. Losing that made every landing sprawl.
+     */
+    private fun lowLimit(bone: Bone): Float =
+        if (bone.parent == null && pinned) -FULL_TURN else bone.minAngle
+
+    private fun highLimit(bone: Bone): Float =
+        if (bone.parent == null && pinned) FULL_TURN else bone.maxAngle
 
     private fun chainToRoot(bone: Bone): List<Bone> {
         val out = mutableListOf<Bone>()
@@ -466,6 +552,9 @@ class Ragdoll(
         pinVel = Vec2.ZERO
     }
 
+    /** One finger: the bone it is holding, and where the finger is. */
+    class Pin(val bone: String, val target: Vec2)
+
     /** How fast the finger was moving when it let go. That is what a throw is. */
     fun releaseSpeed(): Float = pinVel.length()
 
@@ -508,6 +597,22 @@ class Ragdoll(
 
         /** How hard the grab pulls the chain before the root starts sliding. */
         const val PIN_IK_ITERATIONS = 6
+
+        /** Gauss-Seidel rounds over the fingers; two pins need a couple before they agree. */
+        const val PIN_OUTER = 3
+
+        /**
+         * How much of its turn the ROOT takes, against every other joint in the chain.
+         *
+         * 0.15 is where both behaviours survive: below about 0.1 a pair of legs cannot be
+         * splayed against the hip's own limits, above about 0.3 the pin starts winning
+         * against gravity and a figure held by the ankle stops hanging. Mirrors
+         * ROOT_PIN_GAIN in tools/ragdoll.py, where tools/drag_check.py pins both ends.
+         */
+        const val ROOT_PIN_GAIN = 0.15f
+
+        /** Half a turn, the widest a joint can be when the ground is not the boss of it. */
+        private const val FULL_TURN = 3.1415927f
 
         /** Floor resolution passes per step, and the largest turn one pass may apply. */
         const val GROUND_PASSES = 4
