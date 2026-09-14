@@ -28,6 +28,7 @@ import dev.atp.pet.engine.logic.ConditionSpec
 import dev.atp.pet.engine.logic.Joins
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleSpec
+import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.skeleton.BoneSpec

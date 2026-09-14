@@ -16,6 +16,7 @@ import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleEngine
+import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
 import dev.atp.pet.engine.prop.Prop
