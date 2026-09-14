@@ -106,5 +106,58 @@
     <string name="action_rename">改名</string>
     <string name="action_delete">删除</string>
     <string name="action_renamed">已改名</string>
+    <!-- 道具管理 -->
+    <string name="props_subtitle">道具是所有桌宠共用的东西。给它一张图，剩下交给规则。</string>
+    <string name="prop_new">＋ 新建道具</string>
+    <string name="prop_name">道具名字</string>
+    <string name="prop_kind">类型</string>
+    <string name="prop_radius">碰撞半径</string>
+    <string name="prop_force">力度</string>
+    <string name="prop_change_art">换图</string>
+    <string name="prop_delete_confirm">删掉「%1$s」？图和定义都会删。</string>
+    <string name="prop_none">还没有道具。做一个，然后在测试场里点「道具」放一个出来。</string>
+    <string name="prop_import_failed">这张图读不出来</string>
+    <string name="prop_saved">已保存</string>
+    <string name="sandbox_props">道具</string>
+    <string name="sandbox_props_empty">还没有道具。去「道具管理」做一个。</string>
+
+    <!-- 逻辑管理 -->
+    <string name="logic_stats">数值</string>
+    <string name="logic_stats_hint">角色身上的数字。H 归零会死、P 太高会休克——不过那是你自己写规则说了算。</string>
+    <string name="logic_rules">规则</string>
+    <string name="logic_rules_hint">点任何一个方块改它。「当」是发生了什么事，「如果」是还要满足什么，「就」是做什么。</string>
+    <string name="logic_add_stat">＋ 加数值</string>
+    <string name="logic_add_rule">＋ 添加规则</string>
+    <string name="logic_add_if">＋如果</string>
+    <string name="logic_add_then">＋就</string>
+    <string name="logic_always">如果：总是</string>
+    <string name="logic_when">当：</string>
+    <string name="logic_pick_part_hint">留「任何部位」就是全身都算。写个前缀（比如 hand）会同时匹配 hand_L 和 hand_R。</string>
+    <string name="logic_delete_rule">删规则</string>
+    <string name="logic_cooldown">冷却 %1$ss</string>
+    <string name="logic_once">只发生一次</string>
+    <string name="logic_stat_id">代号（英文，规则里用）</string>
+    <string name="logic_stat_name">显示名</string>
+    <string name="logic_stat_value">初值</string>
+    <string name="logic_stat_max">上限</string>
+    <string name="logic_pick_event">发生什么事</string>
+    <string name="logic_pick_part">对哪个部位</string>
+    <string name="logic_pick_any_part">任何部位</string>
+    <string name="logic_pick_stat">哪个数值</string>
+    <string name="logic_pick_op">怎么比</string>
+    <string name="logic_pick_value">比多少</string>
+    <string name="logic_pick_action">做什么</string>
+    <string name="logic_pick_text">说什么</string>
+    <string name="logic_pick_bone">哪个部位</string>
+    <string name="logic_pick_pose">哪个动作</string>
+    <string name="logic_pick_prop">哪个道具</string>
+    <string name="logic_pick_burst">什么粒子</string>
+    <string name="logic_no_poses">还没有动作。去「桌宠管理 → 摆姿势 → 存为动作」存一个。</string>
+    <string name="logic_saved">改一下就立即写入文件。回到测试场，角色就按新规则跑。</string>
+    <string name="logic_reset">恢复默认</string>
+    <string name="logic_reset_confirm">丢掉你写的全部规则和数值，恢复成默认那套？</string>
+    <string name="logic_none">还没有规则。</string>
+    <string name="logic_cooldown_title">冷却时间</string>
+
     <string name="action_empty">还没有动作。\n去「桌宠管理 → 打开一只桌宠 → 摆姿势 → 存为动作」存一个，这里就会出现。</string>
 </resources>

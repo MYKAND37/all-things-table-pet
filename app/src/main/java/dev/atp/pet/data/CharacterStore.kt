@@ -1,6 +1,9 @@
 package dev.atp.pet.data
 
 import android.content.Context
+import dev.atp.pet.engine.logic.LogicSpec
+import dev.atp.pet.engine.prop.PropSpec
+import dev.atp.pet.engine.prop.PropSpecs
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
@@ -198,10 +201,18 @@ class CharacterStore(private val context: Context) {
      * seeding pass — which refreshes the bundled spec whenever the app ships a newer one —
      * leaves these edits alone instead of overwriting them on the next launch.
      */
-    fun saveRig(id: String, bones: List<BoneSpec>, backToFront: List<String>): Boolean {
+    fun saveRig(
+        id: String,
+        bones: List<BoneSpec>,
+        backToFront: List<String>,
+        renames: Map<String, String> = emptyMap(),
+    ): Boolean {
         if (bones.isEmpty()) return false
         if (RigEdit.problem(bones) != null) return false
         val folder = folder(id) ?: return false
+        // A bone missing from the list has been deleted — unless it was renamed, in which
+        // case the name it used to have is the one that is missing.
+        val wasRenamed = renames.values.toSet()
         var orphaned: List<String> = emptyList()
         val ok = try {
             val root = JSONObject(folder.specText())
@@ -212,13 +223,18 @@ class CharacterStore(private val context: Context) {
             for (i in 0 until old.length()) {
                 val b = old.getJSONObject(i)
                 val name = b.getString("name")
-                if (name in alive) kept[name] = b else gone.add(name)
+                val now = renames[name] ?: name
+                // A renamed bone keeps everything the file said about it: only the name
+                // changed, and rebuilding the entry would throw away the limits and the
+                // collider somebody chose for it.
+                if (now in alive) kept[now] = b else gone.add(name)
             }
-            orphaned = gone
+            orphaned = gone.filter { it !in renames.keys }
 
             val arr = JSONArray()
             for (b in RigEdit.order(bones)) {
                 val o = kept[b.name] ?: JSONObject()
+                if (b.name in wasRenamed) o.remove("name")
                 o.put("name", b.name)
                 if (b.parentName == null) o.put("parent", JSONObject.NULL) else o.put("parent", b.parentName)
                 o.put("head", JSONArray(listOf(b.head.x.toDouble(), b.head.y.toDouble())))
@@ -242,10 +258,24 @@ class CharacterStore(private val context: Context) {
 
             // A depth rule naming a bone that is gone can never fire again, and an IK chain
             // naming one throws the moment it is dragged.
+            // A renamed bone is still the same bone, so the rules and the drag chains that
+            // named it follow it. Without this, renaming a bone would quietly delete every
+            // rule that mentioned it.
             val rules = JSONArray()
             val oldRules = root.optJSONArray("layerSwaps")
             for (i in 0 until (oldRules?.length() ?: 0)) {
                 val r = oldRules!!.getJSONObject(i)
+                for (key in RULE_LISTS) {
+                    val a = r.optJSONArray(key) ?: continue
+                    for (j in 0 until a.length()) {
+                        val from = a.optString(j)
+                        if (renames.containsKey(from)) a.put(j, renames[from])
+                    }
+                }
+                r.optJSONObject("trigger")?.let { t ->
+                    follow(t, renames, "bone")
+                    follow(t, renames, "reference")
+                }
                 if (namesMissing(r, live)) continue
                 rules.put(r)
             }
@@ -255,6 +285,8 @@ class CharacterStore(private val context: Context) {
             val oldChains = root.optJSONArray("ikChains")
             for (i in 0 until (oldChains?.length() ?: 0)) {
                 val c = oldChains!!.getJSONObject(i)
+                follow(c, renames, "upper")
+                follow(c, renames, "lower")
                 if (c.optString("upper") !in live || c.optString("lower") !in live) continue
                 chains.put(c)
             }
@@ -267,7 +299,18 @@ class CharacterStore(private val context: Context) {
         }
         if (!ok) return false
         for (name in orphaned) folder.partFile(name).delete()
+        // The artwork follows the bone: the name is the contract, and a rename that left
+        // the file behind would look exactly like a bone whose drawing was never imported.
+        for ((from, to) in renames) {
+            val art = folder.partFile(from)
+            if (art.isFile) art.renameTo(folder.partFile(to))
+        }
         return true
+    }
+
+    private fun follow(node: JSONObject, renames: Map<String, String>, key: String) {
+        val from = node.optString(key, "")
+        if (from.isNotEmpty() && renames.containsKey(from)) node.put(key, renames[from])
     }
 
     /** True when a depth rule refers to a bone that is no longer in the rig. */
@@ -347,6 +390,92 @@ class CharacterStore(private val context: Context) {
         }
     }
 
+    // ── 逻辑（每个角色一份）────────────────────────────────────────────────
+
+    /**
+     * A character's rules and numbers.
+     *
+     * A character that has never been edited simply runs the built-in defaults, so the file
+     * is not written until the user changes something. That is deliberate: once it exists
+     * it is theirs, and nothing the app ships will ever overwrite a rule somebody wrote.
+     */
+    fun loadLogic(id: String): LogicSpec {
+        val file = folder(id)?.let { File(it.dir, LOGIC_FILE) } ?: return LogicSpec.parse(LogicSpec.DEFAULT)
+        if (!file.isFile) return LogicSpec.parse(LogicSpec.DEFAULT)
+        return try {
+            LogicSpec.parse(file.readText())
+        } catch (e: Exception) {
+            LogicSpec.parse(LogicSpec.DEFAULT)
+        }
+    }
+
+    fun saveLogic(id: String, spec: LogicSpec): Boolean {
+        val file = folder(id)?.let { File(it.dir, LOGIC_FILE) } ?: return false
+        return writeText(file, LogicSpec.toJson(spec))
+    }
+
+    /** Whether the user has ever edited this character's rules. */
+    fun hasLogic(id: String): Boolean = folder(id)?.let { File(it.dir, LOGIC_FILE).isFile } ?: false
+
+    fun forgetLogic(id: String): Boolean {
+        val file = folder(id)?.let { File(it.dir, LOGIC_FILE) } ?: return false
+        return file.delete()
+    }
+
+    // ── 道具（所有角色共用）────────────────────────────────────────────────
+
+    /**
+     * Props live beside the characters rather than inside one, because a hammer is not a
+     * property of the thing being hit. Art is props/<id>.png; the list is props.json.
+     */
+    val propsDir: File get() = File(context.filesDir, PROPS_DIR)
+
+    fun propArtFile(id: String): File = File(propsDir, id + ".png")
+
+    fun loadProps(): List<PropSpec> {
+        val file = File(propsDir, PROPS_FILE)
+        if (!file.isFile) return emptyList()
+        return try {
+            PropSpecs.parse(file.readText())
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    fun saveProps(specs: List<PropSpec>): Boolean = writeText(File(propsDir, PROPS_FILE), PropSpecs.toJson(specs))
+
+    fun savePropArt(id: String, bitmap: android.graphics.Bitmap): Boolean {
+        propsDir.mkdirs()
+        val target = propArtFile(id)
+        return try {
+            val temp = File(propsDir, id + ".png.part")
+            FileOutputStream(temp).use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+            }
+            if (target.exists()) target.delete()
+            temp.renameTo(target)
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    fun deleteProp(id: String): Boolean {
+        val ok = saveProps(loadProps().filter { it.id != id })
+        propArtFile(id).delete()
+        return ok
+    }
+
+    /** Write a text file through a neighbour, so a half-written file is never left behind. */
+    private fun writeText(file: File, text: String): Boolean = try {
+        file.parentFile?.mkdirs()
+        val temp = File(file.parentFile, file.name + ".tmp")
+        temp.writeText(text)
+        if (file.exists()) file.delete()
+        temp.renameTo(file)
+    } catch (e: Exception) {
+        false
+    }
+
     private fun writeSpec(folder: CharacterFolder, root: JSONObject): Boolean {
         val temp = File(folder.dir, "character.json.tmp")
         temp.writeText(root.toString(2))
@@ -401,5 +530,14 @@ class CharacterStore(private val context: Context) {
 
         /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
         const val POSES_FILE = "poses.json"
+
+        /** Rules and numbers are the user's too, for the same reason. */
+        const val LOGIC_FILE = "logic.json"
+
+        private val RULE_LISTS = listOf("parts", "behind")
+
+        /** Props are shared by every character, so they sit at the top level. */
+        const val PROPS_DIR = "props"
+        const val PROPS_FILE = "props.json"
     }
 }

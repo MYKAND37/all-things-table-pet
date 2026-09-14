@@ -130,6 +130,9 @@ class Ragdoll(
         return Vec2((h.x + t.x) / 2f, (h.y + t.y) / 2f)
     }
 
+    /** How thick a bone is. Anything outside that collides with the figure asks here. */
+    fun colliderRadius(bone: Bone): Float = colliderRadius[bone.name] ?: defaultRadius
+
     /** Lowest point of a bone's collider, in canvas space. */
     fun colliderLow(b: Bone): Float {
         val r = colliderRadius[b.name] ?: defaultRadius
@@ -426,6 +429,25 @@ class Ragdoll(
         stiffness = hold
     }
 
+    /**
+     * Something hit the figure.
+     *
+     * [strength] is a change in how fast the whole body ends up moving, in px/s — not a
+     * force. Nobody tuning a prop can know what the bone masses work out to, and one number
+     * that means "this shoves the body this fast" is the only kind anybody can turn.
+     *
+     * A hit that is off centre also spins the figure about the hit joint. Without that a
+     * hit from the left and a hit from the right look identical, and the character reads as
+     * being pushed by nothing in particular.
+     */
+    fun impulse(bone: Bone, dir: Vec2, strength: Float) {
+        rootVel = rootVel + dir * strength
+        val armX = bone.worldPosition.x - rootPos.x
+        val armY = bone.worldPosition.y - rootPos.y
+        val spin = (armX * dir.y - armY * dir.x) * strength * SPIN_GAIN
+        angle[bone.name] = ((angle[bone.name] ?: 0f) + spin).coerceIn(bone.minAngle, bone.maxAngle)
+    }
+
     /** Drop the pose: the joints go back to hanging limp. */
     fun clearPose() {
         for (b in bones) target[b.name] = 0f
@@ -444,6 +466,9 @@ class Ragdoll(
         pinVel = Vec2.ZERO
     }
 
+    /** How fast the finger was moving when it let go. That is what a throw is. */
+    fun releaseSpeed(): Float = pinVel.length()
+
     /** Let go: keep whatever speed the drag had. */
     fun release() {
         rootVel = pinVel
@@ -461,6 +486,12 @@ class Ragdoll(
     }
 
     companion object {
+        /**
+         * How much a hit off centre spins the figure. A hit 300px from the root at 500px/s
+         * is about a third of a radian, which reads as a shove rather than a spin.
+         */
+        const val SPIN_GAIN = 2.0e-6f
+
         /** Angular spring constant at stiffness = 1.0, in 1/s^2. */
         const val K_MAX = 400f
         const val SPRING_ZETA = 1f

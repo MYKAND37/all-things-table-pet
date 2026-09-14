@@ -204,6 +204,36 @@
                     android:padding="12dp" />
             </ScrollView>
 
+            <!-- ── 道具管理 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/propListScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/propList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 逻辑管理 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/logicScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/logicList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
             <!-- ── 桌宠管理：导入对齐 ───────────────── -->
             <FrameLayout
                 android:id="@+id/alignPane"

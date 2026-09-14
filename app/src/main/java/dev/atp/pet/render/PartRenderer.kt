@@ -28,6 +28,15 @@ class PartRenderer(
     drawOrder: List<String>,
     private val swaps: List<SwapRuleSpec> = emptyList(),
 ) {
+    /**
+     * Bones whose artwork is gone: a broken part, or one the rules removed.
+     *
+     * The skeleton still has the bone — it still collides, it is still part of the figure —
+     * only the drawing is missing. Deleting the bone instead would change the shape of the
+     * character the moment it got hurt.
+     */
+    var hidden: Set<String> = emptySet()
+
     private val restWorld = HashMap<String, Transform>()
     private val baseOrder = drawOrder.filter { library.parts.containsKey(it) }
     private val order = ArrayList<String>(baseOrder.size)
@@ -110,6 +119,7 @@ class PartRenderer(
 
     fun draw(canvas: Canvas) {
         for (name in currentOrder()) {
+            if (name in hidden) continue
             val part = library.parts[name] ?: continue
             val bone = skeleton.find(name) ?: continue
             val rest = restWorld[name] ?: continue

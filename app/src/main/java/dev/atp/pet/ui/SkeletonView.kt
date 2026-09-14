@@ -110,6 +110,7 @@ class SkeletonView @JvmOverloads constructor(
 
     fun load(folder: CharacterFolder) {
         this.folder = folder
+        renamed.clear()
         cancelAddBone()
         library?.release()
         // Must be dropped as well as released: rebuild() reuses the stored library when
@@ -176,6 +177,8 @@ class SkeletonView @JvmOverloads constructor(
 
     /** Fired whenever the rig's shape changes, so the host can refresh what it shows. */
     var onRigChanged: (() -> Unit)? = null
+
+    private val renamed = HashMap<String, String>()
 
     val addingBone: Boolean get() = pendingName != null
 
@@ -264,6 +267,32 @@ class SkeletonView @JvmOverloads constructor(
         onRigChanged?.invoke()
         return true
     }
+
+    /**
+     * Give a bone a different name.
+     *
+     * The name is also the artwork's file name and the name every rule and drag chain
+     * mentions, so a rename is not a string edit: it is remembered here and carried out on
+     * disk when the rig is saved, art file and references included.
+     */
+    fun renameBone(name: String, next: String): Boolean {
+        val parsed = spec ?: return false
+        if (next.isEmpty()) return false
+        if (parsed.bones.any { it.name == next }) {
+            onInfo?.invoke("已经有一根骨骼叫 " + next)
+            return false
+        }
+        val bone = parsed.bones.firstOrNull { it.name == name } ?: return false
+        renamed[name] = next
+        bone.name = next
+        rebuild(parsed)
+        onInfo?.invoke(name + " → " + next + " · 保存骨骼后连图片一起改名")
+        onRigChanged?.invoke()
+        return true
+    }
+
+    /** Bones renamed since the rig was loaded, old name to new. */
+    fun renames(): Map<String, String> = HashMap(renamed)
 
     /** Keep only the root, which is where a rig drawn from nothing starts. */
     fun keepOnlyRoot(): Boolean {

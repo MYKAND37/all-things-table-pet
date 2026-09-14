@@ -41,18 +41,41 @@ class PartLibrary(val parts: Map<String, Part>) {
                 val file = File(partsDir, name + ".png")
                 if (!file.isFile) continue
                 val source = open(file) ?: continue
-                val bounds = alphaBounds(source)
-                if (bounds == null) {
-                    source.recycle()
-                    continue
-                }
-                val (x, y, w, h) = bounds
-                val cropped = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-                Canvas(cropped).drawBitmap(source, -x.toFloat(), -y.toFloat(), null)
-                source.recycle()
-                out[name] = Part(cropped, x.toFloat(), y.toFloat())
+                val part = crop(source)
+                if (part != null) out[name] = part
             }
             return PartLibrary(out)
+        }
+
+        /**
+         * Every PNG in a directory, keyed by file name.
+         *
+         * Props are not attached to bones, so there is no naming contract to satisfy: the
+         * file IS the thing, and where its pixels are is where it is drawn.
+         */
+        fun loadFree(dir: File): PartLibrary {
+            val out = LinkedHashMap<String, Part>()
+            val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".png") } ?: return PartLibrary(out)
+            for (file in files.sortedBy { it.name }) {
+                val source = open(file) ?: continue
+                val part = crop(source)
+                if (part != null) out[file.name.substringBeforeLast(".png")] = part
+            }
+            return PartLibrary(out)
+        }
+
+        /** Crop a decoded part to its ink and remember where that was. Recycles [source]. */
+        private fun crop(source: Bitmap): Part? {
+            val bounds = alphaBounds(source)
+            if (bounds == null) {
+                source.recycle()
+                return null
+            }
+            val (x, y, w, h) = bounds
+            val cropped = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+            Canvas(cropped).drawBitmap(source, -x.toFloat(), -y.toFloat(), null)
+            source.recycle()
+            return Part(cropped, x.toFloat(), y.toFloat())
         }
 
         private fun open(file: File): Bitmap? {
