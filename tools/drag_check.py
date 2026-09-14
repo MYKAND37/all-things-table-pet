@@ -34,6 +34,18 @@ def fresh(settle=180):
     return pet, by_name
 
 
+#: Where a hand holds something it is dangling. High enough up the 2048-tall arena that
+#: a figure hanging under it has room to actually hang, which is most of the way to the top.
+HANG_Y = 380.0
+
+
+def grip(bone, fraction):
+    """The point a finger lands on when it takes hold part way along a bone."""
+    off = bone.length * fraction
+    a = bone.wrot
+    return (bone.wpos[0] + math.cos(a) * off, bone.wpos[1] + math.sin(a) * off), off
+
+
 def hold(pet, by_name, name, target, seconds=4.0):
     """Hold one point at the target and let the body do whatever physics says."""
     for _ in range(int(seconds * 60)):
@@ -50,7 +62,11 @@ def main():
     print("\nlifting a limp figure by the ankle makes it hang")
     pet, bn = fresh()
     hip, head, foot = bn["hip"], bn["head"], bn["foot_L"]
-    target = (foot.wpos[0], foot.wpos[1] - 700.0)
+    # Lifted most of the way up the arena, not by a fixed amount. A figure 1349px tall
+    # hanging from an ankle needs about that much room BELOW the grip, and the floor is at
+    # 2048: grab the ankle 700px up and the body has nowhere to go, so it heaps on the
+    # floor and the test measures the floor rather than the hanging.
+    target = (foot.wpos[0], HANG_Y)
     hold(pet, bn, "foot_L", target)
     risen = foot.wpos[1] - target[1]
     report("the ankle went where the finger is", abs(risen) < 12.0, "%.1f px off" % risen)
@@ -67,6 +83,26 @@ def main():
     other = bn["foot_R"]
     report("the free foot is below the hip as well", other.wpos[1] > hip.wpos[1] - 40.0,
            "hip %.0f other foot %.0f" % (hip.wpos[1], other.wpos[1]))
+
+    print("\na finger takes hold of a POINT, not a joint")
+    # The bug this exists for: a pin used to hold the bone's head, and the head of the
+    # thigh IS the hip. Grabbing a leg anywhere along it therefore pinned the top of the
+    # body, lifted the figure upright by the waist, and no amount of gravity could turn it
+    # over -- there was nothing above the grip left to hang.
+    for name, fraction in (("thigh_L", 0.0), ("thigh_L", 0.5), ("thigh_L", 1.0),
+                           ("shin_L", 0.5), ("foot_L", 0.0)):
+        pet, bn = fresh()
+        bone = bn[name]
+        start, off = grip(bone, fraction)
+        target = (start[0], HANG_Y)
+        for _ in range(int(8.0 * 60)):
+            pet.step(1.0 / 60.0, [(name, target, off)])
+        got, _ = grip(bone, fraction)
+        err = math.hypot(got[0] - target[0], got[1] - target[1])
+        hip, head = bn["hip"], bn["head"]
+        hangs = head.wpos[1] > hip.wpos[1] + 100.0
+        report("%s at %.0f%% hangs" % (name, fraction * 100), hangs and err < 20.0,
+               "weight %.0f vs hand %.0f, reached to %.0f px" % (head.wpos[1], got[1], err))
 
     print("\nlifting by a hand still works")
     pet, bn = fresh()

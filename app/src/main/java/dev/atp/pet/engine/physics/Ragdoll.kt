@@ -8,7 +8,9 @@ import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import kotlin.math.abs
 import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
 import kotlin.math.max
 import kotlin.math.sqrt
 import kotlin.random.Random
@@ -158,21 +160,84 @@ class Ragdoll(
         return low - high
     }
 
-    /** The bone whose collider is nearest to [p]; what a finger grabbing the body hits. */
-    fun grabAt(p: Vec2): Bone? {
+    /** Where a finger took hold: a bone, and how far along it from the joint. */
+    class Grip(val bone: Bone, val offset: Float)
+
+    /**
+     * The bone whose collider is nearest to [p], and how far along it the finger landed.
+     *
+     * The offset is not a refinement, it is the whole point. Holding the bone's HEAD means
+     * the head of the thigh IS THE HIP, so grabbing a leg anywhere along its length pinned
+     * the top of the body and lifted the figure upright by the waist -- there was nothing
+     * above the grip left to hang. Taking hold of the point under the finger is the
+     * difference between lifting a ragdoll by the leg and picking it up by the pelvis.
+     */
+    fun grabAt(p: Vec2): Grip? {
         var best: Bone? = null
+        var bestOffset = 0f
         var bestDist = Float.MAX_VALUE
         for (b in bones) {
             val r = colliderRadius[b.name] ?: defaultRadius
-            val d = distanceToSegment(p, b.worldPosition, b.tipPosition()) - r
+            val head = b.worldPosition
+            val tip = b.tipPosition()
+            val t = projection(p, head, tip)
+            val near = Vec2(head.x + (tip.x - head.x) * t, head.y + (tip.y - head.y) * t)
+            val d = hypot(p.x - near.x, p.y - near.y) - r
             if (d < bestDist) {
                 bestDist = d
                 best = b
+                bestOffset = t * b.length
             }
         }
         // Generous: a finger is much fatter than a bone, and missing the grab entirely is
         // the worst possible outcome.
-        return if (bestDist < spec.headHeight * 0.9f) best else null
+        val bone = best ?: return null
+        return if (bestDist < spec.headHeight * 0.9f) Grip(bone, bestOffset) else null
+    }
+
+    /** Where along a segment [p] projects, clamped to the segment. */
+    private fun projection(p: Vec2, a: Vec2, b: Vec2): Float {
+        val abx = b.x - a.x
+        val aby = b.y - a.y
+        val lenSq = abx * abx + aby * aby
+        if (lenSq < 1e-6f) return 0f
+        return (((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
+    }
+
+    /**
+     * The point on a bone a finger is actually holding.
+     *
+     * The bone's own rotation carries it, so the grip stays where it was taken as the limb
+     * turns under it -- which is what holding a limb means.
+     */
+    private fun gripPoint(bone: Bone, offset: Float): Vec2 {
+        if (offset == 0f) return bone.worldPosition
+        val a = bone.worldRotation
+        return Vec2(
+            bone.worldPosition.x + cos(a) * offset,
+            bone.worldPosition.y + sin(a) * offset,
+        )
+    }
+
+    /**
+     * The figure's centre of gravity, in canvas coordinates.
+     *
+     * The one number that decides which way up a body hangs, so it is also the one worth
+     * being able to see: the test bench draws it, and the pin's whole job is to end up with
+     * this point directly below the finger.
+     */
+    fun centreOfMass(): Vec2 {
+        var x = 0f
+        var y = 0f
+        var total = 0f
+        for (b in bones) {
+            val c = com(b)
+            val m = mass[b.name] ?: 1f
+            x += c.x * m
+            y += c.y * m
+            total += m
+        }
+        return if (total <= 0f) rootPos else Vec2(x / total, y / total)
     }
 
     private fun distanceToSegment(p: Vec2, a: Vec2, b: Vec2): Float {
@@ -242,7 +307,11 @@ class Ragdoll(
         // A limp figure that has come to rest gives way instead of standing there. It
         // stops giving once it is already down, or it would never actually come to rest.
         val slow = abs(rootVel.x) < 30f && abs(rootVel.y) < 30f
-        val giving = stiffness < 0.25f && grounded && slow &&
+        // Deliberately not while a finger is holding the figure: "a limp body that has come
+        // to rest standing up should fall over" is a statement about a body standing on its
+        // own. One that is being carried is not standing, and this feedback is strong
+        // enough that firing it mid-hang throws the figure out of the pose entirely.
+        val giving = stiffness < 0.25f && grounded && slow && !pinned &&
             spanOfFigure() > 0.55f * standingSpan
         val give = if (giving) COLLAPSE_GAIN * (1f - stiffness) else 0f
 
@@ -256,12 +325,17 @@ class Ragdoll(
             omega = omega.coerceIn(-cap, cap)
 
             var a = alpha[name] ?: 0f
-            if (giving) {
+            if (giving && b.parent != null) {
                 // Positive feedback on the joint's own deviation. A joint with no static
                 // friction cannot hold an angle, so whatever it has already given, it
                 // gives more of. Without this a limp figure that lands on its feet is a
                 // rigid statue balanced on a support polygon: every joint has found its
                 // zero-torque angle and nothing ever disturbs it.
+                //
+                // Never on the root. Its angle is not a joint's deviation, it is the
+                // figure's orientation in the world, and a term proportional to THAT is a
+                // torque of several rad/s^2 in whichever direction the body happens to be
+                // lying — a kick, not a give.
                 a += theta * give
             }
             val k = stiffness * K_MAX
@@ -403,7 +477,7 @@ class Ragdoll(
         // opposite directions need a couple of rounds before they agree.
         for (round in 0 until PIN_OUTER) {
             for (pin in pins) {
-                byName[pin.bone]?.let { solvePin(it, pin.target) }
+                byName[pin.bone]?.let { solvePin(it, pin.target, pin.offset) }
             }
         }
 
@@ -412,7 +486,8 @@ class Ragdoll(
         var dx = 0f
         var dy = 0f
         for (pin in pins) {
-            val p = byName[pin.bone]?.worldPosition ?: continue
+            val bone = byName[pin.bone] ?: continue
+            val p = gripPoint(bone, pin.offset)
             dx += pin.target.x - p.x
             dy += pin.target.y - p.y
         }
@@ -432,7 +507,7 @@ class Ragdoll(
             )
         }
         pinLastTarget = target
-        pinLast = byName[pins[0].bone]?.worldPosition
+        pinLast = byName[pins[0].bone]?.let { gripPoint(it, pins[0].offset) }
     }
 
     /**
@@ -442,6 +517,9 @@ class Ragdoll(
      * coordinate descent, which is the solve that STRAIGHTENS a chain held by its end,
      * the way a limp limb lines up with the pull when you dangle it.
      *
+     * The point that has to reach the finger is the point the finger TOOK HOLD OF, not
+     * the bone's joint: see [grabAt].
+     *
      * The root is in the chain because two fingers pulling a pair of legs apart need it:
      * the hip's own limits will not splay a leg far enough on their own. It is held on a
      * short leash, because the root's rotation is the figure's whole orientation and
@@ -449,13 +527,13 @@ class Ragdoll(
      * gravity undo each other every frame; a figure held by the ankle then sticks at
      * whatever angle they happen to cancel at, with its torso out sideways.
      */
-    private fun solvePin(bone: Bone, target: Vec2) {
+    private fun solvePin(bone: Bone, target: Vec2, offset: Float) {
         val chain = chainToRoot(bone)
         for (iteration in 0 until PIN_IK_ITERATIONS) {
-            val end = bone.worldPosition
+            val end = gripPoint(bone, offset)
             if (hypot(target.x - end.x, target.y - end.y) < 0.5f) break
             for (b in chain) {
-                val e = bone.worldPosition
+                val e = gripPoint(bone, offset)
                 val px = b.worldPosition.x
                 val py = b.worldPosition.y
                 if (hypot(e.x - px, e.y - py) < 1e-6f) continue
@@ -552,8 +630,8 @@ class Ragdoll(
         pinVel = Vec2.ZERO
     }
 
-    /** One finger: the bone it is holding, and where the finger is. */
-    class Pin(val bone: String, val target: Vec2)
+    /** One finger: the bone it is holding, where on that bone, and where the finger is. */
+    class Pin(val bone: String, val target: Vec2, val offset: Float = 0f)
 
     /** How fast the finger was moving when it let go. That is what a throw is. */
     fun releaseSpeed(): Float = pinVel.length()

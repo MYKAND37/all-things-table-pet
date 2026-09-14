@@ -92,6 +92,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * anybody tries within a minute of picking the pet up.
      */
     private val heldBones = HashMap<Int, String>()
+
+    /** How far along that bone the finger landed. Zero would mean "by the joint", which
+     *  for a leg is the hip, and a figure lifted by the hip never turns over. */
+    private val heldOffsets = HashMap<Int, Float>()
     private val heldTargets = HashMap<Int, Vec2>()
     private var heldProp: Prop? = null
     /** Which finger is carrying the prop, so it follows that one and not the first. */
@@ -198,6 +202,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         heldBones.clear()
         heldTargets.clear()
+        heldOffsets.clear()
         heldProp = null
         framed = false
         lastFrameNs = System.nanoTime()
@@ -258,6 +263,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         rag.reset()
         heldBones.clear()
         heldTargets.clear()
+        heldOffsets.clear()
         heldProp = null
         world?.clear()
         particles.clear()
@@ -413,7 +419,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         engine?.let { renderer?.states = it.states }
 
         val pins = heldBones.entries.mapNotNull { entry ->
-            heldTargets[entry.key]?.let { Ragdoll.Pin(entry.value, it) }
+            heldTargets[entry.key]?.let {
+                Ragdoll.Pin(entry.value, it, heldOffsets[entry.key] ?: 0f)
+            }
         }
         rag.step(dt, pins)
 
@@ -501,6 +509,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         drawCharacter(canvas, sk)
         drawProps(canvas)
+        drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
         canvas.restore()
@@ -561,6 +570,39 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Where the weight is, and where the body is being held.
+     *
+     * A body hangs when its centre of gravity ends up below the finger, and there is no way
+     * to see that without drawing it — so "why is it not hanging" becomes a question the
+     * screen answers instead of a paragraph. The COM is always drawn; the line to the grip
+     * only exists while something is holding on.
+     */
+    private fun drawBalance(canvas: Canvas, sk: Skeleton) {
+        val rag = ragdoll ?: return
+        val com = rag.centreOfMass()
+
+        worldPaint.style = Paint.Style.STROKE
+        worldPaint.strokeWidth = 3f
+        worldPaint.color = 0x88000000.toInt()
+        for (held in heldBones) {
+            val bone = sk.find(held.value) ?: continue
+            val target = heldTargets[held.key] ?: continue
+            worldPaint.color = 0x88D64545.toInt()
+            canvas.drawCircle(target.x, target.y, 14f, worldPaint)
+            worldPaint.color = 0x44D64545.toInt()
+            canvas.drawLine(target.x, target.y, com.x, com.y, worldPaint)
+        }
+
+        val arm = com.y < (heldTargets.values.firstOrNull()?.y ?: com.y)
+        worldPaint.color = if (arm) 0xCC2E9E6B.toInt() else 0xCCE08A2E.toInt()
+        canvas.drawCircle(com.x, com.y, 9f, worldPaint)
+        canvas.drawLine(com.x - 16f, com.y, com.x + 16f, com.y, worldPaint)
+        canvas.drawLine(com.x, com.y - 16f, com.x, com.y + 16f, worldPaint)
+        worldPaint.style = Paint.Style.FILL
+        worldPaint.strokeWidth = 0f
+    }
+
     private fun drawBubble(canvas: Canvas, sk: Skeleton) {
         val text = bubble
         val s = spec ?: return
@@ -605,6 +647,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 " · 缩放 " + (viewScale / defaultScale * 100).toInt() + "%",
             10f * density, 16f * density, textPaint
         )
+        // Green when the weight is below the hand (it is hanging), amber when it is not.
+        // That single dot is the whole of "is it hanging" as far as the physics is concerned.
+        val com = rag.centreOfMass()
+        val grips = heldTargets.values
+        if (grips.isNotEmpty()) {
+            val hanging = com.y > grips.first().y + 20f
+            canvas.drawText(
+                if (hanging) "重心在手的下面 · 吊着" else "重心还在上面 · 没吊起来",
+                10f * density, 30f * density,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    textSize = 10f * density
+                    color = if (hanging) 0xCC2E9E6B.toInt() else 0xCCE08A2E.toInt()
+                },
+            )
+        }
 
         // Stat bars. These are the numbers the rules move, so they belong on the bench
         // rather than behind a menu: half of writing a rule is watching the number.
@@ -827,8 +884,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             prop.beginDrag()
             return true
         }
-        val bone = rag.grabAt(p) ?: return false
-        heldBones[id] = bone.name
+        val grip = rag.grabAt(p) ?: return false
+        heldBones[id] = grip.bone.name
+        heldOffsets[id] = grip.offset
         heldTargets[id] = p
         tapBone = bone.name
         tapX = x
@@ -842,6 +900,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun endGrab(rag: Ragdoll, id: Int) {
         if (heldBones.remove(id) == null) return
         heldTargets.remove(id)
+        heldOffsets.remove(id)
         if (heldBones.isEmpty()) rag.release()
     }
 

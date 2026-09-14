@@ -263,6 +263,7 @@ class Ragdoll:
         held = self._normalise(pin)
         self.pinned = bool(held)
         self.pin_targets = [p[1] for p in held]
+        self.pin_offsets = [p[2] for p in held]
         self.fk()
 
         self.pin_chain = []
@@ -319,7 +320,11 @@ class Ragdoll:
         slow = abs(self.root_vel[0]) < 30.0 and abs(self.root_vel[1]) < 30.0
         span = (max(self.collider_low(b) for b in self.order)
                 - min(b.wpos[1] for b in self.order))
-        giving = (self.figure_stiffness < 0.25 and self.grounded and slow
+        # Deliberately not while a finger is holding the figure: "a limp body that has come
+        # to rest standing up should fall over" is a statement about a body standing on its
+        # own. One that is being carried is not standing, and the feedback here is strong
+        # enough that firing it mid-hang throws the figure out of the pose entirely.
+        giving = (self.figure_stiffness < 0.25 and self.grounded and slow and not self.pinned
                   and span > 0.55 * self.standing_span)
         give = COLLAPSE_GAIN * (1.0 - self.figure_stiffness) if giving else 0.0
 
@@ -335,12 +340,17 @@ class Ragdoll:
             elif omega < -cap:
                 omega = -cap
             a = alpha[name]
-            if giving:
+            if giving and b.parent is not None:
                 # Positive feedback on the joint's own deviation. A joint with no static
                 # friction cannot hold an angle, so whatever it has already given, it
                 # gives more of. Without this a limp figure that lands on its feet is a
                 # rigid statue balanced on a support polygon: every joint has found its
                 # zero-torque angle and nothing ever disturbs it.
+                #
+                # Never on the root. Its angle is not a joint's deviation, it is the
+                # figure's orientation in the world, and a term proportional to THAT is a
+                # torque of several rad/s^2 in whatever direction the body happens to be
+                # lying -- which is a kick, not a give.
                 a += theta * give
             k = self.stiffness[name] * K_MAX
             if k > 0.0:
@@ -390,12 +400,36 @@ class Ragdoll:
         self.fk()
 
     def _normalise(self, pins):
-        """One finger, five fingers, or nothing at all."""
+        """
+        One finger, five fingers, or nothing at all.
+
+        A pin is (bone, target) or (bone, target, offset), where offset is how far along
+        the bone the finger landed -- 0 is the joint, the bone's length is the tip.
+        """
         if pins is None:
             return []
         if isinstance(pins, tuple) and pins and isinstance(pins[0], str):
-            return [pins]
-        return list(pins)
+            pins = [pins]
+        out = []
+        for p in pins:
+            out.append((p[0], p[1], float(p[2]) if len(p) > 2 else 0.0))
+        return out
+
+    def _grip(self, bone, offset):
+        """
+        The point on a bone a finger is actually holding.
+
+        This is not a detail. A pin used to hold the bone's HEAD -- its joint -- whatever
+        the finger had touched, and the head of the thigh IS THE HIP. So grabbing a leg
+        anywhere along its length pinned the top of the body, lifting the figure upright by
+        the pelvis, and no amount of gravity could ever turn it over: there was nothing
+        above the grip to hang. Taking hold of the point under the finger is the whole
+        difference between lifting a ragdoll by its leg and picking it up by the waist.
+        """
+        if offset == 0.0:
+            return bone.wpos
+        a = bone.wrot
+        return (bone.wpos[0] + math.cos(a) * offset, bone.wpos[1] + math.sin(a) * offset)
 
     def _pins(self, dt, pins):
         """
@@ -435,23 +469,23 @@ class Ragdoll:
         pick up by the leg.
         """
         for _ in range(PIN_OUTER):
-            for name, target in pins:
+            for name, target, offset in pins:
                 bone = self.by_name.get(name)
                 if bone is not None:
-                    self._solve_pin(bone, target)
+                    self._solve_pin(bone, target, offset)
 
         # Whatever the joints could not reach, the root carries -- split between the pins,
         # so two hands pulling opposite ways do not fight over one translation.
         dx = dy = 0.0
-        for name, target in pins:
-            p = self.by_name[name].wpos
+        for name, target, offset in pins:
+            p = self._grip(self.by_name[name], offset)
             dx += target[0] - p[0]
             dy += target[1] - p[1]
         dx /= len(pins)
         dy /= len(pins)
         self.root_pos[0] += dx
         self.root_pos[1] += dy
-        self.pin_point = self.by_name[pins[0][0]].wpos
+        self.pin_point = self._grip(self.by_name[pins[0][0]], pins[0][2])
 
         # The finger's own speed, not the leftover: the leftover is nearly zero once the
         # chain reaches, so measuring the throw by it meant a flick threw nothing.
@@ -474,7 +508,7 @@ class Ragdoll:
         """
         return self.chain_to_root(bone)
 
-    def _solve_pin_aim(self, bone, target):
+    def _solve_pin_aim(self, bone, target, offset=0.0):
         """
         The greedy solve: every joint in the chain turns to line its tip up with the finger.
 
@@ -485,10 +519,11 @@ class Ragdoll:
         """
         chain = self._pin_chain(bone)
         for _ in range(PIN_IK_ITERATIONS):
-            if math.hypot(target[0] - bone.wpos[0], target[1] - bone.wpos[1]) < 0.5:
+            end = self._grip(bone, offset)
+            if math.hypot(target[0] - end[0], target[1] - end[1]) < 0.5:
                 break
             for b in chain:
-                end = bone.wpos
+                end = self._grip(bone, offset)
                 px, py = b.wpos
                 if math.hypot(end[0] - px, end[1] - py) < 1e-6:
                     continue
@@ -515,23 +550,24 @@ class Ragdoll:
                     self.ang[b.name] = turned
                     self.fk()
 
-    def _solve_pin(self, bone, target):
+    def _solve_pin(self, bone, target, offset=0.0):  # noqa: D401
         """Pull one point of the figure to the finger, in the cheapest way available."""
         if PIN_MODE == "aim":
-            self._solve_pin_aim(bone, target)
+            self._solve_pin_aim(bone, target, offset)
             return
         chain = self._pin_chain(bone)
         for _ in range(PIN_IK_ITERATIONS):
-            ex = target[0] - bone.wpos[0]
-            ey = target[1] - bone.wpos[1]
+            end = self._grip(bone, offset)
+            ex = target[0] - end[0]
+            ey = target[1] - end[1]
             if math.hypot(ex, ey) < 0.5:
                 break
 
             terms = []
             total = 0.0
             for b in chain:
-                rx = bone.wpos[0] - b.wpos[0]
-                ry = bone.wpos[1] - b.wpos[1]
+                rx = end[0] - b.wpos[0]
+                ry = end[1] - b.wpos[1]
                 # Rotating b by theta moves the pinned point by theta * perp(r).
                 px, py = -ry, rx
                 dot = ex * px + ey * py
