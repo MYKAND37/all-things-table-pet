@@ -208,19 +208,32 @@ class Ragdoll:
         update(order)
         # The room is deeper than the artwork's ground line, and the figure stands on the
         # FLOOR, not where the drawing's ground line happens to be: see skeleton_tool.room.
-        self.root_home = (order[0].wpos[0], order[0].wpos[1] + physics.get("roomAir", 0.0))
+        # The rig is authored in the ART canvas' coordinates and the room is deeper than the
+        # art canvas, so the figure is stood on the real floor by offsetting it: root_home is
+        # the authored root (art coordinates) and STAND is how far the floor is below it.
+        #
+        # Getting this wrong is invisible in the numbers and obvious on the screen: the figure
+        # is placed a body's height above the floor, falls, and -- because a fast landing is
+        # resolved by turning limbs out of the floor rather than by lifting the root -- sinks
+        # through it and is never seen again.
+        self.root_home = order[0].wpos
+        self.stand = float(physics.get("roomAir", 0.0))
         self.root_pos = list(self.root_home)
         # The root carries an explicit velocity. A Verlet integrator reads any positional
         # correction as velocity, and one large correction then squares its way to
         # infinity in under a second.
         self.root_vel = [0.0, 0.0]
 
+        self.ang = dict((b.name, 0.0) for b in order)
+        self.ang_prev = dict((b.name, 0.0) for b in order)
+        # Put the figure into world coordinates before anything measures it: collider_low,
+        # the centre of mass and the standing span are all read straight after this, and in
+        # art coordinates every one of them is a body's height out.
+        self.fk()
         # How tall the figure is standing. Used to tell "still up" from "already down",
         # which is what stops the limp give-way feedback once the figure has collapsed.
         self.standing_span = (max(self.collider_low(b) for b in self.order)
                               - min(b.wpos[1] for b in self.order))
-        self.ang = dict((b.name, 0.0) for b in order)
-        self.ang_prev = dict((b.name, 0.0) for b in order)
         self.target = dict((b.name, 0.0) for b in order)
         self.grounded = False
         self.pin_point = (0.0, 0.0)
@@ -245,8 +258,9 @@ class Ragdoll:
     # -- helpers ------------------------------------------------------------
 
     def _offset(self):
+        """Where the root is now, as a displacement of the ART-space rig. See root_home."""
         return (self.root_pos[0] - self.root_home[0],
-                self.root_pos[1] - self.root_home[1])
+                self.root_pos[1] - self.root_home[1] + self.stand)
 
     def fk(self):
         for b in self.order:
@@ -731,6 +745,15 @@ class Ragdoll:
             if worst > 0.05:
                 self._lift(worst, dt)
 
+        # A last resort, for a figure that is not under the floor but PAST it: if every bone
+        # is below the ground line, something upstream put it there, and a pet that is simply
+        # not on the screen any more is the worst possible way to find out. Putting it back
+        # costs one comparison per bone and turns a lost pet into a pet that lands.
+        if min(b.wpos[1] for b in self.order) > self.floor:
+            self.root_pos[1] = self.floor - self.standing_span
+            self.root_vel = [0.0, 0.0]
+            self.fk()
+
         self._walls()
 
     def _turn_out(self, bone, pen):
@@ -834,6 +857,42 @@ def run(spec_path):
     by_name, order = bake(spec["bones"])
     ok = True
 
+    print("=== 0. it starts standing on the floor, not above it ===")
+    # The bug this exists for: the room is deeper than the artwork, so the figure has to be
+    # offset down onto the real floor -- and the offset was computed in a way that cancelled
+    # itself out. The pet started a body's height in the air, fell, and was gone.
+    rag = Ragdoll(spec, by_name, order, stiffness=0.0)
+    low = max(rag.collider_low(b) for b in rag.order)
+    # A hand's width, not a hair: the collider is a capsule a little fatter than the drawing,
+    # and where exactly it settles is the collider's business. What must never happen again
+    # is being a BODY's height out, which is what this catches.
+    ok &= _report("the feet are at the floor line at t=0",
+                  "%.0f px off, floor %.0f" % (rag.floor - low, rag.floor),
+                  abs(low - rag.floor) < 0.06 * rag.standing_span)
+    ok &= _report("and the head is a body higher up",
+                  "head %.0f, floor %.0f" % (by_name["head"].wpos[1], rag.floor),
+                  by_name["head"].wpos[1] < rag.floor - 0.7 * rag.standing_span)
+
+    for _ in range(240):
+        rag.step(1.0 / 60.0)
+    low = max(rag.collider_low(b) for b in rag.order)
+    ok &= _report("four seconds later it is still on the floor",
+                  "%.0f px off" % (rag.floor - low), abs(low - rag.floor) < 40.0)
+
+    print("")
+    print("=== 0b. a figure that ends up under the world comes back ===")
+    # Not physics: a last resort. Whatever the reason, a pet that is not on the screen is the
+    # worst possible way to find out, so a figure whose every bone is under the floor is put
+    # back on it.
+    rag.root_pos[1] = rag.floor + 4000.0
+    rag.root_vel = [0.0, 900.0]
+    for _ in range(3):
+        rag.step(1.0 / 60.0)
+    ok &= _report("it is back above the floor",
+                  "highest bone %.0f, floor %.0f" % (min(b.wpos[1] for b in rag.order), rag.floor),
+                  min(b.wpos[1] for b in rag.order) <= rag.floor)
+
+    print("")
     print("=== 1. a limp body let go in the air just falls ===")
     rag = Ragdoll(spec, by_name, order, stiffness=0.0)
     start = rag.root_pos[1]
@@ -917,8 +976,11 @@ def run(spec_path):
     print("")
     print("=== 6. it lands sprawled, not perched ===")
     rag = Ragdoll(spec, by_name, order, stiffness=0.0)
-    # Dropped from height with speed, so it has to take a real landing.
-    rag.root_pos[1] -= 700.0
+    # Dropped from a height ABOVE THE FLOOR, not from an offset from where it stands: the room
+    # is deeper than it used to be, so "700px above home" is now a short hop rather than a
+    # real fall, and a limp figure that barely falls does not sprawl -- it props itself on one
+    # knee and stays there, which is correct physics and the wrong experiment.
+    rag.root_pos[1] = rag.floor - rag.standing_span - 900.0
     rag.root_vel[1] = 900.0
     for _ in range(2400):
         rag.step(1.0 / 120.0)

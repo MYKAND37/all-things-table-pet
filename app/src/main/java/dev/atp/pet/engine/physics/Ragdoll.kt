@@ -54,6 +54,8 @@ class Ragdoll(
     private val defaultRadius = spec.headHeight * 0.18f
     private val random = Random(20260913)
 
+    /** Where the root bone is in the artwork's own coordinates. See rootHome. */
+    private val rigRoot: Vec2
     private val rootHome: Vec2
     var rootPos: Vec2
         private set
@@ -111,15 +113,23 @@ class Ragdoll(
             mass[b.name] = max(area, 1f)
         }
 
-        // Measure the home position first. applyAngles() needs rootHome to compute the
-        // offset, so it cannot run before this.
+        // Measure the home position first. applyAngles() needs the rig's own origin to compute
+        // the offset, so it cannot run before this.
         skeleton.rootTransform = Transform.IDENTITY
         skeleton.update()
-        // The room is deeper than the artwork's ground line and the figure stands on the
-        // FLOOR, not wherever the drawing's ground line happens to be: see CharacterSpec.air.
-        // The bones themselves stay in art coordinates, so a rig saved from the editor comes
-        // back exactly as it went in.
-        rootHome = bones.first().worldPosition + Vec2(0f, spec.standOffset)
+        // A rig is authored in the ART canvas' coordinates and the room is deeper than the art
+        // canvas, so the figure is stood on the real floor by offsetting it. Two numbers, and
+        // confusing them put the pet a body's height above the ground, where it fell out of
+        // the world and was never seen again:
+        //
+        //   rigRoot   where the root bone is in the artwork  (never moves)
+        //   rootHome  where the figure STANDS in the room    (rigRoot + the air)
+        //
+        // The transform handed to the skeleton is measured from rigRoot, so at rest it is
+        // exactly the air -- which is the whole of "the artwork's ground line is a body's
+        // height above the floor it stands on".
+        rigRoot = bones.first().worldPosition
+        rootHome = rigRoot + Vec2(0f, spec.standOffset)
         rootPos = rootHome
         applyAngles()
         standingSpan = spanOfFigure()
@@ -131,7 +141,10 @@ class Ragdoll(
         for (b in bones) {
             b.rotation = angle[b.name] ?: 0f
         }
-        skeleton.rootTransform = Transform(position = rootPos - rootHome)
+        // Measured from the ARTWORK's root, not from where the figure stands: see the note in
+        // init. Subtracting rootHome here cancels the air out and puts the pet back in the
+        // drawing's coordinates, a body's height above the floor it is supposed to stand on.
+        skeleton.rootTransform = Transform(position = rootPos - rigRoot)
         skeleton.update()
     }
 
@@ -438,6 +451,19 @@ class Ragdoll(
             var worst = 0f
             for (b in bones) worst = max(worst, colliderLow(b) - floor)
             if (worst > 0.05f) lift(worst, dt)
+        }
+
+        // And a last resort, for a figure that is not under the floor but PAST it: if every
+        // bone is below the ground line, something upstream put it there, and a pet that is
+        // simply not on the screen any more is the worst possible way to find out. Putting it
+        // back on the floor costs one comparison per bone and turns a lost pet into a pet
+        // that lands.
+        var highest = Float.MAX_VALUE
+        for (b in bones) highest = kotlin.math.min(highest, b.worldPosition.y)
+        if (highest > floor) {
+            rootPos = Vec2(rootPos.x, floor - standingSpan)
+            rootVel = Vec2.ZERO
+            applyAngles()
         }
 
         walls()
