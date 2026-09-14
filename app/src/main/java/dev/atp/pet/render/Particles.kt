@@ -50,7 +50,14 @@ class Particles {
         val stains: Boolean,
     )
 
-    private class Stain(var x: Float, var r: Float, val colour: Int, var life: Float, val maxLife: Float)
+    private class Stain(
+        var x: Float,
+        val y: Float,
+        var r: Float,
+        val colour: Int,
+        var life: Float,
+        val maxLife: Float,
+    )
 
     private val particles = ArrayList<Particle>()
     private val stains = ArrayList<Stain>()
@@ -107,7 +114,7 @@ class Particles {
                 continue
             }
             if (p.y >= floor) {
-                if (p.stains) mark(p.x, p.size, p.colour)
+                if (p.stains) mark(p.x, floor, p.size, p.colour)
                 particles.removeAt(i)
                 continue
             }
@@ -122,10 +129,11 @@ class Particles {
         }
     }
 
-    private fun mark(x: Float, size: Float, colour: Int) {
+    /** A mark is left where the drop landed, which is the floor, not where it started. */
+    private fun mark(x: Float, y: Float, size: Float, colour: Int) {
         if (stains.size >= MAX_STAINS) stains.removeAt(0)
         val life = 5f + random.nextFloat() * 4f
-        stains.add(Stain(x, size * 0.9f, colour, life, life))
+        stains.add(Stain(x, y, size * 0.9f, colour, life, life))
     }
 
     fun draw(canvas: Canvas, paint: Paint) {
