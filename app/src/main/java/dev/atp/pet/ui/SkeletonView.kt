@@ -57,6 +57,18 @@ class SkeletonView @JvmOverloads constructor(
     private var offsetX = 0f
     private var offsetY = 0f
 
+    /** The scale that fits the whole canvas; the zoom range is relative to it. */
+    private var fitScale = 1f
+    private var zoomed = false
+    private var panning = false
+    private var lastPanX = 0f
+    private var lastPanY = 0f
+    private var pinchSpan = 0f
+
+    /** The bone the side panel last picked, drawn with a ring so it can be found. */
+    var selected: String? = null
+        private set
+
     private var active: Handle? = null
     private var heldJoint: JointHandle? = null
     private var lastTapAt = 0L
@@ -87,6 +99,11 @@ class SkeletonView @JvmOverloads constructor(
         strokeWidth = 2f * density
         color = 0xFFE2653C.toInt()
     }
+    private val selectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = 0xFF171528.toInt()
+    }
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 1f * density
@@ -111,6 +128,8 @@ class SkeletonView @JvmOverloads constructor(
     fun load(folder: CharacterFolder) {
         this.folder = folder
         renamed.clear()
+        selected = null
+        zoomed = false
         cancelAddBone()
         library?.release()
         // Must be dropped as well as released: rebuild() reuses the stored library when
@@ -139,8 +158,9 @@ class SkeletonView @JvmOverloads constructor(
         renderer = if (loaded == null || loaded.isEmpty) null else PartRenderer(
             built,
             loaded,
-            parsed.layers.sortedBy { it.z }.map { it.bone },
+            parsed.drawOrder(),
             parsed.swaps,
+            parsed.stateOf(),
         )
 
         handles.clear()
@@ -391,10 +411,66 @@ class SkeletonView @JvmOverloads constructor(
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         val s = spec ?: return
         val pad = 8f * density
-        scale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.canvasHeight)
-        offsetX = (w - s.canvasWidth * scale) / 2f
-        offsetY = (h - s.canvasHeight * scale) / 2f
+        fitScale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.canvasHeight)
+        // Only refit while nobody has zoomed: a rotation should not throw away the view
+        // somebody just spent a minute getting to.
+        if (!zoomed || oldw == 0) {
+            scale = fitScale
+            offsetX = (w - s.canvasWidth * scale) / 2f
+            offsetY = (h - s.canvasHeight * scale) / 2f
+        }
     }
+
+    /**
+     * Zoom to a bone and put it in the middle.
+     *
+     * Finding one hand among nineteen joints by tapping at a picture is guesswork on a
+     * phone; a name that zooms is not.
+     */
+    fun focusOn(name: String) {
+        val sk = skeleton ?: return
+        val bone = sk.find(name) ?: return
+        selected = name
+        val p = bone.worldPosition
+        scale = (fitScale * ZOOM_ON_PICK).coerceIn(fitScale * 0.25f, fitScale * 12f)
+        offsetX = width / 2f - p.x * scale
+        offsetY = height / 2f - p.y * scale
+        zoomed = true
+        invalidate()
+        onInfo?.invoke(name + " · " + boneLabel(name))
+    }
+
+    private fun boneLabel(name: String): String = when {
+        name.startsWith("shoulder") -> "肩"
+        name.startsWith("upperarm") -> "上臂"
+        name.startsWith("forearm") -> "前臂"
+        name.startsWith("hand") -> "手"
+        name.startsWith("thigh") -> "大腿"
+        name.startsWith("shin") -> "小腿"
+        name.startsWith("foot") -> "脚"
+        else -> ""
+    }
+
+    /** Drag the end of a limb: a two-bone chain is solved, a single bone is aimed. */
+    private fun dragHandle(h: Handle, sk: Skeleton, event: MotionEvent) {
+        val target = toCanvas(event.x, event.y)
+        val chain = h.chain
+        if (chain != null) {
+            TwoBoneIK.drag(sk, sk.require(chain.upper), sk.require(chain.lower), target, chain.bend)
+        } else {
+            h.bone.aimAt(target)
+            sk.update()
+        }
+        invalidate()
+    }
+
+    private fun span(e: MotionEvent): Float {
+        if (e.pointerCount < 2) return 0f
+        return hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
+    }
+
+    private fun midX(e: MotionEvent) = if (e.pointerCount >= 2) (e.getX(0) + e.getX(1)) / 2f else e.x
+    private fun midY(e: MotionEvent) = if (e.pointerCount >= 2) (e.getY(0) + e.getY(1)) / 2f else e.y
 
     private fun vx(p: Vec2) = offsetX + p.x * scale
     private fun vy(p: Vec2) = offsetY + p.y * scale
@@ -437,6 +513,16 @@ class SkeletonView @JvmOverloads constructor(
             canvas.drawCircle(hx, hy, 2f * density, jointPaint)
         }
 
+        // The bone the side panel picked, ringed at both ends: the canvas is zoomed in far
+        // enough by then that "somewhere in that arm" is not a useful answer.
+        selected?.let { pick ->
+            sk.find(pick)?.let { b ->
+                canvas.drawCircle(vx(b.worldPosition), vy(b.worldPosition), 15f * density, selectPaint)
+                val t = b.tipPosition()
+                canvas.drawCircle(vx(t), vy(t), 11f * density, selectPaint)
+            }
+        }
+
         if (editBones) {
             // Joints are blue and fixed points of the rig; tips are orange and set how far
             // the artwork reaches. They are the two things worth being able to move.
@@ -476,8 +562,8 @@ class SkeletonView @JvmOverloads constructor(
                     "加骨骼 " + pendingName + " · 点一下起点（关节）"
                 pendingName != null ->
                     "加骨骼 " + pendingName + " · 再点一下末端"
-                editBones -> "蓝点 = 关节 · 橙点 = 骨骼末端"
-                else -> "拖关节摆姿势 · 双击复位"
+                editBones -> "蓝点 = 关节 · 橙点 = 末端 · 双指缩放"
+                else -> "拖关节摆姿势 · 双指缩放 · 双击复位"
             },
             10f * density, 16f * density, textPaint
         )
@@ -550,40 +636,69 @@ class SkeletonView @JvmOverloads constructor(
 
                 if (editBones) {
                     heldJoint = pickJoint(event.x, event.y)
-                    return heldJoint != null
+                    if (heldJoint != null) return true
+                } else {
+                    active = pickHandle(event.x, event.y)
+                    if (active != null) return true
                 }
-                active = pickHandle(event.x, event.y)
-                return active != null
+                // Nothing under the finger: the finger is moving the canvas, which is how
+                // a corner of a 1024x2048 drawing gets looked at on a phone at all.
+                panning = true
+                lastPanX = event.x
+                lastPanY = event.y
+                return true
+            }
+
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                active = null
+                heldJoint = null
+                panning = false
+                pinchSpan = span(event)
+                return true
             }
 
             MotionEvent.ACTION_MOVE -> {
-                if (editBones) {
-                    val held = heldJoint ?: return false
-                    moveJoint(held, toCanvas(event.x, event.y))
+                if (event.pointerCount >= 2) {
+                    val s = span(event)
+                    if (pinchSpan > 1f && s > 1f) {
+                        val focusX = midX(event)
+                        val focusY = midY(event)
+                        val before = toCanvas(focusX, focusY)
+                        scale = (scale * (s / pinchSpan)).coerceIn(fitScale * 0.25f, fitScale * 12f)
+                        // Keep the point between the fingers where it is.
+                        offsetX = focusX - before.x * scale
+                        offsetY = focusY - before.y * scale
+                        zoomed = true
+                    }
+                    pinchSpan = s
+                    invalidate()
                     return true
                 }
-                val h = active ?: return false
-                val target = toCanvas(event.x, event.y)
-                val chain = h.chain
-                if (chain != null) {
-                    TwoBoneIK.drag(
-                        sk,
-                        sk.require(chain.upper),
-                        sk.require(chain.lower),
-                        target,
-                        chain.bend,
-                    )
-                } else {
-                    h.bone.aimAt(target)
-                    sk.update()
+                if (editBones && heldJoint != null) {
+                    moveJoint(heldJoint!!, toCanvas(event.x, event.y))
+                    return true
                 }
-                invalidate()
-                return true
+                if (!editBones && active != null) {
+                    dragHandle(active!!, sk, event)
+                    return true
+                }
+                if (panning) {
+                    offsetX += event.x - lastPanX
+                    offsetY += event.y - lastPanY
+                    lastPanX = event.x
+                    lastPanY = event.y
+                    zoomed = true
+                    invalidate()
+                    return true
+                }
+                return false
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 active = null
                 heldJoint = null
+                panning = false
+                pinchSpan = 0f
                 invalidate()
                 return true
             }
@@ -608,6 +723,11 @@ class SkeletonView @JvmOverloads constructor(
             held.boneName + if (held.tail) " 末端 → " else " 关节 → " +
                 to.x.toInt() + ", " + to.y.toInt()
         )
+    }
+
+    private companion object {
+        /** How far a pick in the side panel zooms in. Enough to see a hand, not a pixel. */
+        const val ZOOM_ON_PICK = 2.5f
     }
 
     fun release() {

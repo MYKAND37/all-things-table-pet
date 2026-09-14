@@ -20,6 +20,18 @@ class RuleEngine(val spec: LogicSpec) {
 
     val stats = StatSet(spec.stats)
 
+    /**
+     * Every switch the character owns, by id. Read by the artwork (a part that only exists
+     * while its state is on) and by the rules; written only by the rules.
+     */
+    val states = LinkedHashMap<String, Boolean>()
+
+    init {
+        for (s in spec.states) states[s.id] = s.initial
+    }
+
+    fun stateOn(id: String): Boolean = states[id] == true
+
     /** Seconds since the character appeared. Rules and the log both read it. */
     var clock = 0f
         private set
@@ -38,6 +50,7 @@ class RuleEngine(val spec: LogicSpec) {
 
     fun reset() {
         stats.reset()
+        for (s in spec.states) states[s.id] = s.initial
         clock = 0f
         tickAccum = 0f
         lastFired.clear()
@@ -96,9 +109,22 @@ class RuleEngine(val spec: LogicSpec) {
         return out
     }
 
-    /** Every condition has to hold. An unknown kind is false, not fatal. */
+    /**
+     * Every condition has to hold.
+     *
+     * Two kinds, and they are the two things a character can be asked about: a number it
+     * carries ("is pain over 80") and a fact about it ("is it wearing clothes"). An
+     * unknown kind is false rather than fatal, so a rule from a newer version of the app
+     * cannot stop the rest of the file from running.
+     */
     private fun holds(rule: RuleSpec): Boolean {
         for (c in rule.conditions) {
+            if (c.kind == "state") {
+                val on = stateOn(c.state)
+                val want = c.op != "off"
+                if (on != want) return false
+                continue
+            }
             if (c.kind != "stat") return false
             val v = stats.get(c.stat)
             val ok = when (c.op) {
@@ -132,6 +158,20 @@ class RuleEngine(val spec: LogicSpec) {
                 "set" -> {
                     val delta = stats.set(a.stat, a.value)
                     if (delta != 0f) log("    " + a.stat + " = " + stats.get(a.stat).toInt())
+                }
+                "stateOn", "stateOff", "stateToggle" -> {
+                    if (a.state.isNotEmpty()) {
+                        val before = stateOn(a.state)
+                        val after = when (a.kind) {
+                            "stateOn" -> true
+                            "stateOff" -> false
+                            else -> !before
+                        }
+                        states[a.state] = after
+                        if (after != before) {
+                            log("    状态 " + a.state + (if (after) " 打开" else " 关闭"))
+                        }
+                    }
                 }
                 "wait" -> {
                     val rest = actions.drop(i + 1)

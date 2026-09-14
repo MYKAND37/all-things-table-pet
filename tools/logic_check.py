@@ -50,6 +50,8 @@ class Engine:
         self.spec = spec
         self.value = {s["id"]: clamp(s["value"], s["min"], s["max"]) for s in spec["stats"]}
         self.spec_by_id = {s["id"]: s for s in spec["stats"]}
+        self.initial = {s["id"]: bool(s.get("on", False)) for s in spec.get("states", [])}
+        self.states = dict(self.initial)
         self.clock = 0.0
         self.tick_accum = 0.0
         self.last_fired = {}
@@ -75,8 +77,17 @@ class Engine:
         return (rule_part == "" or event.get("part", "") == rule_part
                 or event.get("part", "").startswith(rule_part))
 
+    def state_on(self, sid):
+        return self.states.get(sid, False)
+
     def holds(self, rule):
         for c in rule.get("if", []):
+            if c.get("kind") == "state":
+                # A state the character does not declare reads as off, not as an error:
+                # deleting a state should not make every rule that mentioned it explode.
+                if self.state_on(c.get("state", "")) != (c.get("op", "on") != "off"):
+                    return False
+                continue
             if c.get("kind") != "stat":
                 return False
             v = self.value.get(c.get("stat"), 0.0)
@@ -96,6 +107,12 @@ class Engine:
                 self.add(a.get("stat", ""), a.get("value", 0.0))
             elif k == "set":
                 self.set(a.get("stat", ""), a.get("value", 0.0))
+            elif k in ("stateOn", "stateOff", "stateToggle"):
+                sid = a.get("state", "")
+                if sid:
+                    before = self.state_on(sid)
+                    after = {"stateOn": True, "stateOff": False}.get(k, not before)
+                    self.states[sid] = after
             elif k == "wait":
                 rest = actions[i + 1:]
                 if rest:
@@ -165,13 +182,23 @@ def main():
     used_acts = {a["kind"] for r in default["rules"] for a in r.get("then", [])}
     stat_ids = {s["id"] for s in default["stats"]}
     used_stats = {a.get("stat") for r in default["rules"] for a in r.get("then", []) if a.get("stat")}
-    used_stats |= {c.get("stat") for r in default["rules"] for c in r.get("if", [])}
+    # Only the numeric conditions name a stat; a state condition leaves that field empty
+    # on purpose, and an empty name is not a missing one.
+    used_stats |= {c.get("stat") for r in default["rules"] for c in r.get("if", [])
+                   if c.get("stat")}
     report("every 'on' is a real event", used_events <= events,
            "unknown: " + str(used_events - events))
     report("every action kind is real", used_acts <= acts,
            "unknown: " + str(used_acts - acts))
     report("every stat referenced exists", used_stats <= stat_ids,
            "unknown: " + str(used_stats - stat_ids))
+    state_ids = {s["id"] for s in default.get("states", [])}
+    used_states = {a.get("state") for r in default["rules"] for a in r.get("then", []) if a.get("state")}
+    used_states |= {c.get("state") for r in default["rules"] for c in r.get("if", []) if c.get("state")}
+    report("every state referenced exists", used_states <= state_ids,
+           "unknown: " + str(used_states - state_ids))
+    report("the shipped file declares the states its own rules use",
+           len(used_states) > 0, str(used_states))
     report("stats have sane ranges",
            all(s["min"] <= s["value"] <= s["max"] for s in default["stats"]))
     report("every rule has at least one action",
@@ -266,6 +293,39 @@ def main():
                      "then": [{"kind": "say", "text": "低了"}]}]})
     out = e.handle("tick")
     report("the second rule sees the first rule's change", "低了" in says(out), str(says(out)))
+
+    print("\nstates are switches, and rules can read and flip them")
+    e = Engine(default)
+    report("the initials come from the file", e.state_on("dressed") is False)
+    e.handle("click")
+    report("clicking toggles 穿着", e.state_on("dressed") is True)
+    e.clock += 1.0
+    e.handle("click")
+    report("and clicking again takes it off", e.state_on("dressed") is False)
+    report("an undeclared state reads as off", e.state_on("nonsense") is False)
+
+    e = Engine({"stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100}],
+                "states": [{"id": "dressed", "name": "穿着", "on": True}],
+                "rules": [
+                    {"on": "tick", "cooldown": 0,
+                     "if": [{"kind": "state", "state": "dressed", "op": "on"}],
+                     "then": [{"kind": "say", "text": "穿着呢"}]},
+                    {"on": "tick", "cooldown": 0,
+                     "if": [{"kind": "state", "state": "dressed", "op": "off"}],
+                     "then": [{"kind": "say", "text": "没穿"}]},
+                ]})
+    report("a state condition gates a rule", says(e.handle("tick")) == ["穿着呢"])
+    e.states["dressed"] = False
+    report("and the other side of it fires when it is off",
+           says(e.handle("tick")) == ["没穿"])
+
+    e = Engine({"stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100}],
+                "states": [{"id": "x", "name": "X", "on": False}],
+                "rules": [{"on": "tick", "cooldown": 0,
+                           "then": [{"kind": "stateOn", "state": "x"},
+                                    {"kind": "stateOff", "state": "x"}]}]})
+    e.handle("tick")
+    report("on then off in one rule ends off", e.state_on("x") is False)
 
     print("\nTICK is raised on its own schedule")
     e = Engine(default)

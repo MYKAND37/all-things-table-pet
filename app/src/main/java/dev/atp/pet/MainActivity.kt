@@ -32,6 +32,7 @@ import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
+import dev.atp.pet.engine.logic.StateSpec
 import dev.atp.pet.engine.state.StatSpec
 import dev.atp.pet.render.ParticleKind
 import dev.atp.pet.ui.PartAlignView
@@ -71,6 +72,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var depthScroll: View
     private lateinit var depthList: LinearLayout
     private var depthBones = mutableListOf<String>()
+
+    /** Bone to the state its artwork needs. Empty means the part is always there. */
+    private val depthState = mutableMapOf<String, String>()
+
+    /** The edited character's states, for the depth editor to choose from. */
+    private var depthStates: List<StateSpec> = emptyList()
     private var depthRules = mutableListOf<SwapRuleSpec>()
     private var wizardStage = 0
     private var wizardPart: String? = null
@@ -119,7 +126,10 @@ class MainActivity : AppCompatActivity() {
     /** The summoned character's rules, as edited. Rebuilt on every change; saved on every change. */
     private var logicStats: MutableList<StatSpec> = mutableListOf()
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
+    private var logicStates: MutableList<StateSpec> = mutableListOf()
     private lateinit var skeletonView: SkeletonView
+    private lateinit var rigRow: View
+    private lateinit var rigBoneList: LinearLayout
     private lateinit var alignPane: View
     private lateinit var alignView: PartAlignView
     private lateinit var statusLine: TextView
@@ -151,6 +161,8 @@ class MainActivity : AppCompatActivity() {
         logicScroll = findViewById(R.id.logicScroll)
         logicList = findViewById(R.id.logicList)
         skeletonView = findViewById(R.id.skeletonView)
+        rigRow = findViewById(R.id.rigRow)
+        rigBoneList = findViewById(R.id.rigBoneList)
         rigBar = findViewById(R.id.rigBarScroll)
         rigMode = findViewById(R.id.rigMode)
         rigAddBone = findViewById(R.id.rigAddBone)
@@ -164,7 +176,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
         findViewById<View>(R.id.rigSavePose).setOnClickListener { askPoseName() }
         // Adding, deleting or reparenting a bone redraws the list it was done from.
-        skeletonView.onRigChanged = { refreshBoneList() }
+        skeletonView.onRigChanged = {
+            refreshBoneList()
+            buildRigBonePanel()
+        }
         applyRigMode()
 
         depthScroll = findViewById(R.id.depthScroll)
@@ -215,7 +230,7 @@ class MainActivity : AppCompatActivity() {
         summoned = characters.firstOrNull()
         buildPetChooser()
         buildPetList()
-        summoned?.let { reloadSandbox(it) }
+        if (summoned != null) reloadSandbox(summoned!!)
     }
 
     /**
@@ -263,7 +278,7 @@ class MainActivity : AppCompatActivity() {
         sandboxPane.visibility = if (pane == Pane.SANDBOX) View.VISIBLE else View.GONE
         petListScroll.visibility = if (pane == Pane.PET_LIST) View.VISIBLE else View.GONE
         partListScroll.visibility = if (pane == Pane.PET_PARTS) View.VISIBLE else View.GONE
-        skeletonView.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
+        rigRow.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         alignPane.visibility = if (pane == Pane.PART_ALIGN) View.VISIBLE else View.GONE
         depthScroll.visibility = if (pane == Pane.PET_DEPTH) View.VISIBLE else View.GONE
         propListScroll.visibility = if (pane == Pane.PET_PROPS) View.VISIBLE else View.GONE
@@ -585,16 +600,70 @@ class MainActivity : AppCompatActivity() {
             params.bottomMargin = dp(8)
             card.layoutParams = params
 
-            card.addView(label(folder.id, 15f, INK))
-            card.addView(
+            val header = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val nameBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            nameBox.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            nameBox.addView(label(folder.id, 15f, INK))
+            nameBox.addView(
                 label(
                     bones.size.toString() + " bones · " + folder.partCount(bones) + " parts drawn",
                     11f, MUTED,
                 )
             )
+            header.addView(nameBox)
+
+            // A package is the one thing that had no way out. Everything inside it can be
+            // deleted one piece at a time, which is no help when the whole thing was an
+            // experiment.
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(10), dp(6), dp(10), dp(6))
+            remove.setOnClickListener { confirmDeletePet(folder, bones.size) }
+            header.addView(remove)
+            card.addView(header)
+
             card.setOnClickListener { openPet(folder) }
             petList.addView(card)
         }
+    }
+
+    /**
+     * Delete a whole package.
+     *
+     * Deliberately the most explicit confirmation in the app: this takes the rig, the
+     * drawings, the rules and the saved actions with it, and no part of that is kept
+     * anywhere else. Reinstalling the app brings back the bundled one and nothing else.
+     */
+    private fun confirmDeletePet(folder: CharacterFolder, bones: Int) {
+        val parts = folder.partCount(boneNames(folder))
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.action_delete) + " · " + folder.id)
+            .setMessage(getString(R.string.pet_delete_confirm, folder.id, bones, parts))
+            .setPositiveButton(R.string.depth_remove) { _, _ ->
+                store.deleteCharacter(folder.id)
+                if (summoned?.id == folder.id) summoned = null
+                if (opened?.id == folder.id) opened = null
+                reloadCharacters()
+                if (summoned == null && characters.isNotEmpty()) {
+                    summoned = characters.first()
+                    reloadSandbox(characters.first())
+                }
+                buildPetList()
+                buildPetChooser()
+                buildLogicPaneIfOpen()
+                Toast.makeText(this, R.string.pet_deleted, Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    /** Refresh the logic pane when it is the one on screen and its character just went. */
+    private fun buildLogicPaneIfOpen() {
+        if (logicScroll.visibility == View.VISIBLE) openLogic()
     }
 
     private fun openPet(folder: CharacterFolder) {
@@ -629,6 +698,7 @@ class MainActivity : AppCompatActivity() {
             rigBoneMode = false
             skeletonView.setBoneEditMode(false)
             applyRigMode()
+            buildRigBonePanel()
             show(Pane.PET_RIG)
         }
         partList.addView(rig)
@@ -683,7 +753,7 @@ class MainActivity : AppCompatActivity() {
                 store.clearPart(folder.id, bone)
                 buildPartList(folder)
                 reloadSummoned(folder)
-                if (skeletonView.visibility == View.VISIBLE) skeletonView.load(folder)
+                if (rigRow.visibility == View.VISIBLE) skeletonView.load(folder)
             }
             row.addView(del)
         }
@@ -778,6 +848,9 @@ class MainActivity : AppCompatActivity() {
         for (b in parsed.bones.map { it.name }) {
             if (b !in depthBones && folder.partFile(b).isFile) depthBones.add(b)
         }
+        depthState.clear()
+        for ((bone, state) in parsed.stateOf()) depthState[bone] = state
+        depthStates = store.loadLogic(folder.id).states
         depthRules = parsed.swaps.toMutableList()
         wizardStage = 0
         buildDepthPane()
@@ -830,6 +903,14 @@ class MainActivity : AppCompatActivity() {
             name.addView(label(boneLabel(bone), 10f, MUTED))
             name.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             row.addView(name)
+
+            // The state chip: which switch this part belongs to. Tapping it is how a
+            // drawing becomes "the shirt" without the app having to know what a shirt is.
+            val stateChip = label(stateChipText(bone), 10f, MUTED)
+            stateChip.setPadding(dp(8), dp(6), dp(8), dp(6))
+            stateChip.background = getDrawable(R.drawable.menu_item_idle)
+            stateChip.setOnClickListener { askPartState(bone) }
+            row.addView(stateChip)
 
             val up = label("▲", 13f, INK)
             up.setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -1026,6 +1107,70 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** A limb is the bone plus everything hanging off it: picking the upper arm means the arm. */
+    /**
+     * The bone picker beside the canvas.
+     *
+     * Finding one hand among nineteen bones by tapping at a picture is guesswork at phone
+     * size. A column of names that zooms the canvas to the one you touched turns a hunt
+     * into a tap, and it doubles as the answer to "what is this rig actually made of".
+     */
+    private fun buildRigBonePanel() {
+        if (!::rigBoneList.isInitialized) return
+        rigBoneList.removeAllViews()
+        rigBoneList.addView(label(getString(R.string.rig_pick_bone), 9f, MUTED, bottom = 6))
+        val bones = skeletonView.rigBones()
+        val depth = RigEdit.depths(bones)
+        for (b in bones) {
+            val zh = boneLabel(b.name)
+            val row = label(
+                "  ".repeat(depth[b.name] ?: 0) + if (zh.isEmpty()) b.name else zh,
+                11f, INK,
+            )
+            row.setPadding(dp(5), dp(8), dp(5), dp(8))
+            row.background = getDrawable(
+                if (skeletonView.selected == b.name) R.drawable.menu_item_selected
+                else R.drawable.menu_item_idle
+            )
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(3) }
+            row.setOnClickListener {
+                skeletonView.focusOn(b.name)
+                buildRigBonePanel()
+            }
+            rigBoneList.addView(row)
+        }
+    }
+
+    private fun stateChipText(bone: String): String {
+        val state = depthState[bone] ?: return getString(R.string.depth_state_none)
+        val known = depthStates.firstOrNull { it.id == state }
+        return getString(R.string.depth_state) + (known?.name ?: state + "（已不存在）")
+    }
+
+    /**
+     * Put a part on a state, or take it off one.
+     *
+     * The parts are drawn by the depth editor's own order, and the state just says whether
+     * they are drawn at all — so "the clothes" is a list of bones this app never has to
+     * understand. It only has to draw what the switch says.
+     */
+    private fun askPartState(bone: String) {
+        val options = mutableListOf("" to getString(R.string.depth_state_none))
+        for (s in depthStates) options.add(s.id to s.name)
+        pickList(
+            title = getString(R.string.depth_state) + " · " + bone,
+            options = options,
+            hint = getString(R.string.depth_state_hint),
+            current = depthState[bone] ?: "",
+        ) { id ->
+            if (id.isEmpty()) depthState.remove(bone) else depthState[bone] = id
+            buildDepthPane()
+            true
+        }
+    }
+
     private fun withDescendants(folder: CharacterFolder, bone: String): List<String> {
         val parsed = try {
             CharacterSpec.parse(folder.specText())
@@ -1046,7 +1191,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveDepth(folder: CharacterFolder) {
-        val ok = store.saveDepth(folder.id, depthBones, depthRules)
+        val ok = store.saveDepth(folder.id, depthBones, depthRules, depthState)
         Toast.makeText(
             this,
             getString(if (ok) R.string.depth_saved else R.string.depth_save_failed),
@@ -1656,10 +1801,12 @@ class MainActivity : AppCompatActivity() {
         if (folder == null) {
             logicStats = mutableListOf()
             logicRules = mutableListOf()
+            logicStates = mutableListOf()
         } else {
             val spec = store.loadLogic(folder.id)
             logicStats = spec.stats.toMutableList()
             logicRules = spec.rules.toMutableList()
+            logicStates = spec.states.toMutableList()
         }
         buildLogicPane()
     }
@@ -1673,7 +1820,10 @@ class MainActivity : AppCompatActivity() {
      */
     private fun saveLogic() {
         val folder = summoned ?: return
-        store.saveLogic(folder.id, LogicSpec(logicStats.toList(), logicRules.toList()))
+        store.saveLogic(
+            folder.id,
+            LogicSpec(logicStats.toList(), logicRules.toList(), logicStates.toList()),
+        )
     }
 
     private fun buildLogicPane() {
@@ -1695,6 +1845,19 @@ class MainActivity : AppCompatActivity() {
         ).apply { bottomMargin = dp(4) }
         addStat.setOnClickListener { askEditStat(null) }
         logicList.addView(addStat)
+
+        logicList.addView(label(getString(R.string.logic_states), 15f, INK, top = 16, bottom = 4))
+        logicList.addView(label(getString(R.string.logic_states_hint), 11f, MUTED, bottom = 8))
+        for (state in logicStates.toList()) logicList.addView(stateRow(state))
+        val addState = label(getString(R.string.logic_add_state), 12f, INK)
+        addState.setPadding(dp(12), dp(9), dp(12), dp(9))
+        addState.background = getDrawable(R.drawable.menu_item_selected)
+        addState.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        addState.setOnClickListener { askEditState(null) }
+        logicList.addView(addState)
 
         logicList.addView(label(getString(R.string.logic_rules), 15f, INK, top = 16, bottom = 4))
         logicList.addView(label(getString(R.string.logic_rules_hint), 11f, MUTED, bottom = 10))
@@ -1788,6 +1951,122 @@ class MainActivity : AppCompatActivity() {
         }
         row.addView(remove)
         return row
+    }
+
+    private fun stateRow(state: StateSpec): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = getDrawable(R.drawable.menu_item_idle)
+            setPadding(dp(12), dp(9), dp(12), dp(9))
+            isClickable = true
+            isFocusable = true
+        }
+        row.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(5) }
+
+        val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        text.layoutParams = LinearLayout.LayoutParams(
+            0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+        )
+        text.addView(label(state.name, 14f, INK))
+        text.addView(
+            label(
+                "代号 " + state.id + " · 一开始是" +
+                    getString(if (state.initial) R.string.logic_state_on else R.string.logic_state_off),
+                10f, MUTED,
+            )
+        )
+        row.addView(text)
+        row.setOnClickListener { askEditState(state) }
+
+        val remove = label(getString(R.string.action_delete), 11f, MUTED)
+        remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+        remove.setOnClickListener {
+            logicStates.removeAll { it.id == state.id }
+            saveLogic()
+            buildLogicPane()
+        }
+        row.addView(remove)
+        return row
+    }
+
+    private fun askEditState(existing: StateSpec?) {
+        var initial = existing?.initial ?: false
+        val idInput = EditText(this).apply {
+            setText(existing?.id ?: nextStateId())
+            hint = getString(R.string.logic_state_id)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val nameInput = EditText(this).apply {
+            setText(existing?.name ?: "")
+            hint = getString(R.string.logic_state_name)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val chipViews = mutableListOf<TextView>()
+        for (labelText in listOf(getString(R.string.logic_state_off), getString(R.string.logic_state_on))) {
+            val chip = label(labelText, 12f, INK)
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                initial = labelText == getString(R.string.logic_state_on)
+                paintChips(chipViews, listOf("off", "on"), { if (initial) "on" else "off" })
+            }
+            chipViews.add(chip)
+            chips.addView(chip)
+        }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        box.addView(idInput)
+        box.addView(nameInput)
+        box.addView(label(getString(R.string.logic_state_initial), 11f, MUTED, top = 8, bottom = 6))
+        box.addView(chips)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) R.string.logic_add_state else R.string.logic_states)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextStateId() }
+                val name = nameInput.text.toString().trim().ifEmpty { id }
+                logicStates.removeAll { it.id == id || (existing != null && it.id == existing.id) }
+                logicStates.add(StateSpec(id, name, initial))
+                saveLogic()
+                buildLogicPane()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+        paintChips(chipViews, listOf("off", "on"), { if (initial) "on" else "off" })
+    }
+
+    private fun nextStateId(): String {
+        val taken = logicStates.map { it.id }.toSet()
+        var n = 1
+        while (("state" + n) in taken) n++
+        return "state" + n
+    }
+
+    private fun stateName(id: String): String =
+        logicStates.firstOrNull { it.id == id }?.name ?: id
+
+    private fun pickState(title: String, onPick: (String) -> Unit) {
+        pickList(
+            title = title,
+            options = logicStates.map { it.id to it.name },
+            hint = getString(R.string.logic_no_states),
+            current = null,
+        ) { id ->
+            onPick(id)
+            true
+        }
     }
 
     private fun askEditStat(existing: StatSpec?) {
@@ -1966,7 +2245,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun conditionText(c: ConditionSpec): String =
-        statName(c.stat) + " " + opSymbol(c.op) + " " + trim(c.value)
+        if (c.kind == "state") {
+            stateName(c.state) + getString(
+                if (c.op == "off") R.string.logic_state_is_off else R.string.logic_state_is_on
+            )
+        } else {
+            statName(c.stat) + " " + opSymbol(c.op) + " " + trim(c.value)
+        }
 
     private fun opSymbol(op: String): String = when (op) {
         ">=" -> "≥"
@@ -1996,6 +2281,9 @@ class MainActivity : AppCompatActivity() {
         "impulse" -> "推一下 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "break" -> "打坏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "wait" -> "等 " + trim(a.value) + " 秒"
+        "stateOn" -> "打开「" + stateName(a.state) + "」"
+        "stateOff" -> "关闭「" + stateName(a.state) + "」"
+        "stateToggle" -> "切换「" + stateName(a.state) + "」"
         else -> a.kind
     }
 
@@ -2049,8 +2337,35 @@ class MainActivity : AppCompatActivity() {
     private fun askCondition(index: Int, condIndex: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val existing = rule.conditions.getOrNull(condIndex)
+        // Two things a character can be asked about: a number it carries, and a fact about
+        // it. The kind chips switch between them; the rest of the dialog is the same shape.
+        var kind = if (existing?.kind == "state") "state" else "stat"
         var stat = existing?.stat ?: logicStats.firstOrNull()?.id ?: ""
         var op = existing?.op ?: ">="
+        var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
+        var stateOn = existing?.op != "off"
+
+        val kindChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val kindViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "stat" to getString(R.string.logic_cond_stat),
+            "state" to getString(R.string.logic_cond_state),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                kind = id
+                paintChips(kindViews, listOf("stat", "state"), { kind })
+                statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
+                stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
+            }
+            kindViews.add(chip)
+            kindChips.addView(chip)
+        }
 
         val statChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val statViews = mutableListOf<TextView>()
@@ -2090,22 +2405,80 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.logic_pick_value), existing?.value ?: 50f, 5f, 0f, 999f,
         ) { trim(it) }
 
+        val statBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        statBox.addView(label(getString(R.string.logic_pick_stat), 11f, MUTED, bottom = 6))
+        statBox.addView(statChips)
+        statBox.addView(label(getString(R.string.logic_pick_op), 11f, MUTED, top = 10, bottom = 6))
+        statBox.addView(opChips)
+        statBox.addView(valueRow)
+
+        val stateChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val stateViews = mutableListOf<TextView>()
+        for (s in logicStates) {
+            val chip = label(s.name, 12f, INK)
+            chip.setPadding(dp(10), dp(8), dp(10), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                state = s.id
+                paintChips(stateViews, logicStates.map { it.id }, { state })
+            }
+            stateViews.add(chip)
+            stateChips.addView(chip)
+        }
+        val onOffChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val onOffViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "on" to getString(R.string.logic_state_on),
+            "off" to getString(R.string.logic_state_off),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                stateOn = id == "on"
+                paintChips(onOffViews, listOf("on", "off"), { if (stateOn) "on" else "off" })
+            }
+            onOffViews.add(chip)
+            onOffChips.addView(chip)
+        }
+
+        val stateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        stateBox.addView(label(getString(R.string.logic_pick_state), 11f, MUTED, bottom = 6))
+        stateBox.addView(stateChips)
+        if (logicStates.isEmpty()) {
+            stateBox.addView(label(getString(R.string.logic_no_states), 11f, MUTED, bottom = 4))
+        }
+        stateBox.addView(label(getString(R.string.logic_state_is), 11f, MUTED, top = 10, bottom = 6))
+        stateBox.addView(onOffChips)
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
         }
-        box.addView(label(getString(R.string.logic_pick_stat), 11f, MUTED, bottom = 6))
-        box.addView(statChips)
-        box.addView(label(getString(R.string.logic_pick_op), 11f, MUTED, top = 10, bottom = 6))
-        box.addView(opChips)
-        box.addView(valueRow)
+        box.addView(label(getString(R.string.logic_cond_kind), 11f, MUTED, bottom = 6))
+        box.addView(kindChips)
+        box.addView(statBox)
+        box.addView(stateBox)
 
         val builder = AlertDialog.Builder(this)
-            .setTitle(R.string.logic_pick_stat)
+            .setTitle(R.string.logic_cond_kind)
             .setView(box)
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val conditions = rule.conditions.toMutableList()
-                val spec = ConditionSpec(kind = "stat", stat = stat, op = op, value = valueOf())
+                val spec = if (kind == "state") {
+                    ConditionSpec(
+                        kind = "state", stat = "", op = if (stateOn) "on" else "off",
+                        value = 0f, state = state,
+                    )
+                } else {
+                    ConditionSpec(kind = "stat", stat = stat, op = op, value = valueOf())
+                }
                 if (condIndex in conditions.indices) conditions[condIndex] = spec else conditions.add(spec)
                 putRule(index, rule.copy(conditions = conditions))
             }
@@ -2118,8 +2491,13 @@ class MainActivity : AppCompatActivity() {
             }
         }
         builder.show()
+        paintChips(kindViews, listOf("stat", "state"), { kind })
         paintChips(statViews, logicStats.map { it.id }, { stat })
         paintChips(opViews, CompareOp.values().map { it.id }, { op })
+        paintChips(stateViews, logicStates.map { it.id }, { state })
+        paintChips(onOffViews, listOf("on", "off"), { if (stateOn) "on" else "off" })
+        statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
+        stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
     }
 
     private fun askAction(index: Int, actionIndex: Int) {
@@ -2192,6 +2570,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 "seconds" -> askNumber(getString(R.string.logic_pick_value), existing?.value ?: 0.5f, 0f, 30f) { v ->
                     putAction(index, actionIndex, ActionSpec(kind.id, value = v))
+                }
+                "state" -> pickState(getString(R.string.logic_pick_state)) { state ->
+                    putAction(index, actionIndex, ActionSpec(kind.id, state = state))
                 }
                 else -> putAction(index, actionIndex, ActionSpec(kind.id))
             }

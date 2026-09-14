@@ -86,6 +86,17 @@ class CharacterStore(private val context: Context) {
             .map { CharacterFolder(it) }
     }
 
+    /**
+     * Remove a package and everything in it: the rig, the drawings, the rules, the poses.
+     *
+     * There is no undo and no copy anywhere else. That is why the caller asks twice.
+     */
+    fun deleteCharacter(id: String): Boolean {
+        val dir = File(root, id)
+        if (!dir.isDirectory) return false
+        return dir.deleteRecursively()
+    }
+
     fun folder(id: String): CharacterFolder? {
         val dir = File(root, id)
         return if (File(dir, "character.json").isFile) CharacterFolder(dir) else null
@@ -149,6 +160,8 @@ class CharacterStore(private val context: Context) {
         id: String,
         backToFront: List<String>,
         swaps: List<SwapRuleSpec>,
+        /** Bone to the state it needs. A part with no state is always there. */
+        stateOf: Map<String, String> = emptyMap(),
     ): Boolean {
         val folder = folder(id) ?: return false
         return try {
@@ -156,7 +169,10 @@ class CharacterStore(private val context: Context) {
 
             val layers = JSONArray()
             backToFront.forEachIndexed { index, bone ->
-                layers.put(JSONObject().put("bone", bone).put("z", 10 + index * 10))
+                val o = JSONObject().put("bone", bone).put("z", 10 + index * 10)
+                val state = stateOf[bone]
+                if (!state.isNullOrEmpty()) o.put("state", state)
+                layers.put(o)
             }
             root.put("layers", layers)
 
@@ -250,9 +266,24 @@ class CharacterStore(private val context: Context) {
             val live = bones.map { it.name }.toSet()
             val order = backToFront.filter { it in live } +
                 bones.map { it.name }.filter { it !in backToFront }
+
+            // Rebuilding the order must not throw away which state each part belongs to:
+            // that tag is the only thing that knows a shirt is a shirt.
+            val oldState = HashMap<String, String>()
+            val oldLayers = root.optJSONArray("layers")
+            for (i in 0 until (oldLayers?.length() ?: 0)) {
+                val l = oldLayers!!.getJSONObject(i)
+                val state = l.optString("state", "")
+                if (state.isEmpty()) continue
+                val name = l.getString("bone")
+                oldState[renames[name] ?: name] = state
+            }
             val layers = JSONArray()
             order.forEachIndexed { index, bone ->
-                layers.put(JSONObject().put("bone", bone).put("z", 10 + index * 10))
+                val o = JSONObject().put("bone", bone).put("z", 10 + index * 10)
+                val state = oldState[bone]
+                if (!state.isNullOrEmpty()) o.put("state", state)
+                layers.put(o)
             }
             root.put("layers", layers)
 

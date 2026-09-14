@@ -176,8 +176,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         renderer = if (loaded.isEmpty) null else PartRenderer(
             built,
             loaded,
-            parsed.layers.sortedBy { it.z }.map { it.bone },
+            parsed.drawOrder(),
             parsed.swaps,
+            parsed.stateOf(),
         )
 
         ragdoll = Ragdoll(built, parsed, stiffness)
@@ -407,6 +408,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         val actions = engine?.step(dt) ?: emptyList()
         if (actions.isNotEmpty()) perform(actions, null)
+        // Handed over every frame rather than once: the renderer is rebuilt whenever the
+        // rig changes, and a stale state map would show clothes that are not being worn.
+        engine?.let { renderer?.states = it.states }
 
         val pins = heldBones.entries.mapNotNull { entry ->
             heldTargets[entry.key]?.let { Ragdoll.Pin(entry.value, it) }
@@ -625,6 +629,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     4f * density, 4f * density, barPaint,
                 )
                 y += 14f * density
+            }
+
+            // Which switches are on. They change what is drawn, so a part that has gone
+            // missing is a rule question, and the answer belongs on the bench.
+            val on = e.spec.states.filter { e.stateOn(it.id) }
+            if (on.isNotEmpty()) {
+                canvas.drawText(
+                    "状态 " + on.joinToString(" ") { it.name },
+                    10f * density, y + 9f * density, smallPaint,
+                )
             }
         }
 

@@ -5,6 +5,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
+ * A named switch the character owns: 穿衣服, 睡着了, 拿着刀…
+ *
+ * Not a number — an on/off fact about the character that its artwork and its rules can
+ * both read. Layers tag themselves with one (a part that only exists while the state is
+ * on), rules test one, and rules set one. That is the whole mechanism; what it means is
+ * whatever the person writing the rules decides it means.
+ */
+data class StateSpec(val id: String, val name: String, val initial: Boolean)
+
+/**
  * One clause of a rule's IF.
  *
  * [kind] is a string rather than an enum because this is a file format: a rule the user
@@ -16,6 +26,8 @@ data class ConditionSpec(
     val stat: String,
     val op: String,
     val value: Float,
+    /** For kind = "state": which state, and [op] is "on" or "off". */
+    val state: String = "",
 )
 
 /**
@@ -31,6 +43,8 @@ data class ActionSpec(
     val value: Float = 0f,
     val bone: String = "",
     val prop: String = "",
+    /** For the three state actions: which state to turn on, off, or over. */
+    val state: String = "",
 )
 
 /**
@@ -60,7 +74,10 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     BURST("burst", "喷粒子", "burst"),
     IMPULSE("impulse", "推一下", "boneValue"),
     BREAK("break", "打坏部位", "bone"),
-    WAIT("wait", "等一会儿", "seconds");
+    WAIT("wait", "等一会儿", "seconds"),
+    STATE_ON("stateOn", "打开状态", "state"),
+    STATE_OFF("stateOff", "关闭状态", "state"),
+    STATE_TOGGLE("stateToggle", "切换状态", "state");
 
     companion object {
         fun of(id: String): ActionKind = values().firstOrNull { it.id == id } ?: SAY
@@ -90,6 +107,7 @@ enum class CompareOp(val id: String, val label: String) {
 class LogicSpec(
     val stats: List<StatSpec>,
     val rules: List<RuleSpec>,
+    val states: List<StateSpec> = emptyList(),
 ) {
 
     fun rule(index: Int): RuleSpec? = rules.getOrNull(index)
@@ -111,6 +129,13 @@ class LogicSpec(
                 )
             }
 
+            val stateArr = o.optJSONArray("states")
+            val states = (0 until (stateArr?.length() ?: 0)).map { i ->
+                val s = stateArr!!.getJSONObject(i)
+                val id = s.optString("id", "state" + i)
+                StateSpec(id, s.optString("name", id), s.optBoolean("on", false))
+            }
+
             val ruleArr = o.optJSONArray("rules")
             val rules = (0 until (ruleArr?.length() ?: 0)).map { i ->
                 val r = ruleArr!!.getJSONObject(i)
@@ -126,6 +151,7 @@ class LogicSpec(
                             stat = c.optString("stat", ""),
                             op = c.optString("op", ">="),
                             value = c.optDouble("value", 0.0).toFloat(),
+                            state = c.optString("state", ""),
                         )
                     },
                     actions = (0 until (actArr?.length() ?: 0)).map { j ->
@@ -137,6 +163,7 @@ class LogicSpec(
                             value = a.optDouble("value", 0.0).toFloat(),
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
+                            state = a.optString("state", ""),
                         )
                     },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
@@ -144,7 +171,7 @@ class LogicSpec(
                 )
             }
             if (stats.isEmpty()) return parse(DEFAULT)
-            return LogicSpec(stats, rules)
+            return LogicSpec(stats, rules, states)
         }
 
         fun toJson(spec: LogicSpec): String {
@@ -162,6 +189,12 @@ class LogicSpec(
             }
             root.put("stats", stats)
 
+            val states = JSONArray()
+            for (s in spec.states) {
+                states.put(JSONObject().put("id", s.id).put("name", s.name).put("on", s.initial))
+            }
+            root.put("states", states)
+
             val rules = JSONArray()
             for (r in spec.rules) {
                 val conds = JSONArray()
@@ -170,6 +203,7 @@ class LogicSpec(
                         JSONObject()
                             .put("kind", c.kind).put("stat", c.stat)
                             .put("op", c.op).put("value", c.value.toDouble())
+                            .put("state", c.state)
                     )
                 }
                 val acts = JSONArray()
@@ -177,7 +211,8 @@ class LogicSpec(
                     acts.put(
                         JSONObject()
                             .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
-                            .put("value", a.value.toDouble()).put("bone", a.bone).put("prop", a.prop)
+                            .put("value", a.value.toDouble()).put("bone", a.bone)
+                            .put("prop", a.prop).put("state", a.state)
                     )
                 }
                 rules.put(
@@ -203,6 +238,10 @@ class LogicSpec(
   "stats": [
     { "id": "H", "name": "生命", "value": 100, "min": 0, "max": 100 },
     { "id": "P", "name": "痛苦", "value": 0, "min": 0, "max": 100 }
+  ],
+  "states": [
+    { "id": "dressed", "name": "穿着", "on": false },
+    { "id": "hurt", "name": "受伤", "on": false }
   ],
   "rules": [
     {
@@ -243,6 +282,16 @@ class LogicSpec(
         { "kind": "clearPose", "text": "" },
         { "kind": "burst", "text": "blood", "value": 14 }
       ]
+    },
+    {
+      "on": "click", "part": "", "cooldown": 0.6, "once": false,
+      "if": [ { "kind": "stat", "stat": "H", "op": ">", "value": 0 } ],
+      "then": [ { "kind": "stateToggle", "state": "dressed" } ]
+    },
+    {
+      "on": "thrown", "part": "", "cooldown": 5.0, "once": false,
+      "if": [ { "kind": "state", "stat": "", "state": "dressed", "op": "on" } ],
+      "then": [ { "kind": "say", "text": "别弄脏衣服！" } ]
     },
     {
       "on": "click", "part": "", "cooldown": 0.6, "once": false,

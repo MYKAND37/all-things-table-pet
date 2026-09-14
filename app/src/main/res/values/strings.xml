@@ -17,6 +17,8 @@
     <string name="pets_title">桌宠</string>
     <string name="pets_subtitle">点开一只，给它导入部位图片</string>
     <string name="pet_back">返回</string>
+    <string name="pet_delete_confirm">删掉整只「%1$s」？\n\n%2$d 根骨骼、%3$d 张已导入的图、加上它的规则和动作，全部一起删掉，没有回收站。\n\n（内置那只是随 App 装的，重新安装就会回来，但它带着的东西不会。）</string>
+    <string name="pet_deleted">已删除</string>
     <string name="pet_edit_rig">看骨架 / 摆姿势</string>
     <string name="pet_parts_title">部位</string>
     <string name="part_empty">未导入</string>
@@ -79,6 +81,8 @@
     <string name="rig_new_bone">新建骨骼</string>
     <string name="rig_new_bone_hint">选一个父级，然后在画布上点两下画出这根骨骼。</string>
     <string name="rig_bone_name">骨骼名字</string>
+    <string name="rig_pick_bone">点一个骨骼，画面会放大到它</string>
+    <string name="rig_hint_zoom">双指缩放 · 单指拖空白处平移 · 点右边选骨骼</string>
     <string name="rig_bone_none">（无 · 作为根骨骼）</string>
     <string name="rig_bone_root">根骨骼 · 没有父级</string>
     <string name="rig_bone_parent">父级：</string>
@@ -124,6 +128,26 @@
     <!-- 逻辑管理 -->
     <string name="logic_stats">数值</string>
     <string name="logic_stats_hint">角色身上的数字。H 归零会死、P 太高会休克——不过那是你自己写规则说了算。</string>
+    <string name="logic_states">状态</string>
+    <string name="logic_states_hint">状态是开关。一个部位可以只在某个状态打开时才画出来（比如「穿着」），规则既能读它，也能翻它。</string>
+    <string name="logic_add_state">＋ 加状态</string>
+    <string name="logic_state_id">代号（英文，规则和部位都用它）</string>
+    <string name="logic_state_name">显示名</string>
+    <string name="logic_state_initial">一开始是</string>
+    <string name="logic_state_on">开</string>
+    <string name="logic_state_off">关</string>
+    <string name="logic_state_is">它是</string>
+    <string name="logic_state_is_on"> 开着</string>
+    <string name="logic_state_is_off"> 关着</string>
+    <string name="logic_no_states">还没有状态。去「逻辑管理」上面加一个。</string>
+    <string name="logic_pick_state">哪个状态</string>
+    <string name="logic_cond_kind">测什么</string>
+    <string name="logic_cond_stat">数值</string>
+    <string name="logic_cond_state">状态</string>
+    <string name="depth_state">状态：</string>
+    <string name="depth_state_none">总是画</string>
+    <string name="depth_state_hint">选一个状态，这个部位就只在那个状态打开时才画出来。给衣服的每个部位都选「穿着」。</string>
+
     <string name="logic_rules">规则</string>
     <string name="logic_rules_hint">点任何一个方块改它。「当」是发生了什么事，「如果」是还要满足什么，「就」是做什么。</string>
     <string name="logic_add_stat">＋ 加数值</string>

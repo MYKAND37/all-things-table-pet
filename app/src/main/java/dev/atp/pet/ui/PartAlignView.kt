@@ -104,7 +104,7 @@ class PartAlignView @JvmOverloads constructor(
         renderer = if (loaded.isEmpty) null else PartRenderer(
             built,
             loaded,
-            parsed.layers.sortedBy { it.z }.map { it.bone },
+            parsed.drawOrder(),
         )
 
         source = bitmap

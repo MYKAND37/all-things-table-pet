@@ -27,6 +27,8 @@ class PartRenderer(
     /** Bone names in back-to-front draw order. */
     drawOrder: List<String>,
     private val swaps: List<SwapRuleSpec> = emptyList(),
+    /** Bone name to the state it needs. Empty for a part that is always there. */
+    private val stateOf: Map<String, String> = emptyMap(),
 ) {
     /**
      * Bones whose artwork is gone: a broken part, or one the rules removed.
@@ -36,6 +38,15 @@ class PartRenderer(
      * character the moment it got hurt.
      */
     var hidden: Set<String> = emptySet()
+
+    /**
+     * Which state each bone's artwork belongs to, and which states are on right now.
+     *
+     * A bone with no tag always draws. A bone tagged with a state the character no longer
+     * declares also always draws: a deleted state should show the artwork it was hiding,
+     * not hide it forever behind a name nobody can see any more.
+     */
+    var states: Map<String, Boolean> = emptyMap()
 
     private val restWorld = HashMap<String, Transform>()
     private val baseOrder = drawOrder.filter { library.parts.containsKey(it) }
@@ -120,6 +131,8 @@ class PartRenderer(
     fun draw(canvas: Canvas) {
         for (name in currentOrder()) {
             if (name in hidden) continue
+            val needed = stateOf[name]
+            if (needed != null && states[needed] == false) continue
             val part = library.parts[name] ?: continue
             val bone = skeleton.find(name) ?: continue
             val rest = restWorld[name] ?: continue

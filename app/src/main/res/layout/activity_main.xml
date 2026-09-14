@@ -287,11 +287,36 @@
             </FrameLayout>
 
             <!-- ── 桌宠管理：骨骼编辑器 ─────────────── -->
-            <dev.atp.pet.ui.SkeletonView
-                android:id="@+id/skeletonView"
+            <LinearLayout
+                android:id="@+id/rigRow"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:visibility="gone" />
+                android:orientation="horizontal"
+                android:visibility="gone">
+
+                <dev.atp.pet.ui.SkeletonView
+                    android:id="@+id/skeletonView"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1" />
+
+                <!-- 骨骼选择栏。画布要留得下微调，所以它只有一列名字宽。 -->
+                <ScrollView
+                    android:id="@+id/rigBoneScroll"
+                    android:layout_width="96dp"
+                    android:layout_height="match_parent"
+                    android:background="@drawable/glass_panel"
+                    android:padding="4dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/rigBoneList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="4dp" />
+                </ScrollView>
+            </LinearLayout>
 
             <HorizontalScrollView
                 android:id="@+id/rigBarScroll"

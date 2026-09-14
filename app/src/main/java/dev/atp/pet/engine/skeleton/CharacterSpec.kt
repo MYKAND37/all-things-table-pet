@@ -35,7 +35,14 @@ data class BoneSpec(
 /** A limb the user can drag by its end, solved as a two-segment chain. */
 data class IkChainSpec(val upper: String, val lower: String, val bend: Float)
 
-data class LayerSpec(val bone: String, val z: Int)
+/**
+ * One part in the draw order.
+ *
+ * [state] is an optional name from the character's own logic: the part is drawn only while
+ * that state is on. That is what "穿衣服 / 不穿衣服" is — the same rig, wearing a different
+ * set of artwork — and it costs one layer field rather than a whole second character.
+ */
+data class LayerSpec(val bone: String, val z: Int, val state: String = "")
 
 /**
  * A depth rule: when [triggerBone] reaches past [referenceBone], the [parts] are drawn the
@@ -85,6 +92,13 @@ class CharacterSpec(
     /** Width of the play area. Wider than the canvas: the pet needs room to be thrown. */
     val worldWidth: Float,
 ) {
+
+    /** Back to front. Everything that draws asks for this rather than sorting layers. */
+    fun drawOrder(): List<String> = layers.sortedBy { it.z }.map { it.bone }
+
+    /** Bones that only draw while a named state is on. A bone missing here always draws. */
+    fun stateOf(): Map<String, String> =
+        layers.filter { it.state.isNotEmpty() }.associate { it.bone to it.state }
 
     /**
      * Bake authored head/tail pairs into parent-relative rest transforms.
@@ -191,7 +205,7 @@ class CharacterSpec(
             val layersArr = o.optJSONArray("layers")
             val layers = (0 until (layersArr?.length() ?: 0)).map { i ->
                 val l = layersArr!!.getJSONObject(i)
-                LayerSpec(l.getString("bone"), l.getInt("z"))
+                LayerSpec(l.getString("bone"), l.getInt("z"), l.optString("state", ""))
             }.toMutableList()
 
             val swapsArr = o.optJSONArray("layerSwaps")
