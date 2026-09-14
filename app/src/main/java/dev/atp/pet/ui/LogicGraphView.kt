@@ -104,13 +104,15 @@ class LogicGraphView @JvmOverloads constructor(
     private fun colourOf(role: Int): Int = when (role) {
         0 -> 0xFF6C4CE0.toInt()
         1 -> 0xFFE08A2E.toInt()
-        else -> 0xFF2E9E6B.toInt()
+        2 -> 0xFF2E9E6B.toInt()
+        else -> 0xFF7A7A88.toInt()
     }
 
     private fun labelOf(role: Int): String = when (role) {
         0 -> "当"
         1 -> "如果"
-        else -> "就"
+        2 -> "就"
+        else -> "否则"
     }
 
     // -- layout -------------------------------------------------------------

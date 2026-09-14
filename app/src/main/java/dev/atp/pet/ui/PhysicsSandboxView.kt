@@ -325,9 +325,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 "impulse" -> {
                     val rag = ragdoll ?: continue
                     val sk = skeleton ?: continue
-                    val bone = sk.find(a.bone.ifEmpty { event?.part ?: "" })
-                        ?: sk.root
-                    val dir = Vec2(0f, -1f)
+                    val bone = sk.find(a.bone.ifEmpty { event?.part ?: "" }) ?: sk.root
+                    // "Push it away from whatever hit it" is the only one of these that
+                    // needs the event, and it is the one that reads as physics rather than
+                    // as animation.
+                    val away = pointOf(event) - sk.root.worldPosition
+                    val dir = when (a.text) {
+                        "down" -> Vec2(0f, 1f)
+                        "left" -> Vec2(-1f, 0f)
+                        "right" -> Vec2(1f, 0f)
+                        "away" -> if (away.length() < 1f) Vec2(0f, -1f) else away.normalized()
+                        else -> Vec2(0f, -1f)
+                    }
                     rag.impulse(bone, dir, a.value)
                 }
                 "break" -> {

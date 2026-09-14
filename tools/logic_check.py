@@ -131,16 +131,20 @@ class Engine:
                 continue
             if index in self.fired_once:
                 continue
+            holds = self.holds(rule)
+            # Without an else, a rule whose conditions fail is skipped WITHOUT consuming
+            # its cooldown, so it can fire the instant they become true. That is what every
+            # rule did before there was an else, and it has to keep doing it.
+            if not holds and not rule.get("else"):
+                continue
             last = self.last_fired.get(index)
             cd = rule.get("cooldown", 0.0)
             if cd > 0 and last is not None and self.clock - last < cd:
                 continue
-            if not self.holds(rule):
-                continue
             self.last_fired[index] = self.clock
             if rule.get("once"):
                 self.fired_once.add(index)
-            out.extend(self.run(rule.get("then", [])))
+            out.extend(self.run(rule.get("then", []) if holds else rule.get("else", [])))
         return out
 
     def handle(self, etype, part="", value=0.0, prop=""):
@@ -211,14 +215,19 @@ def main():
 
     print("\nevent matching")
     e = Engine(default)
+    # The shipped file has two click rules and they run in order: the first toggles 穿着,
+    # the second comments on the state the first one just set. Which is the whole reason
+    # rules run in the order they are written, and the two branches of the second one are
+    # the whole reason there is an else.
     out = e.handle("click")
-    report("click -> says something", says(out) == ["干嘛？"], str(says(out)))
+    report("click toggles 穿着 and then comments on it", says(out) == ["好看吗？"], str(says(out)))
     report("the pain stayed put", e.value["P"] == 0.0)
     out = e.handle("click")
     report("cooldown blocks an immediate second click", says(out) == [], str(says(out)))
     e.clock += 1.0
     out = e.handle("click")
-    report("and lets it through after the cooldown", says(out) == ["干嘛？"])
+    report("and after the cooldown the state flips back to the other branch",
+           says(out) == ["干嘛？"], str(says(out)))
     report("an unknown event type changes nothing", e.handle("nonsense") == [])
 
     print("\npart matching")
@@ -298,6 +307,46 @@ def main():
                      "then": [{"kind": "say", "text": "低了"}]}]})
     out = e.handle("tick")
     report("the second rule sees the first rule's change", "低了" in says(out), str(says(out)))
+
+    print("\n否则: the other half of a condition")
+    spec = {"stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100}],
+            "rules": [{"on": "tick", "cooldown": 0.0,
+                       "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                       "then": [{"kind": "say", "text": "还好"}],
+                       "else": [{"kind": "say", "text": "不行了"}]}]}
+    e = Engine(spec)
+    report("conditions hold -> the then branch", says(e.handle("tick")) == ["还好"])
+    e.value["H"] = 10.0
+    report("conditions fail -> the else branch", says(e.handle("tick")) == ["不行了"])
+
+    e = Engine({"stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],
+                "rules": [{"on": "tick", "cooldown": 2.0,
+                           "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                           "then": [{"kind": "say", "text": "then"}],
+                           "else": [{"kind": "say", "text": "else"}]}]})
+    report("the cooldown covers the else branch too", says(e.handle("tick")) == ["else"])
+    report("so it does not fire again immediately", says(e.handle("tick")) == [])
+    e.clock += 3.0
+    report("and it comes back after the cooldown", says(e.handle("tick")) == ["else"])
+
+    e = Engine({"stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],
+                "rules": [{"on": "tick", "once": True, "cooldown": 0.0,
+                           "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                           "then": [{"kind": "say", "text": "then"}],
+                           "else": [{"kind": "say", "text": "else"}]}]})
+    report("once counts whichever branch ran", says(e.handle("tick")) == ["else"])
+    e.clock += 100
+    report("and it is done either way", says(e.handle("tick")) == [])
+
+    # The old behaviour: no else, conditions fail, cooldown untouched.
+    e = Engine({"stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],
+                "rules": [{"on": "tick", "cooldown": 5.0,
+                           "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                           "then": [{"kind": "say", "text": "now"}]}]})
+    report("no else, conditions fail: nothing happens", says(e.handle("tick")) == [])
+    e.value["H"] = 100.0
+    report("and it fires the instant they hold, despite the cooldown",
+           says(e.handle("tick")) == ["now"])
 
     print("\nstates are switches, and rules can read and flip them")
     e = Engine(default)

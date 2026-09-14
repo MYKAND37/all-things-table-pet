@@ -169,7 +169,7 @@ class MainActivity : AppCompatActivity() {
             when (node.role) {
                 0 -> askRuleSettings(rule)
                 1 -> askCondition(rule, node.index)
-                else -> askAction(rule, node.index)
+                else -> askAction(rule, node.index, node.role == 3)
             }
         }
         skeletonView = findViewById(R.id.skeletonView)
@@ -1866,6 +1866,16 @@ class MainActivity : AppCompatActivity() {
             for ((ai, a) in rule.actions.withIndex()) {
                 row.add(LogicGraphView.Node(2, listOf(actionText(a)), ai))
             }
+            // The else branch continues the same line rather than branching geometrically.
+            // A row that reads left to right is still unambiguous, and a real fork would
+            // need a layout that reserves space for the shorter side -- which is a lot of
+            // machinery for a box that says 否则 on it.
+            if (rule.elseActions.isNotEmpty()) {
+                row.add(LogicGraphView.Node(3, listOf("都不成立时"), -1))
+                for ((ai, a) in rule.elseActions.withIndex()) {
+                    row.add(LogicGraphView.Node(3, listOf(actionText(a)), ai))
+                }
+            }
             graph.add(row)
         }
         logicGraph.setRules(graph)
@@ -1939,6 +1949,21 @@ class MainActivity : AppCompatActivity() {
             logicRules[index] = rule.copy(once = !rule.once)
             saveLogic()
             buildLogicPane()
+        }
+        if (rule.elseActions.isEmpty()) {
+            row(getString(R.string.logic_add_else)) {
+                logicRules[index] = rule.copy(
+                    elseActions = listOf(ActionSpec("say", text = "……")),
+                )
+                saveLogic()
+                buildLogicPane()
+            }
+        } else {
+            row(getString(R.string.logic_remove_else)) {
+                logicRules[index] = rule.copy(elseActions = emptyList())
+                saveLogic()
+                buildLogicPane()
+            }
         }
         row(getString(R.string.logic_delete_rule)) {
             logicRules.removeAt(index)
@@ -2304,6 +2329,11 @@ class MainActivity : AppCompatActivity() {
         return "state" + n
     }
 
+    private fun directionText(id: String): String {
+        val entry = DIRECTIONS.firstOrNull { it.first == id } ?: return ""
+        return getString(entry.second)
+    }
+
     private fun liquidName(id: String): String =
         logicLiquids.firstOrNull { it.id == id }?.name ?: id
 
@@ -2432,7 +2462,8 @@ class MainActivity : AppCompatActivity() {
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
         "burst" -> "喷" + ParticleKind.of(a.text).label
-        "impulse" -> "推一下 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
+        "impulse" -> "推" + directionText(a.text) + " " +
+            (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "break" -> "打坏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "wait" -> "等 " + trim(a.value) + " 秒"
         "stateOn" -> "打开「" + stateName(a.state) + "」"
@@ -2658,9 +2689,10 @@ class MainActivity : AppCompatActivity() {
         stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
     }
 
-    private fun askAction(index: Int, actionIndex: Int) {
+    private fun askAction(index: Int, actionIndex: Int, isElse: Boolean = false) {
         val rule = logicRules.getOrNull(index) ?: return
-        val existing = rule.actions.getOrNull(actionIndex)
+        val branch = if (isElse) rule.elseActions else rule.actions
+        val existing = branch.getOrNull(actionIndex)
         pickList(
             title = getString(R.string.logic_pick_action),
             options = ActionKind.values().map { it.id to it.label },
@@ -2668,9 +2700,12 @@ class MainActivity : AppCompatActivity() {
             current = existing?.kind,
             onDelete = if (actionIndex >= 0) {
                 {
-                    val actions = rule.actions.toMutableList()
+                    val actions = branch.toMutableList()
                     if (actionIndex in actions.indices) actions.removeAt(actionIndex)
-                    putRule(index, rule.copy(actions = actions))
+                    putRule(
+                        index,
+                        if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
+                    )
                 }
             } else {
                 null
@@ -2679,16 +2714,16 @@ class MainActivity : AppCompatActivity() {
             val kind = ActionKind.of(id)
             when (kind.needs) {
                 "text" -> askText(getString(R.string.logic_pick_text), existing?.text ?: "") { text ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, text = text))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = text))
                 }
                 "stat" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 10f) { v ->
-                        putAction(index, actionIndex, ActionSpec(kind.id, stat = stat, value = v))
+                        putAction(index, actionIndex, isElse, ActionSpec(kind.id, stat = stat, value = v))
                     }
                 }
                 "statValue" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 100f) { v ->
-                        putAction(index, actionIndex, ActionSpec(kind.id, stat = stat, value = v))
+                        putAction(index, actionIndex, isElse, ActionSpec(kind.id, stat = stat, value = v))
                     }
                 }
                 "pose" -> pickList(
@@ -2697,7 +2732,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_no_poses),
                     existing?.text,
                 ) { name ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, text = name))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = name))
                     true
                 }
                 "prop" -> pickList(
@@ -2706,7 +2741,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.sandbox_props_empty),
                     existing?.prop,
                 ) { propId ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, prop = propId))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, prop = propId))
                     true
                 }
                 "burst" -> pickList(
@@ -2715,22 +2750,33 @@ class MainActivity : AppCompatActivity() {
                     "",
                     existing?.text,
                 ) { burstId ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
                     true
                 }
                 "bone" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, bone = bone))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, bone = bone))
                 }
                 "boneValue" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 400f) { v ->
-                        putAction(index, actionIndex, ActionSpec(kind.id, bone = bone, value = v))
+                        pickList(
+                            getString(R.string.logic_pick_direction),
+                            DIRECTIONS.map { it.first to getString(it.second) },
+                            "",
+                            existing?.text ?: "up",
+                        ) { dir ->
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = dir, bone = bone, value = v),
+                            )
+                            true
+                        }
                     }
                 }
                 "seconds" -> askNumber(getString(R.string.logic_pick_value), existing?.value ?: 0.5f, 0f, 30f) { v ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, value = v))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, value = v))
                 }
                 "state" -> pickState(getString(R.string.logic_pick_state)) { state ->
-                    putAction(index, actionIndex, ActionSpec(kind.id, state = state))
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, state = state))
                 }
                 "liquid" -> pickList(
                     getString(R.string.logic_pick_liquid),
@@ -2743,27 +2789,35 @@ class MainActivity : AppCompatActivity() {
                         existing?.value ?: 24f, 1f, 200f,
                     ) { amount ->
                         putAction(
-                            index, actionIndex,
+                            index, actionIndex, isElse,
                             ActionSpec(kind.id, text = liquid, value = amount),
                         )
                     }
                     true
                 }
-                else -> putAction(index, actionIndex, ActionSpec(kind.id))
+                else -> putAction(index, actionIndex, isElse, ActionSpec(kind.id))
             }
             true
         }
     }
 
-    private fun putAction(index: Int, actionIndex: Int, action: ActionSpec) {
+    private fun putAction(
+        index: Int,
+        actionIndex: Int,
+        action: ActionSpec,
+        isElse: Boolean = false,
+    ) {
         val rule = logicRules.getOrNull(index) ?: return
-        val actions = rule.actions.toMutableList()
+        val actions = (if (isElse) rule.elseActions else rule.actions).toMutableList()
         if (actionIndex >= 0 && actionIndex < actions.size) {
             actions[actionIndex] = action
         } else {
             actions.add(action)
         }
-        putRule(index, rule.copy(actions = actions))
+        putRule(
+            index,
+            if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
+        )
     }
 
     private fun pickStat(title: String, onPick: (String) -> Unit) {
@@ -2992,6 +3046,15 @@ class MainActivity : AppCompatActivity() {
         val LIQUID_PALETTE = listOf(
             0xFFB4212B.toInt(), 0xFFE2557B.toInt(), 0xFFE08A2E.toInt(), 0xFFE8C33C.toInt(),
             0xFF5FA83C.toInt(), 0xFF3D8FD1.toInt(), 0xFF6C4CE0.toInt(), 0xFF23202E.toInt(),
+        )
+
+        /** Which way "推一下" pushes. "away" is the only one that needs the event. */
+        val DIRECTIONS = listOf(
+            "up" to R.string.logic_dir_up,
+            "down" to R.string.logic_dir_down,
+            "left" to R.string.logic_dir_left,
+            "right" to R.string.logic_dir_right,
+            "away" to R.string.logic_dir_away,
         )
 
         val FIGURE_ON = Color.parseColor("#FF5B4BC4")

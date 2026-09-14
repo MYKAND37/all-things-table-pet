@@ -97,14 +97,19 @@ class RuleEngine(val spec: LogicSpec) {
             if (rule.on != event.type.id) continue
             if (!event.touches(rule.part)) continue
             if (index in firedOnce) continue
+            val holds = holds(rule)
+            // A rule whose conditions fail and which has no else is skipped WITHOUT
+            // consuming its cooldown, so it can fire the instant they become true. That
+            // is what every rule did before there was an else, and it has to keep doing it.
+            if (!holds && rule.elseActions.isEmpty()) continue
+
             val last = lastFired[index]
             if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) continue
-            if (!holds(rule)) continue
 
             lastFired[index] = clock
             if (rule.once) firedOnce.add(index)
-            log("  规则 " + (index + 1) + " →")
-            out.addAll(run(rule.actions))
+            log("  规则 " + (index + 1) + (if (holds) " →" else " → 否则"))
+            out.addAll(run(if (holds) rule.actions else rule.elseActions))
         }
         return out
     }

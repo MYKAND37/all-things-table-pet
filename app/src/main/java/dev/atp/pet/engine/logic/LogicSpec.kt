@@ -64,6 +64,16 @@ data class RuleSpec(
     val actions: List<ActionSpec>,
     val cooldown: Float,
     val once: Boolean,
+    /**
+     * What to do when the conditions do NOT hold.
+     *
+     * Empty means "do nothing", which is what every rule did before there was an else, and
+     * it keeps the old behaviour exactly: a rule whose conditions fail without an else is
+     * skipped entirely, cooldown included, so it can fire the instant they become true.
+     * With an else the rule fires either way, and the cooldown applies to whichever branch
+     * ran -- otherwise "if hurt, whimper, else stay quiet" would whimper on every tick.
+     */
+    val elseActions: List<ActionSpec> = emptyList(),
 )
 
 /** What a rule can do, with the parameter the editor has to ask for. */
@@ -163,6 +173,7 @@ class LogicSpec(
                 val r = ruleArr!!.getJSONObject(i)
                 val condArr = r.optJSONArray("if")
                 val actArr = r.optJSONArray("then")
+                val elseArr = r.optJSONArray("else")
                 RuleSpec(
                     on = r.optString("on", "tick"),
                     part = r.optString("part", ""),
@@ -190,6 +201,18 @@ class LogicSpec(
                     },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
                     once = r.optBoolean("once", false),
+                    elseActions = (0 until (elseArr?.length() ?: 0)).map { j ->
+                        val a = elseArr!!.getJSONObject(j)
+                        ActionSpec(
+                            kind = a.optString("kind", "say"),
+                            text = a.optString("text", ""),
+                            stat = a.optString("stat", ""),
+                            value = a.optDouble("value", 0.0).toFloat(),
+                            bone = a.optString("bone", ""),
+                            prop = a.optString("prop", ""),
+                            state = a.optString("state", ""),
+                        )
+                    },
                 )
             }
             if (stats.isEmpty()) return parse(DEFAULT)
@@ -248,11 +271,20 @@ class LogicSpec(
                             .put("prop", a.prop).put("state", a.state)
                     )
                 }
+                val elses = JSONArray()
+                for (a in r.elseActions) {
+                    elses.put(
+                        JSONObject()
+                            .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
+                            .put("value", a.value.toDouble()).put("bone", a.bone)
+                            .put("prop", a.prop).put("state", a.state)
+                    )
+                }
                 rules.put(
                     JSONObject()
                         .put("on", r.on).put("part", r.part)
                         .put("cooldown", r.cooldown.toDouble()).put("once", r.once)
-                        .put("if", conds).put("then", acts)
+                        .put("if", conds).put("then", acts).put("else", elses)
                 )
             }
             root.put("rules", rules)
@@ -335,8 +367,9 @@ class LogicSpec(
     },
     {
       "on": "click", "part": "", "cooldown": 0.6, "once": false,
-      "if": [ { "kind": "stat", "stat": "H", "op": ">", "value": 0 } ],
-      "then": [ { "kind": "say", "text": "干嘛？" } ]
+      "if": [ { "kind": "state", "stat": "", "state": "dressed", "op": "on" } ],
+      "then": [ { "kind": "say", "text": "好看吗？" } ],
+      "else": [ { "kind": "say", "text": "干嘛？" } ]
     }
   ]
 }
