@@ -2804,8 +2804,8 @@ class MainActivity : AppCompatActivity() {
     private fun putAction(
         index: Int,
         actionIndex: Int,
+        isElse: Boolean,
         action: ActionSpec,
-        isElse: Boolean = false,
     ) {
         val rule = logicRules.getOrNull(index) ?: return
         val actions = (if (isElse) rule.elseActions else rule.actions).toMutableList()
