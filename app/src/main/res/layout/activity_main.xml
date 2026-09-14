@@ -310,7 +310,7 @@
                     android:scrollbars="none">
 
                     <LinearLayout
-                        android:id="@+id/rigBoneList"
+                        android:id="@+id/rigBonePanel"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="vertical"

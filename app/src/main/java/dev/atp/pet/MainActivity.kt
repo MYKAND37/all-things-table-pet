@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         logicList = findViewById(R.id.logicList)
         skeletonView = findViewById(R.id.skeletonView)
         rigRow = findViewById(R.id.rigRow)
-        rigBonePanel = findViewById(R.id.rigBoneList)
+        rigBonePanel = findViewById(R.id.rigBonePanel)
         rigBar = findViewById(R.id.rigBarScroll)
         rigMode = findViewById(R.id.rigMode)
         rigAddBone = findViewById(R.id.rigAddBone)
