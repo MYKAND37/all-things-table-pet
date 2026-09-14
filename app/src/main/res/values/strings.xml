@@ -117,6 +117,7 @@
     <string name="prop_kind">类型</string>
     <string name="prop_radius">碰撞半径</string>
     <string name="prop_force">力度</string>
+    <string name="prop_rope">绳子长度</string>
     <string name="prop_change_art">换图</string>
     <string name="prop_delete_confirm">删掉「%1$s」？图和定义都会删。</string>
     <string name="prop_none">还没有道具。做一个，然后在测试场里点「道具」放一个出来。</string>

@@ -15,7 +15,8 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
     HOLD("hold", "持续使用", "拖到角色身上按住，会一直触发"),
     DEVICE("device", "装置", "放在桌上不动，角色碰到才触发"),
     THROW("throw", "投掷", "拖起来甩出去，砸到哪算哪"),
-    SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地");
+    SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地"),
+    ANCHOR("anchor", "锚点", "放在桌上不动，角色的部位碰到就被拴住；把锚点拿起来就松开");
 
     companion object {
         fun of(id: String): PropKind = values().firstOrNull { it.id == id } ?: THROW
@@ -41,6 +42,8 @@ data class PropSpec(
     val gravityScale: Float = 1f,
     /** Bullets and other spawned things clean themselves up. Placed props never do. */
     val transient: Boolean = false,
+    /** 锚点专用：绳子有多长。身体在这个半径里自由活动，超了就被拉回来。 */
+    val ropeLength: Float = 420f,
 ) {
     fun kindOf(): PropKind = PropKind.of(kind)
 
@@ -70,6 +73,7 @@ object PropSpecs {
                 force = o.optDouble("force", 1.0).toFloat(),
                 gravityScale = o.optDouble("gravity", 1.0).toFloat(),
                 transient = o.optBoolean("transient", false),
+                ropeLength = o.optDouble("rope", 420.0).toFloat(),
             )
         }
     }
@@ -86,6 +90,7 @@ object PropSpecs {
                     .put("force", s.force.toDouble())
                     .put("gravity", s.gravityScale.toDouble())
                     .put("transient", s.transient)
+                    .put("rope", s.ropeLength.toDouble())
             )
         }
         return arr.toString(2)

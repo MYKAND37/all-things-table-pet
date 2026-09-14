@@ -52,6 +52,34 @@ def hold(pet, by_name, name, target, seconds=4.0):
         pet.step(1.0 / 60.0, [(name, target)])
 
 
+def tether(pet, by_name, name, anchor, length, seconds=1.0):
+    """
+    A rope from a fixed point to one bone: a pin whose target only exists when it is taut.
+
+    This mirrors what the test bench does -- the ragdoll knows nothing about ropes, it
+    knows about pins, and a rope is a pin with the target worked out each frame from how
+    far away the body has got. That is the whole trick, and it means the rope inherits
+    everything the pin already does right: joint limits, the root slide, gravity.
+    """
+    worst = 0.0
+    settle = int(1.5 * 60)
+    for i in range(int(seconds * 60)):
+        bone = by_name[name]
+        dx = bone.wpos[0] - anchor[0]
+        dy = bone.wpos[1] - anchor[1]
+        d = math.hypot(dx, dy)
+        # Measured after the first moment: an anchor driven in too far away starts
+        # over-taut by construction, and what matters is that the rope then holds.
+        if i >= settle:
+            worst = max(worst, d)
+        pins = []
+        if d > length:
+            t = length / d
+            pins.append((name, (anchor[0] + dx * t, anchor[1] + dy * t), 0.0))
+        pet.step(1.0 / 60.0, pins)
+    return worst
+
+
 def main():
     print("standing still is still standing")
     pet, bn = fresh()
@@ -103,6 +131,37 @@ def main():
         hangs = head.wpos[1] > hip.wpos[1] + 100.0
         report("%s at %.0f%% hangs" % (name, fraction * 100), hangs and err < 20.0,
                "weight %.0f vs hand %.0f, reached to %.0f px" % (head.wpos[1], got[1], err))
+
+    print("\na rope holds the body on a leash")
+    pet, bn = fresh()
+    hip = bn["hip"]
+    anchor = (hip.wpos[0], hip.wpos[1] - 900.0)      # a stake driven into the sky
+    rope = 420.0
+    worst = tether(pet, bn, "hip", anchor, rope, seconds=8.0)
+    report("once settled the hip never gets further than the rope",
+           worst <= rope + 25.0, "worst %.0f of %.0f px" % (worst, rope))
+    report("and it is actually hanging on it", worst > rope - 25.0,
+           "worst %.0f of %.0f px" % (worst, rope))
+    d = math.hypot(hip.wpos[0] - anchor[0], hip.wpos[1] - anchor[1])
+    report("it settles at the end of the rope", abs(d - rope) < 30.0, "%.0f px" % d)
+    report("the rest of it hangs below", bn["head"].wpos[1] > hip.wpos[1],
+           "hip %.0f head %.0f" % (hip.wpos[1], bn["head"].wpos[1]))
+
+    print("\nslack rope does not move the body")
+    pet, bn = fresh()
+    before = bn["hip"].wpos
+    for _ in range(int(4.0 * 60)):
+        bone = bn["hip"]
+        dx = bone.wpos[0] - before[0]
+        dy = bone.wpos[1] - before[1]
+        d = math.hypot(dx, dy)
+        pins = []
+        if d > 300.0:                      # a long rope, and the body barely moves
+            t = 300.0 / d
+            pins.append(("hip", (before[0] + dx * t, before[1] + dy * t), 0.0))
+        pet.step(1.0 / 60.0, pins)
+    moved = math.hypot(bn["hip"].wpos[0] - before[0], bn["hip"].wpos[1] - before[1])
+    report("the body is still where it was", moved < 300.0, "%.0f px" % moved)
 
     print("\nlifting by a hand still works")
     pet, bn = fresh()

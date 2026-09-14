@@ -1693,6 +1693,9 @@ class MainActivity : AppCompatActivity() {
         val (forceRow, forceOf) = stepperRow(
             getString(R.string.prop_force), existing?.force ?: 1f, 0.25f, 0.25f, 5f,
         ) { "%.2f".format(it) }
+        val (ropeRow, ropeOf) = stepperRow(
+            getString(R.string.prop_rope), existing?.ropeLength ?: 420f, 40f, 80f, 2000f,
+        ) { it.toInt().toString() }
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1714,6 +1717,9 @@ class MainActivity : AppCompatActivity() {
             chip.setOnClickListener {
                 kind = option.id
                 hintView.text = option.hint
+                // The rope length only means anything for a stake, and a row that is
+                // always there but usually ignored is a row people stop reading.
+                ropeRow.visibility = if (option == PropKind.ANCHOR) View.VISIBLE else View.GONE
                 paintChips(chipViews, PropKind.values().map { it.id }, { kind })
             }
             chipViews.add(chip)
@@ -1723,6 +1729,7 @@ class MainActivity : AppCompatActivity() {
         box.addView(hintView)
         box.addView(radiusRow)
         box.addView(forceRow)
+        box.addView(ropeRow)
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.prop_new else R.string.prop_name)
@@ -1742,6 +1749,7 @@ class MainActivity : AppCompatActivity() {
                         // the launcher it came out of.
                         gravityScale = existing?.gravityScale ?: 1f,
                         transient = existing?.transient ?: false,
+                        ropeLength = ropeOf(),
                     )
                 )
                 store.saveProps(props)
@@ -1750,6 +1758,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
         paintChips(chipViews, PropKind.values().map { it.id }, { kind })
+        ropeRow.visibility = if (kind == PropKind.ANCHOR.id) View.VISIBLE else View.GONE
     }
 
     /** The first unused id, so two props can share a display name without sharing a file. */

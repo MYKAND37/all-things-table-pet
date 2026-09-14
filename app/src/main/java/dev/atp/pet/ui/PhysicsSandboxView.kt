@@ -104,6 +104,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *  for a leg is the hip, and a figure lifted by the hip never turns over. */
     private val heldOffsets = HashMap<Int, Float>()
     private val heldTargets = HashMap<Int, Vec2>()
+    /**
+     * Ropes. A rope is not a physics object: it is a pin whose target only exists while it
+     * is taut, worked out fresh every frame from how far the body has got. Everything the
+     * pin already does right -- joint limits, the root slide, gravity -- the rope inherits.
+     */
+    private class Rope(val anchor: Prop, val bone: String, val length: Float)
+
+    private val ropes = mutableListOf<Rope>()
+
     private var heldProp: Prop? = null
     /** Which finger is carrying the prop, so it follows that one and not the first. */
     private var propPointer = -1
@@ -146,6 +155,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
     private val jointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val worldPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val ropePath = android.graphics.Path()
     private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -275,6 +285,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldOffsets.clear()
         heldProp = null
         world?.clear()
+        ropes.clear()
         particles.clear()
         fluid?.clear()
         broken.clear()
@@ -448,7 +459,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
             heldTargets[entry.key]?.let {
                 Ragdoll.Pin(entry.value, it, heldOffsets[entry.key] ?: 0f)
             }
-        }
+        }.toMutableList()
+        pins.addAll(ropePins(sk))
         rag.step(dt, pins)
 
         world?.let { w ->
@@ -480,6 +492,77 @@ class PhysicsSandboxView @JvmOverloads constructor(
         particles.step(dt, s.floorY)
         // Liquid runs around the body: the same capsules the props collide with.
         fluid?.step(dt, s.gravity, sk) { rag.colliderRadius(it) }
+        attachRopes()
+    }
+
+    /**
+     * The ropes that are taut, as pins.
+     *
+     * A slack rope is not a pin at all -- it is a piece of string lying on the floor, and
+     * the body should not feel it. Only once the distance passes the length does the pin
+     * appear, with its target on the circle the rope allows, which is exactly "you may go
+     * anywhere inside this circle and no further".
+     */
+    private fun ropePins(sk: Skeleton): List<Ragdoll.Pin> {
+        if (ropes.isEmpty()) return emptyList()
+        val out = mutableListOf<Ragdoll.Pin>()
+        for (rope in ropes) {
+            val bone = sk.find(rope.bone) ?: continue
+            val p = bone.worldPosition
+            val dx = p.x - rope.anchor.position.x
+            val dy = p.y - rope.anchor.position.y
+            val d = hypot(dx, dy)
+            if (d <= rope.length) continue
+            val t = rope.length / d
+            out.add(
+                Ragdoll.Pin(
+                    rope.bone,
+                    Vec2(rope.anchor.position.x + dx * t, rope.anchor.position.y + dy * t),
+                )
+            )
+        }
+        return out
+    }
+
+    /**
+     * Tie a limb to a stake when the stake is against it.
+     *
+     * Contact is the gesture: there is no rope tool to find, and "the pet walked onto the
+     * thing and got caught" is what a stake in the ground is FOR.
+     */
+    private fun attachRopes() {
+        val w = world ?: return
+        val sk = skeleton ?: return
+        val rag = ragdoll ?: return
+        for (prop in w.live) {
+            if (prop.spec.kindOf() != PropKind.ANCHOR) continue
+            if (ropes.any { it.anchor === prop }) continue
+            var best: String? = null
+            var bestD = Float.MAX_VALUE
+            for (bone in sk.bones) {
+                val gap = prop.spec.radius + rag.colliderRadius(bone)
+                val head = bone.worldPosition
+                val tip = bone.tipPosition()
+                // Nearest point on the bone, the same capsule the liquid and the props use.
+                val abx = tip.x - head.x
+                val aby = tip.y - head.y
+                val lenSq = abx * abx + aby * aby
+                val t = if (lenSq < 1e-6f) 0f else
+                    (((prop.position.x - head.x) * abx + (prop.position.y - head.y) * aby) / lenSq)
+                        .coerceIn(0f, 1f)
+                val d = hypot(prop.position.x - (head.x + abx * t), prop.position.y - (head.y + aby * t)) - gap
+                if (d < bestD) {
+                    bestD = d
+                    best = bone.name
+                }
+            }
+            if (best != null && bestD < 0f) {
+                ropes.add(Rope(prop, best, prop.spec.ropeLength))
+                onInfo?.invoke("拴住了 " + best + " · 绳子 " + prop.spec.ropeLength.toInt() + "px")
+            }
+        }
+        // A rope whose stake has been taken away is not a rope any more.
+        ropes.removeAll { w.live.none { live -> live === it.anchor } }
     }
 
     private fun lowestBone(): Bone? {
@@ -538,6 +621,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         drawFluid(canvas)
         drawCharacter(canvas, sk)
         drawProps(canvas)
+        drawRopes(canvas, sk)
         drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
@@ -566,6 +650,34 @@ class PhysicsSandboxView @JvmOverloads constructor(
             jointPaint.color = bonePaint.color
             canvas.drawCircle(h.x, h.y, 4f, jointPaint)
         }
+    }
+
+    /**
+     * The ropes, sagging when slack and straight when taut.
+     *
+     * The sag is the whole information: a rope drawn as a straight line tells you nothing
+     * about whether the pet is at the end of it, and "am I about to be yanked back" is the
+     * only question a leash ever asks.
+     */
+    private fun drawRopes(canvas: Canvas, sk: Skeleton) {
+        if (ropes.isEmpty()) return
+        worldPaint.style = Paint.Style.STROKE
+        worldPaint.strokeCap = Paint.Cap.ROUND
+        worldPaint.strokeWidth = 7f
+        for (rope in ropes) {
+            val bone = sk.find(rope.bone) ?: continue
+            val a = rope.anchor.position
+            val b = bone.worldPosition
+            val d = hypot(b.x - a.x, b.y - a.y)
+            val slack = 1f - (d / rope.length).coerceIn(0f, 1f)
+            worldPaint.color = if (slack < 0.02f) 0xEE8A5A2B.toInt() else 0xBB6B5B45.toInt()
+            ropePath.reset()
+            ropePath.moveTo(a.x, a.y)
+            ropePath.quadTo((a.x + b.x) / 2f, (a.y + b.y) / 2f + slack * 140f, b.x, b.y)
+            canvas.drawPath(ropePath, worldPaint)
+        }
+        worldPaint.style = Paint.Style.FILL
+        worldPaint.strokeWidth = 0f
     }
 
     /**
@@ -929,6 +1041,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val p = toWorld(x, y)
         val prop = world?.grabAt(p)
         if (prop != null) {
+            // Pulling the stake out of the ground is how a rope comes off. Anything else
+            // needs a tool, a menu or a gesture nobody would guess.
+            if (prop.spec.kindOf() == PropKind.ANCHOR) {
+                ropes.removeAll { it.anchor === prop }
+                onInfo?.invoke("绳子松开了")
+            }
             heldProp = prop
             propPointer = id
             prop.beginDrag()
@@ -982,8 +1100,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
             fire(GameEvent(EventType.RELEASE, part = "", value = 0f))
             return
         }
-        if (prop.spec.kindOf() == PropKind.DEVICE) {
-            // A device is placed, not thrown: whatever the finger was doing, it drops.
+        val kind = prop.spec.kindOf()
+        if (kind == PropKind.DEVICE || kind == PropKind.ANCHOR) {
+            // A device and a stake are placed, not thrown: whatever the finger was doing,
+            // they drop where they are.
             prop.velocity = Vec2.ZERO
         }
         if (travelled > THROW_SPEED) {
