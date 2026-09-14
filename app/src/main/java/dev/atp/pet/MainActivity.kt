@@ -129,7 +129,7 @@ class MainActivity : AppCompatActivity() {
     private var logicStates: MutableList<StateSpec> = mutableListOf()
     private lateinit var skeletonView: SkeletonView
     private lateinit var rigRow: View
-    private lateinit var rigBoneList: LinearLayout
+    private lateinit var rigBonePanel: LinearLayout
     private lateinit var alignPane: View
     private lateinit var alignView: PartAlignView
     private lateinit var statusLine: TextView
@@ -162,7 +162,7 @@ class MainActivity : AppCompatActivity() {
         logicList = findViewById(R.id.logicList)
         skeletonView = findViewById(R.id.skeletonView)
         rigRow = findViewById(R.id.rigRow)
-        rigBoneList = findViewById(R.id.rigBoneList)
+        rigBonePanel = findViewById(R.id.rigBoneList)
         rigBar = findViewById(R.id.rigBarScroll)
         rigMode = findViewById(R.id.rigMode)
         rigAddBone = findViewById(R.id.rigAddBone)
@@ -1115,9 +1115,9 @@ class MainActivity : AppCompatActivity() {
      * into a tap, and it doubles as the answer to "what is this rig actually made of".
      */
     private fun buildRigBonePanel() {
-        if (!::rigBoneList.isInitialized) return
-        rigBoneList.removeAllViews()
-        rigBoneList.addView(label(getString(R.string.rig_pick_bone), 9f, MUTED, bottom = 6))
+        if (!::rigBonePanel.isInitialized) return
+        rigBonePanel.removeAllViews()
+        rigBonePanel.addView(label(getString(R.string.rig_pick_bone), 9f, MUTED, bottom = 6))
         val bones = skeletonView.rigBones()
         val depth = RigEdit.depths(bones)
         for (b in bones) {
@@ -1139,7 +1139,7 @@ class MainActivity : AppCompatActivity() {
                 skeletonView.focusOn(b.name)
                 buildRigBonePanel()
             }
-            rigBoneList.addView(row)
+            rigBonePanel.addView(row)
         }
     }
 
@@ -2345,6 +2345,11 @@ class MainActivity : AppCompatActivity() {
         var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
         var stateOn = existing?.op != "off"
 
+        // Declared before the chips that switch between them: those listeners close over
+        // these two, and a local has to exist before anything can capture it.
+        val statBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val stateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
         val kindChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val kindViews = mutableListOf<TextView>()
         for ((id, text) in listOf(
@@ -2405,7 +2410,6 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.logic_pick_value), existing?.value ?: 50f, 5f, 0f, 999f,
         ) { trim(it) }
 
-        val statBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         statBox.addView(label(getString(R.string.logic_pick_stat), 11f, MUTED, bottom = 6))
         statBox.addView(statChips)
         statBox.addView(label(getString(R.string.logic_pick_op), 11f, MUTED, top = 10, bottom = 6))
@@ -2448,7 +2452,6 @@ class MainActivity : AppCompatActivity() {
             onOffChips.addView(chip)
         }
 
-        val stateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         stateBox.addView(label(getString(R.string.logic_pick_state), 11f, MUTED, bottom = 6))
         stateBox.addView(stateChips)
         if (logicStates.isEmpty()) {
