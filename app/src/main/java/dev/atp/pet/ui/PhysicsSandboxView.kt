@@ -885,7 +885,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
             return true
         }
         val grip = rag.grabAt(p) ?: return false
-        heldBones[id] = grip.bone.name
+        val bone = grip.bone
+        heldBones[id] = bone.name
         heldOffsets[id] = grip.offset
         heldTargets[id] = p
         tapBone = bone.name
