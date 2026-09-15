@@ -7,8 +7,42 @@
     <string name="menu_pets">桌宠管理</string>
     <string name="menu_props">道具管理</string>
     <string name="menu_logic">逻辑管理</string>
+    <string name="menu_liquids">液体管理</string>
+    <string name="menu_settings">全局设置</string>
 
     <string name="content_placeholder">这里先留白，功能待实现</string>
+
+    <!-- 全局设置 -->
+    <string name="settings_hint">这些是应用自己的开关，不属于任何一只桌宠。改完立刻生效，写进 settings.json。</string>
+    <string name="settings_gravity">重力</string>
+    <string name="settings_gravity_hint">1.0 是角色自己那个重力。往下调，甩出去的东西会飘；往上调，什么都砸得很实。</string>
+    <string name="settings_stiffness">测试场默认刚度</string>
+    <string name="settings_stiffness_hint">打开测试场时从那根手指开始。0 是松垮的布娃娃，1 是撑着姿势。</string>
+    <string name="settings_view">画面</string>
+    <string name="settings_view_hint">这几样都只是画出来的，不影响物理。</string>
+    <string name="settings_show_grid">网格</string>
+    <string name="settings_show_ground">地面线</string>
+    <string name="settings_show_balance">重心</string>
+    <string name="settings_show_bones">骨架</string>
+    <string name="settings_effects">效果</string>
+    <string name="settings_effects_hint">卡的时候先关这两个：粒子便宜，液体不便宜。</string>
+    <string name="settings_particles">粒子</string>
+    <string name="settings_liquid">液体</string>
+    <string name="settings_follow">拖着走时镜头跟着</string>
+    <string name="settings_current">当前 %1$s×</string>
+    <string name="settings_reset">恢复默认</string>
+    <string name="settings_reset_done">设置已恢复默认</string>
+
+    <!-- 液体管理 -->
+    <string name="liquid_subtitle">液体是规则能喷出来的东西，也可以在这里直接喷一把看看。</string>
+    <string name="liquid_new">＋ 新液体</string>
+    <string name="liquid_need_pet">液体是角色自己声明的东西：先去测试场上面选一只桌宠。</string>
+    <string name="liquid_spill_now">喷一把</string>
+    <string name="liquid_on_bench">场上有 %1$d 滴</string>
+    <string name="liquid_none_on_bench">场上还没有液体</string>
+    <string name="liquid_clear">清空场上液体</string>
+    <string name="liquid_cleared">场上液体已清空</string>
+    <string name="liquid_delete_confirm">删掉「%1$s」？已经喷在场上那些不会消失。</string>
 
     <string name="rail_collapse">收起</string>
     <string name="rail_expand">展开</string>
@@ -20,17 +54,11 @@
     <string name="pet_delete_confirm">删掉整只「%1$s」？\n\n%2$d 根骨骼、%3$d 张已导入的图、加上它的规则和动作，全部一起删掉，没有回收站。\n\n（内置那只是随 App 装的，重新安装就会回来，但它带着的东西不会。）</string>
     <string name="pet_deleted">已删除</string>
     <string name="pet_edit_rig">看骨架 / 摆姿势</string>
-    <string name="pet_parts_title">部位</string>
-    <string name="part_empty">未导入</string>
-    <string name="part_import">导入图片</string>
-    <string name="part_replace">替换</string>
-    <string name="part_clear">删除</string>
     <string name="part_variant">状态版本</string>
     <string name="part_variant_hint">给这根骨骼多一张图，只在那个状态打开时才画。原来那张会自动变成"没有那个状态"时画。</string>
     <string name="part_no_states">先去「逻辑管理」加一个状态。</string>
     <string name="part_hint">点部位名即可从设备里选图。图片按整张画布导出即可，命名由 App 决定。</string>
     <string name="import_failed">导入失败，可能不是图片</string>
-    <string name="import_ok">已导入</string>
 
     <!-- 导入对齐 -->
     <string name="align_cancel">取消</string>
@@ -60,7 +88,6 @@
     <string name="depth_when_below">它低于参照时</string>
     <string name="depth_where_behind">放到参照后面</string>
     <string name="depth_where_front">放到参照前面</string>
-    <string name="depth_descendants">（连同它下面的部位）</string>
     <string name="depth_cancel">取消</string>
     <string name="depth_remove">删除</string>
 
@@ -85,7 +112,6 @@
     <string name="rig_new_bone_hint">选一个父级，然后在画布上点两下画出这根骨骼。</string>
     <string name="rig_bone_name">骨骼名字</string>
     <string name="rig_pick_bone">点一个骨骼，画面会放大到它</string>
-    <string name="rig_hint_zoom">双指缩放 · 单指拖空白处平移 · 点右边选骨骼</string>
     <string name="rig_bone_none">（无 · 作为根骨骼）</string>
     <string name="rig_bone_root">根骨骼 · 没有父级</string>
     <string name="rig_bone_parent">父级：</string>
@@ -169,13 +195,10 @@
     <string name="depth_state_not">没有 </string>
     <string name="depth_state_hint">选一个状态，这个部位就只在那个状态打开时才画出来。给衣服的每个部位都选「穿着」。</string>
 
-    <string name="logic_rules">规则</string>
     <string name="logic_rules_hint">点任何一个方块改它。「当」是发生了什么事，「如果」是还要满足什么，「就」是做什么。</string>
     <string name="logic_add_stat">＋ 加数值</string>
     <string name="logic_add_rule">＋ 添加规则</string>
     <string name="logic_rule_settings">规则设置</string>
-    <string name="logic_add_if">＋如果</string>
-    <string name="logic_add_then">＋就</string>
     <string name="logic_join">和前一个条件的关系</string>
     <string name="logic_pick_signal">信号名字</string>
     <string name="logic_subject_pet">角色</string>
@@ -219,7 +242,6 @@
     <string name="logic_module_if">加一个条件</string>
     <string name="logic_module_action">加一个动作</string>
     <string name="logic_module_else">加一个否则</string>
-    <string name="logic_always">如果：总是</string>
     <string name="logic_when">当：</string>
     <string name="logic_pick_part_hint">留「任何部位」就是全身都算。写个前缀（比如 hand）会同时匹配 hand_L 和 hand_R。</string>
     <string name="logic_delete_rule">删规则</string>
@@ -242,10 +264,8 @@
     <string name="logic_pick_prop">哪个道具</string>
     <string name="logic_pick_burst">什么粒子</string>
     <string name="logic_no_poses">还没有动作。去「桌宠管理 → 摆姿势 → 存为动作」存一个。</string>
-    <string name="logic_saved">改一下就立即写入文件。回到测试场，角色就按新规则跑。</string>
     <string name="logic_reset">恢复默认</string>
     <string name="logic_reset_confirm">丢掉你写的全部规则和数值，恢复成默认那套？</string>
-    <string name="logic_none">还没有规则。</string>
     <string name="logic_cooldown_title">冷却时间</string>
 
     <string name="action_empty">还没有动作。\n去「桌宠管理 → 打开一只桌宠 → 摆姿势 → 存为动作」存一个，这里就会出现。</string>

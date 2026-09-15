@@ -141,8 +141,8 @@ def turned_over(bn):
 LIFTS = (
     (0.20, 150.0, "turned past horizontal"),
     (0.30, 300.0, "hanging"),
-    (0.40, 800.0, "upside down, head well below the feet"),
-    (0.60, 800.0, "upside down, head well below the feet"),
+    (0.40, 600.0, "upside down, head well below the feet"),
+    (0.60, 600.0, "upside down, head well below the feet"),
 )
 
 

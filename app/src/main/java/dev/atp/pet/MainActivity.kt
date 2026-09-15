@@ -18,6 +18,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import dev.atp.pet.data.CharacterFolder
+import dev.atp.pet.data.Settings
+import dev.atp.pet.data.SettingsStore
 import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.fluid.LiquidSpec
@@ -63,7 +65,8 @@ class MainActivity : AppCompatActivity() {
 
     private enum class Pane {
         PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_PART_FILES, PET_RIG, PART_ALIGN, PET_DEPTH,
-        PET_PROPS, PET_LOGIC
+        LIQUIDS, SETTINGS,
+        PET_PROPS, PET_LOGIC, LIQUIDS, SETTINGS
     }
 
     private lateinit var store: CharacterStore
@@ -119,7 +122,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var petListScroll: View
     private lateinit var petList: LinearLayout
     private lateinit var partListScroll: View
+    private lateinit var liquidScroll: View
+    private lateinit var liquidList: LinearLayout
+    private lateinit var settingsScroll: View
+    private lateinit var settingsList: LinearLayout
     private lateinit var liquidBar: LinearLayout
+
+    /** The app's own switches. Loaded once at startup, written back on every change. */
+    private var settings: Settings = Settings.DEFAULT
+    private lateinit var settingsStore: SettingsStore
     private lateinit var partFilesScroll: View
     private lateinit var partFilesList: android.widget.LinearLayout
     private lateinit var partList: LinearLayout
@@ -169,6 +180,10 @@ class MainActivity : AppCompatActivity() {
         petListScroll = findViewById(R.id.petListScroll)
         petList = findViewById(R.id.petList)
         partListScroll = findViewById(R.id.partListScroll)
+        liquidScroll = findViewById(R.id.liquidScroll)
+        liquidList = findViewById(R.id.liquidList)
+        settingsScroll = findViewById(R.id.settingsScroll)
+        settingsList = findViewById(R.id.settingsList)
         liquidBar = findViewById(R.id.liquidBar)
         partFilesScroll = findViewById(R.id.partFilesScroll)
         partFilesList = findViewById(R.id.partFilesList)
@@ -235,6 +250,8 @@ class MainActivity : AppCompatActivity() {
             findViewById(R.id.menuPets),
             findViewById(R.id.menuProps),
             findViewById(R.id.menuLogic),
+            findViewById(R.id.menuLiquids),
+            findViewById(R.id.menuSettings),
         )
         menuItems.forEach { item ->
             item.tag = item.text.toString()
@@ -243,6 +260,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.railHeader).setOnClickListener { setRail(!railCollapsed) }
 
         store.ensureSeeded()
+        settingsStore = SettingsStore(this)
+        settings = settingsStore.load()
+        sandboxView.applySettings(settings)
         props = store.loadProps().toMutableList()
         reloadCharacters()
 
@@ -269,10 +289,18 @@ class MainActivity : AppCompatActivity() {
      */
     private fun reloadSandbox(folder: CharacterFolder) {
         sandboxView.setPoseNames(store.loadPoses(folder.id).associate { it.name to it.angles })
+        // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
+        // match: two places that say what the stiffness is would otherwise disagree the moment
+        // somebody changed the setting.
+        sandboxView.stiffness = settings.defaultStiffness
+        stiffnessStep = STIFFNESS_VALUES
+            .indices.minByOrNull { abs(STIFFNESS_VALUES[it] - settings.defaultStiffness) } ?: 0
         sandboxView.load(
             folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir,
             store.loadObjectLogic(),
         )
+        sandboxView.applySettings(settings)
+        buildPetChooser()
     }
 
     /** Reload the bench, but only if that is the character currently on it. */
@@ -299,6 +327,17 @@ class MainActivity : AppCompatActivity() {
                 openLogic()
                 show(Pane.PET_LOGIC)
             }
+            R.id.menuLiquids -> {
+                // Liquid has its own door now. It used to be a bar inside 逻辑管理, which is
+                // where a liquid's RULES belong and not where a liquid belongs: a colour and a
+                // viscosity have nothing to do with the rule that spills them.
+                openLiquids()
+                show(Pane.LIQUIDS)
+            }
+            R.id.menuSettings -> {
+                buildSettingsPane()
+                show(Pane.SETTINGS)
+            }
             else -> show(Pane.PLACEHOLDER)
         }
     }
@@ -314,6 +353,8 @@ class MainActivity : AppCompatActivity() {
         depthScroll.visibility = if (pane == Pane.PET_DEPTH) View.VISIBLE else View.GONE
         propListScroll.visibility = if (pane == Pane.PET_PROPS) View.VISIBLE else View.GONE
         logicPane.visibility = if (pane == Pane.PET_LOGIC) View.VISIBLE else View.GONE
+        liquidScroll.visibility = if (pane == Pane.LIQUIDS) View.VISIBLE else View.GONE
+        settingsScroll.visibility = if (pane == Pane.SETTINGS) View.VISIBLE else View.GONE
         rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         if (pane != Pane.PET_RIG && rigBoneMode) {
             rigBoneMode = false
@@ -322,7 +363,8 @@ class MainActivity : AppCompatActivity() {
         }
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN ||
-                pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES
+                pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES ||
+                pane == Pane.LIQUIDS || pane == Pane.SETTINGS
             ) View.VISIBLE else View.GONE
 
         when (pane) {
@@ -334,7 +376,17 @@ class MainActivity : AppCompatActivity() {
             Pane.PART_ALIGN -> Unit
             Pane.PET_DEPTH -> statusLine.text = getString(R.string.depth_hint)
             Pane.PET_PROPS -> statusLine.text = getString(R.string.props_subtitle)
-            Pane.PET_LOGIC -> statusLine.text = getString(R.string.logic_rules_hint)
+            Pane.PET_LOGIC -> statusLine.text =
+                if (logicSubject == Subjects.PET) {
+                    getString(R.string.logic_rules_hint)
+                } else {
+                    // Whose logic this is, said again on the way in: the subject chips are one
+                    // row among many and it is the one thing about this screen that changes
+                    // what everything else means.
+                    getString(R.string.logic_subject_hint)
+                }
+            Pane.LIQUIDS -> statusLine.text = getString(R.string.liquid_subtitle)
+            Pane.SETTINGS -> statusLine.text = getString(R.string.settings_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
         }
     }
@@ -2377,7 +2429,10 @@ class MainActivity : AppCompatActivity() {
         })
         logicBar.addView(small(getString(R.string.logic_stats)) { showStatsDialog() })
         logicBar.addView(small(getString(R.string.logic_states)) { showStatesDialog() })
-        logicBar.addView(small(getString(R.string.logic_liquids)) { showLiquidsDialog() })
+        logicBar.addView(small(getString(R.string.logic_liquids)) {
+            openLiquids()
+            show(Pane.LIQUIDS)
+        })
         logicBar.addView(small(getString(R.string.logic_reset)) {
             AlertDialog.Builder(this)
                 .setTitle(R.string.logic_reset)
@@ -2423,7 +2478,8 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, getString(R.string.liquid_spilled, liquid.name), Toast.LENGTH_SHORT).show()
             }
             chip.setOnLongClickListener {
-                showLiquidsDialog()
+                openLiquids()
+                show(Pane.LIQUIDS)
                 true
             }
             liquidBar.addView(chip)
@@ -2593,78 +2649,283 @@ class MainActivity : AppCompatActivity() {
         return view
     }
 
-    private fun showLiquidsDialog() {
-        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.logic_liquids)
-            .setView(box)
-            .setNegativeButton(R.string.action_close, null)
-            .create()
-        fun fill() {
-            box.removeAllViews()
-            box.addView(label(getString(R.string.logic_liquids_hint), 10f, MUTED, bottom = 8))
-            for (liquid in logicLiquids.toList()) {
-                val row = LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.CENTER_VERTICAL
-                    background = getDrawable(R.drawable.menu_item_idle)
-                    setPadding(dp(12), dp(9), dp(12), dp(9))
-                    isClickable = true
-                    isFocusable = true
-                }
-                row.layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = dp(5) }
-                row.addView(swatch(liquid.colour, 16))
-                val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-                text.layoutParams = LinearLayout.LayoutParams(
-                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
-                )
-                text.addView(label(liquid.name, 14f, INK))
-                text.addView(
-                    label(
-                        "代号 " + liquid.id + " · 黏度 " + "%.2f".format(liquid.viscosity),
-                        10f, MUTED,
-                    )
-                )
-                row.addView(text)
-                row.setOnClickListener {
-                    dialog.dismiss()
-                    askEditLiquid(liquid) { fill() }
-                }
-                val logic = label(getString(R.string.menu_logic), 11f, MUTED)
-                logic.setPadding(dp(8), dp(6), dp(8), dp(6))
-                logic.setOnClickListener {
-                    dialog.dismiss()
-                    openLogic(Subjects.liquid(liquid.id))
-                    show(Pane.PET_LOGIC)
-                }
-                row.addView(logic)
+    /**
+     * 全局设置: the switches that belong to the app.
+     *
+     * Written back the moment anything is touched, like every other editor here, and handed
+     * straight to the bench as well so a change is visible without leaving the screen. The file
+     * is small and flat on purpose: anything that belongs to a pet, a prop, a liquid or a rule
+     * already has a home of its own, and a second home for it here would be two answers to one
+     * question.
+     */
+    private fun buildSettingsPane() {
+        settingsList.removeAllViews()
+        settingsList.addView(label(getString(R.string.menu_settings), 17f, INK, bottom = 4))
+        settingsList.addView(label(getString(R.string.settings_hint), 11f, MUTED, bottom = 12))
 
-                val remove = label(getString(R.string.action_delete), 11f, MUTED)
-                remove.setPadding(dp(8), dp(6), dp(8), dp(6))
-                remove.setOnClickListener {
-                    logicLiquids.removeAll { it.id == liquid.id }
-                    saveLogic()
-                    buildLogicPane()
-                    fill()
-                }
-                row.addView(remove)
-                box.addView(row)
-            }
-            val add = label(getString(R.string.logic_add_liquid), 12f, INK)
-            add.setPadding(dp(12), dp(9), dp(12), dp(9))
-            add.background = getDrawable(R.drawable.menu_item_selected)
-            add.setOnClickListener {
-                dialog.dismiss()
-                askEditLiquid(null) { fill() }
-            }
-            box.addView(add)
+        fun put(next: Settings) {
+            settings = next
+            settingsStore.save(next)
+            sandboxView.applySettings(next)
+            buildSettingsPane()
         }
-        fill()
-        dialog.show()
+
+        fun section(title: Int, hint: Int) {
+            settingsList.addView(label(getString(title), 13f, INK, top = 12, bottom = 4))
+            settingsList.addView(label(getString(hint), 10f, MUTED, bottom = 6))
+        }
+
+        fun toggle(title: Int, value: Boolean, onChange: (Boolean) -> Unit) {
+            val row = label(
+                (if (value) "✓  " else "○  ") + getString(title),
+                13f, if (value) INK else MUTED,
+            )
+            row.setPadding(dp(12), dp(10), dp(12), dp(10))
+            row.background = getDrawable(
+                if (value) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(5) }
+            row.setOnClickListener { onChange(!value) }
+            settingsList.addView(row)
+        }
+
+        // Gravity. Five stops rather than a slider: it is a dial you set once and then judge by
+        // watching, and a slider invites fiddling with a number nobody can read off a phone.
+        section(R.string.settings_gravity, R.string.settings_gravity_hint)
+        val gravityChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val gravityViews = mutableListOf<TextView>()
+        val gravities = listOf(0.5f to "飘", 0.75f to "轻", 1f to "标准", 1.5f to "重", 2f to "很重")
+        for ((value, name) in gravities) {
+            val chip = label(name, 12f, INK)
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener { put(settings.copy(gravityScale = value)) }
+            gravityViews.add(chip)
+            gravityChips.addView(chip)
+        }
+        settingsList.addView(gravityChips)
+        settingsList.addView(
+            label(
+                getString(R.string.settings_current, "%.2f".format(settings.gravityScale)),
+                10f, MUTED, top = 6, bottom = 2,
+            )
+        )
+
+        section(R.string.settings_stiffness, R.string.settings_stiffness_hint)
+        val stiffChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val stiffViews = mutableListOf<TextView>()
+        for ((i, value) in STIFFNESS_VALUES.withIndex()) {
+            val chip = label(STIFFNESS_LABELS[i], 12f, INK)
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener { put(settings.copy(defaultStiffness = value)) }
+            stiffViews.add(chip)
+            stiffChips.addView(chip)
+        }
+        settingsList.addView(stiffChips)
+
+        section(R.string.settings_view, R.string.settings_view_hint)
+        toggle(R.string.settings_show_grid, settings.showGrid) { put(settings.copy(showGrid = it)) }
+        toggle(R.string.settings_show_ground, settings.showGround) { put(settings.copy(showGround = it)) }
+        toggle(R.string.settings_show_balance, settings.showBalance) { put(settings.copy(showBalance = it)) }
+        toggle(R.string.settings_show_bones, settings.showBones) { put(settings.copy(showBones = it)) }
+        toggle(R.string.settings_follow, settings.followPet) { put(settings.copy(followPet = it)) }
+
+        section(R.string.settings_effects, R.string.settings_effects_hint)
+        toggle(R.string.settings_particles, settings.particles) { put(settings.copy(particles = it)) }
+        toggle(R.string.settings_liquid, settings.liquid) { put(settings.copy(liquid = it)) }
+
+        val reset = label(getString(R.string.settings_reset), 12f, MUTED)
+        reset.setPadding(dp(12), dp(10), dp(12), dp(10))
+        reset.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(14) }
+        reset.setOnClickListener {
+            settingsStore.forget()
+            settings = Settings.DEFAULT
+            sandboxView.applySettings(settings)
+            Toast.makeText(this, R.string.settings_reset_done, Toast.LENGTH_SHORT).show()
+            buildSettingsPane()
+        }
+        settingsList.addView(reset)
+
+        // The chosen chips, painted last so every listener above can simply rebuild the pane.
+        paintChips(gravityViews, gravities.map { it.first.toString() }, {
+            gravities.firstOrNull { g -> kotlin.math.abs(g.first - settings.gravityScale) < 0.01f }
+                ?.first?.toString() ?: ""
+        })
+        paintChips(stiffViews, STIFFNESS_VALUES.map { it.toString() }, {
+            STIFFNESS_VALUES.firstOrNull { v -> kotlin.math.abs(v - settings.defaultStiffness) < 0.01f }
+                ?.toString() ?: ""
+        })
     }
+
+    /**
+     * 液体管理: the liquids themselves, with a tap that pours one out.
+     *
+     * This used to be a dialog behind a button inside 逻辑管理, which is where a liquid's
+     * RULES belong and not where a liquid belongs: a colour and a viscosity have nothing to
+     * do with the rule that spills them, and a dialog that only edits definitions gives
+     * somebody no way to find out what "黏度 0.8" looks like. So it is its own door, and every
+     * row can spill itself onto the bench.
+     */
+    private fun openLiquids() {
+        val folder = summoned
+        logicLiquids = if (folder == null) {
+            mutableListOf()
+        } else {
+            store.loadLogic(folder.id).liquids.toMutableList()
+        }
+        buildLiquidList()
+    }
+
+    private fun buildLiquidList() {
+        liquidList.removeAllViews()
+        liquidList.addView(label(getString(R.string.menu_liquids), 17f, INK, bottom = 4))
+        liquidList.addView(label(getString(R.string.liquid_subtitle), 11f, MUTED, bottom = 4))
+        liquidList.addView(label(getString(R.string.logic_liquids_hint), 10f, MUTED, bottom = 10))
+
+        if (summoned == null) {
+            liquidList.addView(label(getString(R.string.liquid_need_pet), 12f, MUTED))
+            return
+        }
+
+        val drops = sandboxView.dropCount()
+        val bench = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(10))
+        }
+        bench.addView(
+            label(
+                if (drops == 0) getString(R.string.liquid_none_on_bench)
+                else getString(R.string.liquid_on_bench, drops),
+                11f, MUTED,
+            )
+        )
+        if (drops > 0) {
+            val clear = small(getString(R.string.liquid_clear)) {
+                sandboxView.clearLiquid()
+                Toast.makeText(this, R.string.liquid_cleared, Toast.LENGTH_SHORT).show()
+                buildLiquidList()
+            }
+            bench.addView(clear)
+        }
+        liquidList.addView(bench)
+
+        for (liquid in logicLiquids.toList()) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                isClickable = true
+                isFocusable = true
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+            row.addView(swatch(liquid.colour, 16))
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            text.addView(label(liquid.name, 14f, INK))
+            text.addView(
+                label(
+                    "代号 " + liquid.id + " · 黏度 " + "%.2f".format(liquid.viscosity) +
+                        " · " + (if (liquid.viscosity >= 0.6f) "抱团" else if (liquid.viscosity <= 0.2f) "摊开" else "半稠"),
+                    10f, MUTED,
+                )
+            )
+            row.addView(text)
+            row.setOnClickListener { askEditLiquid(liquid) { refreshLiquids() } }
+
+            val pour = label(getString(R.string.liquid_spill_now), 11f, INK)
+            pour.setPadding(dp(8), dp(6), dp(8), dp(6))
+            pour.setOnClickListener {
+                sandboxView.spill(liquid.id)
+                Toast.makeText(this, getString(R.string.liquid_spilled, liquid.name), Toast.LENGTH_SHORT).show()
+                buildLiquidList()
+            }
+            row.addView(pour)
+
+            val logic = label(getString(R.string.menu_logic), 11f, MUTED)
+            logic.setPadding(dp(8), dp(6), dp(8), dp(6))
+            logic.setOnClickListener {
+                openLogic(Subjects.liquid(liquid.id))
+                show(Pane.PET_LOGIC)
+            }
+            row.addView(logic)
+
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+            remove.setOnClickListener {
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.action_delete) + " · " + liquid.name)
+                    .setMessage(getString(R.string.liquid_delete_confirm, liquid.name))
+                    .setPositiveButton(R.string.depth_remove) { _, _ ->
+                        logicLiquids.removeAll { it.id == liquid.id }
+                        saveLiquids()
+                        refreshLiquids()
+                    }
+                    .setNegativeButton(R.string.depth_cancel, null)
+                    .show()
+            }
+            row.addView(remove)
+            liquidList.addView(row)
+        }
+
+        val add = label(getString(R.string.liquid_new), 13f, INK)
+        add.setPadding(dp(14), dp(11), dp(14), dp(11))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(6) }
+        add.setOnClickListener { askEditLiquid(null) { refreshLiquids() } }
+        liquidList.addView(add)
+    }
+
+    /**
+     * Write the liquid list where liquids live: the character's own file.
+     *
+     * Liquids are declared by a character -- they are the things its rules can spill -- so this
+     * always writes the character's file, whichever subject the rule editor happens to be
+     * pointed at. The rest of that file is read back and left exactly as it was, because the
+     * rule editor may be holding unsaved edits for a wholly different subject.
+     */
+    private fun saveLiquids() {
+        val folder = summoned ?: return
+        if (logicSubject == Subjects.PET) {
+            saveLogic()
+            return
+        }
+        val spec = store.loadLogic(folder.id)
+        store.saveLogic(
+            folder.id,
+            LogicSpec(spec.stats, spec.rules, spec.states, logicLiquids.toList()),
+        )
+    }
+
+    /** Rebuild whichever of the two panes that show liquids is on screen. */
+    private fun refreshLiquids() {
+        if (logicPane.visibility == View.VISIBLE) buildLogicPane()
+        if (liquidScroll.visibility == View.VISIBLE) buildLiquidList()
+    }
+
 
     private fun askEditLiquid(existing: LiquidSpec?, after: (() -> Unit)? = null) {
         var colour = existing?.colour ?: LIQUID_PALETTE[0]
@@ -2721,8 +2982,8 @@ class MainActivity : AppCompatActivity() {
                 val name = nameInput.text.toString().trim().ifEmpty { id }
                 logicLiquids.removeAll { it.id == id || (existing != null && it.id == existing.id) }
                 logicLiquids.add(LiquidSpec(id, name, colour, viscosityOf()))
-                saveLogic()
-                buildLogicPane()
+                saveLiquids()
+                refreshLiquids()
                 after?.invoke()
             }
             .setNegativeButton(R.string.depth_cancel, null)
@@ -3202,6 +3463,11 @@ class MainActivity : AppCompatActivity() {
             current = rule.on,
         ) { id ->
             putRule(index, rule.copy(on = id))
+            if (id == EventType.EMIT.id) {
+                // The one event that is not an event: it is another rule's 就 calling this
+                // one's 当, and that is not something the list of events can say.
+                Toast.makeText(this, R.string.logic_signal_hint, Toast.LENGTH_LONG).show()
+            }
             true
         }
     }

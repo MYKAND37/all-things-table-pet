@@ -17,6 +17,7 @@ import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleEngine
 import dev.atp.pet.engine.logic.Subjects
+import dev.atp.pet.data.Settings
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
 import dev.atp.pet.engine.prop.Prop
@@ -82,6 +83,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Props whose landing has already been reported, so it is a transition and not a state. */
     private val propLanded = HashSet<Int>()
+
+    /**
+     * The app's own switches: gravity, what is drawn, and whether the effects run.
+     *
+     * Held here rather than read from disk every frame, and handed over whole by
+     * [applySettings], because every one of them is something the bench reads while it is
+     * already running, and none of them is about the character.
+     */
+    private var settings: Settings = Settings.DEFAULT
+
+    fun applySettings(next: Settings) {
+        settings = next
+        ragdoll?.gravityScale = next.gravityScale
+        invalidate()
+    }
 
     /** Which subject every action currently being performed belongs to. See perform. */
     private var acting: String = Subjects.PET
@@ -294,6 +310,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** How many drops are on the bench, so the 液体 bar can say whether anything is there. */
     fun dropCount(): Int = fluid?.drops?.size ?: 0
+
+    /** Mop the bench. The props and the pet are not touched. */
+    fun clearLiquid() {
+        fluid?.clear()
+        invalidate()
+    }
 
     /** How many drawings hang off a state, so the 状态 panel can say whether it is used. */
     fun stateLayerCount(id: String): Int =
@@ -652,7 +674,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         world?.let { w ->
             val hits = w.step(
                 dt,
-                s.gravity,
+                s.gravity * settings.gravityScale,
                 sk,
                 { bone -> rag.colliderRadius(bone) },
                 { bone, dir, strength -> rag.impulse(bone, dir, strength) },
@@ -693,9 +715,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         wasGrounded = grounded
 
-        particles.step(dt, s.floorY)
-        // Liquid runs around the body: the same capsules the props collide with.
-        fluid?.step(dt, s.gravity, sk) { rag.colliderRadius(it) }
+        if (settings.particles) particles.step(dt, s.floorY)
+        // Liquid runs around the body: the same capsules the props collide with. The switch
+        // is a performance one first and an aesthetic one second, and liquid is the expensive
+        // half of the two.
+        if (settings.liquid) {
+            fluid?.step(dt, s.gravity * settings.gravityScale, sk) { rag.colliderRadius(it) }
+        }
         attachRopes()
     }
 
@@ -837,37 +863,41 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val dt = if (lastFrameNs == 0L) 0f else (now - lastFrameNs) / 1_000_000_000f
         lastFrameNs = now
         simulate(if (dt > 0.05f) 0.05f else dt)
-        if (!panning && heldProp == null) follow()
+        if (!panning && heldProp == null && settings.followPet) follow()
 
-        val step = 256f
-        var gx = 0f
-        while (gx <= s.worldWidth) {
-            if (vx(gx) >= -2f && vx(gx) <= width + 2f) {
-                canvas.drawLine(vx(gx), 0f, vx(gx), vy(s.floorY), gridPaint)
+        if (settings.showGrid) {
+            val step = 256f
+            var gx = 0f
+            while (gx <= s.worldWidth) {
+                if (vx(gx) >= -2f && vx(gx) <= width + 2f) {
+                    canvas.drawLine(vx(gx), 0f, vx(gx), vy(s.floorY), gridPaint)
+                }
+                gx += step
             }
-            gx += step
-        }
-        var gy = 0f
-        while (gy <= s.floorY) {
-            if (vy(gy) >= -2f && vy(gy) <= height + 2f) {
-                canvas.drawLine(0f, vy(gy), width.toFloat(), vy(gy), gridPaint)
+            var gy = 0f
+            while (gy <= s.floorY) {
+                if (vy(gy) >= -2f && vy(gy) <= height + 2f) {
+                    canvas.drawLine(0f, vy(gy), width.toFloat(), vy(gy), gridPaint)
+                }
+                gy += step
             }
-            gy += step
         }
-        canvas.drawLine(0f, vy(s.floorY), width.toFloat(), vy(s.floorY), groundPaint)
+        if (settings.showGround) {
+            canvas.drawLine(0f, vy(s.floorY), width.toFloat(), vy(s.floorY), groundPaint)
+        }
 
         // Everything below shares the world transform, so it pans and zooms together.
         canvas.save()
         canvas.translate(-panX * viewScale, -panY * viewScale)
         canvas.scale(viewScale, viewScale)
 
-        particles.draw(canvas, worldPaint)
+        if (settings.particles) particles.draw(canvas, worldPaint)
 
-        drawFluid(canvas)
+        if (settings.liquid) drawFluid(canvas)
         drawCharacter(canvas, sk)
         drawProps(canvas)
         drawRopes(canvas, sk)
-        drawBalance(canvas, sk)
+        if (settings.showBalance) drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
         canvas.restore()
@@ -883,10 +913,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
             canvas.drawRect(0f, 0f, s.canvasWidth, s.floorY, canvasPaint)
         }
         val art = renderer
-        if (art != null) {
-            art.draw(canvas)
-            return
-        }
+        if (art != null) art.draw(canvas)
+        // The rig over the artwork is a switch, and it is the only way to see whether a
+        // drawing actually sits on the bone it is attached to.
+        if (art != null && !settings.showBones) return
         for (bone in sk.bones) {
             val h = bone.worldPosition
             val t = bone.tipPosition()

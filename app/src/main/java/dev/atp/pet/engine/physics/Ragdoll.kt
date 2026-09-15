@@ -37,6 +37,17 @@ class Ragdoll(
     private val byName: Map<String, Bone> = bones.associateBy { it.name }
 
     private val gravity = spec.gravity
+
+    /**
+     * The app's gravity, as a multiple of the character's own.
+     *
+     * A character's gravity is authored per package — a heavy pet falls like a heavy pet —
+     * and this is the one dial over the top of it, which is what "全局设置" is for. It is
+     * live, so the slider does not have to be a rebuild.
+     */
+    var gravityScale: Float = 1f
+
+    private val g: Float get() = gravity * gravityScale
     private val floor = spec.floorY
     private val ceiling = 0f
     private val wallLeft = 0f
@@ -284,7 +295,7 @@ class Ragdoll(
             for (d in hangingSet(b, gripped)) {
                 val c = com(d)
                 val m = mass[d.name] ?: 1f
-                tau += m * gravity * (c.x - hx)
+                tau += m * g * (c.x - hx)
                 val dx = c.x - hx
                 val dy = c.y - b.worldPosition.y
                 inertia += m * (dx * dx + dy * dy)
@@ -308,7 +319,7 @@ class Ragdoll(
             for (b in bones) {
                 val c = com(b)
                 val m = mass[b.name] ?: 1f
-                tau += m * gravity * (c.x - pin.x)
+                tau += m * g * (c.x - pin.x)
                 val dx = c.x - pin.x
                 val dy = c.y - pin.y
                 inertia += m * (dx * dx + dy * dy)
@@ -377,7 +388,7 @@ class Ragdoll(
         if (noise > 0f) {
             rootVel = Vec2(rootVel.x + (random.nextFloat() * 2f - 1f) * LINEAR_NOISE * dt, rootVel.y)
         }
-        rootVel = Vec2(rootVel.x, rootVel.y + gravity * dt)
+        rootVel = Vec2(rootVel.x, rootVel.y + g * dt)
         val damp = 1f - LINEAR_DAMP * dt
         rootVel = Vec2(rootVel.x * damp, rootVel.y * damp)
         val speed = rootVel.length()
@@ -854,6 +865,6 @@ class Ragdoll(
         const val LINEAR_NOISE = 0.6f
 
         /** How strongly a resting limp joint amplifies its own deviation, in 1/s^2. */
-        const val COLLAPSE_GAIN = 6f
+        const val COLLAPSE_GAIN = 10f
     }
 }

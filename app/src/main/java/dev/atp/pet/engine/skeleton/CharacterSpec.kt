@@ -210,6 +210,41 @@ class CharacterSpec(
 
         private fun vec(a: JSONArray) = Vec2(a.getDouble(0).toFloat(), a.getDouble(1).toFloat())
 
+        /**
+         * A number out of the file, or the fallback. Never NaN.
+         *
+         * This exists because of a bug that shipped: org.json's ONE-ARGUMENT optDouble answers
+         * NaN for a key that is not in the object, and NaN is not null — so the obvious
+         * "optDouble(key) ?: fallback" hands NaN to the caller and the elvis never fires. Here
+         * that turned ROOM_AIR — a value derived from the figure and never written to a file
+         * — into NaN, which made the floor NaN, every bone's position NaN, and the pet
+         * invisible: nothing on the bench at all except the HUD, which is drawn in screen
+         * coordinates and does not care.
+         *
+         * A number that is present but not finite is treated as missing, for the same reason:
+         * a physics engine fed a NaN is a physics engine that draws nothing.
+         */
+        private fun num(o: JSONObject?, key: String, fallback: Float): Float {
+            if (o == null || !o.has(key)) return fallback
+            val v = try {
+                o.optDouble(key, fallback.toDouble()).toFloat()
+            } catch (e: Exception) {
+                return fallback
+            }
+            return if (v.isFinite()) v else fallback
+        }
+
+        /** The same, for a number inside an array: limits are written as a two-element list. */
+        private fun num(a: JSONArray?, index: Int, fallback: Float): Float {
+            if (a == null || index >= a.length()) return fallback
+            val v = try {
+                a.optDouble(index, fallback.toDouble()).toFloat()
+            } catch (e: Exception) {
+                return fallback
+            }
+            return if (v.isFinite()) v else fallback
+        }
+
         private fun strings(a: JSONArray?): List<String> {
             if (a == null) return emptyList()
             return (0 until a.length()).map { a.getString(it) }
@@ -230,21 +265,21 @@ class CharacterSpec(
                     parentName = if (b.isNull("parent")) null else b.getString("parent"),
                     head = vec(b.getJSONArray("head")),
                     tail = vec(b.getJSONArray("tail")),
-                    minAngle = lim?.optDouble(0)?.toFloat() ?: -180f,
-                    maxAngle = lim?.optDouble(1)?.toFloat() ?: 180f,
+                    minAngle = num(lim, 0, -180f),
+                    maxAngle = num(lim, 1, 180f),
                     springy = b.optBoolean("spring", false),
-                    stiffness = phys?.optDouble("stiffness")?.toFloat() ?: 0.35f,
-                    damping = phys?.optDouble("damping")?.toFloat() ?: 0.86f,
-                    gravity = phys?.optDouble("gravity")?.toFloat() ?: 0f,
+                    stiffness = num(phys, "stiffness", 0.35f),
+                    damping = num(phys, "damping", 0.86f),
+                    gravity = num(phys, "gravity", 0f),
                     colliderType = col?.optString("type", "capsule") ?: "capsule",
-                    colliderRadius = col?.optDouble("radius")?.toFloat() ?: 0f,
+                    colliderRadius = num(col, "radius", 0f),
                 )
             }.toMutableList()
 
             val chainsArr = o.optJSONArray("ikChains")
             val chains = (0 until (chainsArr?.length() ?: 0)).map { i ->
                 val c = chainsArr!!.getJSONObject(i)
-                IkChainSpec(c.getString("upper"), c.getString("lower"), c.optDouble("bend", 1.0).toFloat())
+                IkChainSpec(c.getString("upper"), c.getString("lower"), num(c, "bend", 1f))
             }
 
             val layersArr = o.optJSONArray("layers")
@@ -278,8 +313,14 @@ class CharacterSpec(
             // room too, which is why this is computed here and not left to each file. The
             // value is derived, never written back: a rig round-trips through the editor in
             // art coordinates and gains nothing.
-            val artFloor = phys?.optDouble("floorY")?.toFloat() ?: canvas.getDouble("height").toFloat()
-            val air = phys?.optDouble("roomAir")?.toFloat() ?: run {
+            val artFloor = num(phys, "floorY", canvas.getDouble("height").toFloat())
+            // ROOM_AIR is never written into a character file -- it is derived from the figure
+            // every time -- and that is exactly why this read is dangerous: a key that is not
+            // there has to fall through to the derivation, and org.json's one-argument
+            // optDouble answers NaN for a missing key rather than null. See num().
+            val air = if (phys != null && phys.has("roomAir")) {
+                num(phys, "roomAir", MIN_AIR)
+            } else {
                 val top = bones.minOf { kotlin.math.min(it.head.y, it.tail.y) }
                 val bottom = bones.maxOf { kotlin.math.max(it.head.y, it.tail.y) }
                 kotlin.math.max(MIN_AIR, (bottom - top) * ROOM_AIR)
@@ -290,17 +331,17 @@ class CharacterSpec(
                 id = o.optString("id", "unnamed"),
                 canvasWidth = canvasW,
                 canvasHeight = canvas.getDouble("height").toFloat(),
-                headHeight = o.optDouble("headHeight", 0.0).toFloat(),
+                headHeight = num(o, "headHeight", 0f),
                 bones = bones,
                 ikChains = chains,
                 layers = layers,
-                centreX = o.optDouble("centreX", (canvasW / 2f).toDouble()).toFloat(),
-                headTop = o.optDouble("headTopY", 0.0).toFloat(),
-                totalHeight = props?.optDouble("totalHeightPx")?.toFloat() ?: 0f,
-                bodyWidth = phys?.optDouble("bodyWidth")?.toFloat() ?: (canvasW * 0.32f),
-                gravity = phys?.optDouble("gravity")?.toFloat() ?: 2400f,
+                centreX = num(o, "centreX", canvasW / 2f),
+                headTop = num(o, "headTopY", 0f),
+                totalHeight = num(props, "totalHeightPx", 0f),
+                bodyWidth = num(phys, "bodyWidth", canvasW * 0.32f),
+                gravity = num(phys, "gravity", 2400f),
                 floorY = artFloor + air,
-                worldWidth = phys?.optDouble("worldWidth")?.toFloat() ?: (canvasW * 3f),
+                worldWidth = num(phys, "worldWidth", canvasW * 3f),
                 standOffset = air,
             )
         }

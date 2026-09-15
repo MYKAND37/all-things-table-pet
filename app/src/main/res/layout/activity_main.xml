@@ -80,6 +80,16 @@
                 android:id="@+id/menuLogic"
                 style="@style/MenuItem"
                 android:text="@string/menu_logic" />
+
+            <TextView
+                android:id="@+id/menuLiquids"
+                style="@style/MenuItem"
+                android:text="@string/menu_liquids" />
+
+            <TextView
+                android:id="@+id/menuSettings"
+                style="@style/MenuItem"
+                android:text="@string/menu_settings" />
         </LinearLayout>
 
         <!-- ── 内容区（磨砂） ───────────────────────── -->
@@ -213,6 +223,36 @@
 
                 <LinearLayout
                     android:id="@+id/depthList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 液体管理 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/liquidScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/liquidList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 全局设置 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/settingsScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/settingsList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"
