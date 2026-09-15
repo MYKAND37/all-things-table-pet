@@ -75,6 +75,14 @@ class Ragdoll(
     private val angle = HashMap<String, Float>()
     private val anglePrev = HashMap<String, Float>()
 
+    /**
+     * Whether the figure is being treated as hanging right now.
+     *
+     * Stateful on purpose: it is the hysteresis in [hanging], and a plain threshold there is
+     * a vibration rather than a nicety. See the note on that function.
+     */
+    private var hangingNow = false
+
     var grounded = false
         private set
 
@@ -689,8 +697,37 @@ class Ragdoll(
      * over is not standing on anything: everything under the finger is below the finger.
      */
     private fun hanging(): Boolean {
-        if (!pinned) return false
-        return abs(normalizeAngle(angle[bones.first().name] ?: 0f)) > UPSIDE_DOWN
+        if (!pinned) {
+            hangingNow = false
+            return false
+        }
+
+        // With hysteresis, and it is worth 70x rather than being a nicety.
+        //
+        // The floor treats a carried figure in one of two ways. Hanging, the figure may sink
+        // CARRY_SINK below the line and the per-bone resolution stands down. Not hanging,
+        // every part of it is turned out of the ground and the whole figure is lifted. Those
+        // two answers differ by HUNDREDS of pixels — and both of them MOVE the figure, and
+        // moving the figure is what changes the root angle. So a figure that sits on the
+        // threshold flips between the two models every single frame, and every flip throws
+        // it: measured in tools/ragdoll.py, with a finger holding the hip just under the
+        // floor line the root alternated 311 px per frame, and 252 px holding it on the line.
+        // With this, 4.5 px and 5.4 px.
+        //
+        // So it takes more to START hanging than to STOP: past UPSIDE_DOWN going over, and
+        // back under HANGING_OFF coming back. In between it keeps whichever it was — which is
+        // also the honest reading, because "is this figure on the ground or off it" does not
+        // change every sixteen milliseconds.
+        //
+        // Mirrored in tools/ragdoll.py, and pinned down by the floor-hold cases at the bottom
+        // of tools/drag_check.py.
+        val turned = abs(normalizeAngle(angle[bones.first().name] ?: 0f))
+        if (hangingNow) {
+            if (turned < HANGING_OFF) hangingNow = false
+        } else if (turned > UPSIDE_DOWN) {
+            hangingNow = true
+        }
+        return hangingNow
     }
 
     private fun lowLimit(bone: Bone): Float =
@@ -852,6 +889,15 @@ class Ragdoll(
          * between standing on the ground and hanging off a hand.
          */
         const val UPSIDE_DOWN = 2.0f
+
+        /**
+         * How far back from "turned over" a figure has to come before it stops hanging.
+         *
+         * The gap between this and UPSIDE_DOWN is the hysteresis, and it is doing real work:
+         * the two floor models a carried figure can get differ by hundreds of pixels, so a
+         * figure that sits on a hard threshold is thrown by it every frame. See [hanging].
+         */
+        const val HANGING_OFF = 1.65f
 
         /** Half a turn, the widest a joint can be when the ground is not the boss of it. */
         private const val FULL_TURN = 3.1415927f

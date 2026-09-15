@@ -124,6 +124,10 @@ COLLAPSE_GAIN = 10.0
 #: between standing on the ground and hanging off a hand.
 UPSIDE_DOWN = 2.0
 
+#: How far back from "turned over" a figure has to come before it stops counting as hanging.
+#: See Ragdoll.hanging: this is hysteresis, and it is worth 70x rather than being a nicety.
+HANGING_OFF = 1.65
+
 # How far a CARRIED figure may hang below the floor line, in px.
 #
 # This is the whole difference between "picked up by the ankle and hanging upside down" and
@@ -250,6 +254,9 @@ class Ragdoll:
         self.inertia = dict((b.name, 1.0) for b in order)
         self.pin_last_target = None
         self.pinned = False
+        #: Whether the figure is being treated as hanging right now. Stateful on purpose:
+        #: this is the hysteresis in hanging(), and a plain threshold here is a vibration.
+        self._hanging = False
         self.pin_targets = []
         # Velocity of the finger, handed to the caller so a release can throw.
         self.pin_vel = [0.0, 0.0]
@@ -505,6 +512,11 @@ class Ragdoll:
         if held:
             self._pins(dt, held)
             self.carry_floor(dt)
+            # Running _ground(dt) again HERE -- giving the floor the last word of the frame --
+            # was tried while chasing a vibration, and reverted. It changed one case's
+            # alternation ratio from 1.97 to 0.87 and cost the two-finger split 60 px of
+            # reach, and it was not the cure: the vibration was a threshold in hanging(), and
+            # a second ground pass cannot fix a switch. See hanging().
 
         self.fk()
 
@@ -824,9 +836,30 @@ class Ragdoll:
         far over is not standing on anything: everything under the finger is below the finger.
         """
         if not self.pinned:
+            self._hanging = False
             return False
+
+        # Hysteresis, and it is worth 70x rather than being a nicety.
+        #
+        # The floor treats a carried figure in one of two ways. Hanging, the figure may sink
+        # CARRY_SINK below the line and the per-bone resolution stands down. Not hanging,
+        # every part of it is turned out of the ground and the whole figure is lifted. Those
+        # two answers differ by HUNDREDS of pixels -- and they MOVE the figure, and moving
+        # the figure is what changes the root angle. So a figure that sits on the threshold
+        # flips between the two models every single frame, and every flip throws it: measured,
+        # with a finger holding the hip just under the floor line, the root alternated 310 px
+        # every frame, and 252 px holding it on the line. With this, 4.5 px and 5.4 px.
+        #
+        # So it takes more to START hanging than to STOP: past UPSIDE_DOWN going over, and
+        # back under HANGING_OFF coming back. In between, it keeps whichever it was.
         root = self.order[0].name
-        return abs(norm_angle(self.ang[root])) > UPSIDE_DOWN
+        turned = abs(norm_angle(self.ang[root]))
+        if self._hanging:
+            if turned < HANGING_OFF:
+                self._hanging = False
+        elif turned > UPSIDE_DOWN:
+            self._hanging = True
+        return self._hanging
 
     def carry_floor(self, dt):
         """

@@ -1046,14 +1046,33 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val dt = if (lastFrameNs == 0L) 0f else (now - lastFrameNs) / 1_000_000_000f
         lastFrameNs = now
         simulate(if (dt > 0.05f) 0.05f else dt)
-        if (!panning && heldProp == null && settings.followPet) {
-            follow()
-            // While a finger is holding something the finger is what has to stay in view;
-            // with nothing held it is the pet.
-            if (heldTargets.isEmpty()) followVertical() else rescueGrip()
-            // Both of those ease towards where the pet should be; this one is for when it is
-            // nowhere at all. See rescuePet.
-            rescuePet()
+        if (!panning && heldProp == null) {
+            if (heldTargets.isEmpty()) {
+                if (settings.followPet) {
+                    follow()
+                    followVertical()
+                    // Those two ease towards where the pet should be; this one is for when
+                    // it is nowhere at all. See rescuePet.
+                    rescuePet()
+                }
+            } else {
+                // A finger is holding the pet, and while it is, the camera does not move.
+                //
+                // A finger is a SCREEN position and the world point under it is
+                // pan + screen/zoom, so a camera that slides is a finger that slides. With
+                // 镜头跟着 on, following a held pet moves the world under the hand, the hand
+                // then pulls the pet a little further, the camera follows that, and the pet
+                // is shoved for ever by a hand that is not moving. Held against the floor,
+                // that shove became a 311 px vibration at half the frame rate — the worst
+                // bug this bench has had. See the note in Ragdoll.hanging for the half of it
+                // that was the solver, and the floor-hold cases in tools/drag_check.py,
+                // which drag the finger exactly the way the camera used to.
+                //
+                // Nothing is lost by it: the finger is already on the screen, and the only
+                // other thing that could need keeping in view is the body hanging off it,
+                // which is what rescueGrip is for.
+                rescueGrip()
+            }
         }
 
         if (settings.showGrid) {

@@ -106,16 +106,24 @@ class Camera:
         One frame of what onDraw does to the window, guard included.
 
         The mirror models the GUARD as well as the parts, because the guard is where the
-        interesting decisions are: 镜头跟着 off has to mean the camera stays put, and a
-        finger holding something has to keep the FINGER in view rather than the middle of
-        a figure that is hanging off it.
+        interesting decisions are. 镜头跟着 off has to mean the camera stays put; a finger
+        holding something must not have the world moved under it; and with nothing held,
+        the pet has to be kept in view and rescued when it is nowhere at all.
         """
-        if not panning and not holding_prop and follow_on:
+        if panning or holding_prop:
+            return
+        if grip is not None:
+            # A finger is holding the pet, so the camera does NOT follow it. A finger is a
+            # screen position and the world point under it is pan + screen/zoom: following
+            # a held pet moves the world under the hand, the hand then pulls the pet a
+            # little further, and the pet is shoved for ever by a hand that is not moving.
+            # Held against the floor that shove became a 311 px vibration. See the floor-
+            # hold cases in tools/drag_check.py, which drag the finger the way the camera did.
+            self.rescue_grip(grip)
+            return
+        if follow_on:
             self.follow()
-            if grip is None:
-                self.follow_vertical(points)
-            else:
-                self.rescue_grip(grip)
+            self.follow_vertical(points)
             self.rescue_pet(points)
 
     def follow(self):
@@ -353,6 +361,24 @@ def main():
     for _ in range(120):
         cam.on_draw(far, follow_on=False, panning=True)
     report("panning is left alone too", (cam.pan_x, cam.pan_y) == before,
+           "pan %.1f,%.1f" % (cam.pan_x, cam.pan_y))
+
+    # 5c. And it does not follow a pet that a finger is already holding. The camera moving
+    #     moves the world under the finger, which moves the finger, which moves the pet:
+    #     a shove that never ends, and half of the worst bug this bench has had.
+    print("== 5c. the camera does not chase a held pet ==")
+    cam = Camera(spec, TALL)
+    cam.set_root(root)
+    cam.on_size_changed()
+    cam.scale = cam.default_scale * 2.0
+    cam.clamp_pan()
+    before = (cam.pan_x, cam.pan_y)
+    held = (cam.pan_x + cam.view_width() / 2.0, cam.pan_y + cam.view_height() / 2.0)
+    far = at(2800.0, cy)
+    for _ in range(120):
+        cam.on_draw(far, grip=held)
+    report("the window stayed put while a finger held the pet",
+           (cam.pan_x, cam.pan_y) == before,
            "pan %.1f,%.1f" % (cam.pan_x, cam.pan_y))
 
     print("== 6. the window stays inside the room ==")

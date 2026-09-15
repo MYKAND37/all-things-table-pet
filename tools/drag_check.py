@@ -6,6 +6,10 @@ to HANG -- the whole body swings until it dangles below the hand. The old solver
 whatever joint reached the target, and the hip is the joint that reaches everything, so it
 spun the entire figure instead of letting it hang, and then fought gravity for it.
 
+The second complaint, and the reason for the vibration section at the bottom: a pet lying
+on the bench, dragged along it by the hip, shook. Not wobbled -- shook, with the root
+alternating a hundred pixels every single frame.
+
     python3 tools/drag_check.py
 """
 import json, math, os, sys
@@ -37,6 +41,36 @@ def fresh(settle=180):
 #: Where a hand holds something it is dangling. High enough up the 2048-tall arena that
 #: a figure hanging under it has room to actually hang, which is most of the way to the top.
 HANG_Y = 380.0
+
+
+def tremor(series):
+    """
+    How much of a motion is vibration, and how big it is.
+
+    A smooth swing has a small second difference; a vibration reverses every frame, so its
+    second difference is as big as the step itself. ratio is therefore ~0.3 for a swing and
+    ~2.0 for a limit cycle, and amp is the size of the alternating part in the signal's own
+    units. Both are needed: a fast smooth drag has a large step, and only the ratio says
+    whether it is smooth.
+    """
+    if len(series) < 8:
+        return 0.0, 0.0
+    d1 = [series[i] - series[i - 1] for i in range(1, len(series))]
+    d2 = [d1[i] - d1[i - 1] for i in range(1, len(d1))]
+    s1 = math.sqrt(sum(v * v for v in d1) / len(d1))
+    s2 = math.sqrt(sum(v * v for v in d2) / len(d2))
+    return (s2 / s1 if s1 > 1e-6 else 0.0), s2 / 2.0
+
+
+def lying(settle=240):
+    """A pet lying on the bench: dragged down to the ground, let go, left to settle."""
+    pet, by_name = fresh(settle=120)
+    hip = by_name["hip"]
+    for _ in range(90):
+        pet.step(1.0 / 60.0, [("hip", (hip.wpos[0], pet.floor - 200.0), 0.5)])
+    for _ in range(settle):
+        pet.step(1.0 / 60.0)
+    return pet, by_name
 
 
 def grip(bone, fraction):
@@ -234,6 +268,66 @@ def main():
         break
     else:
         report("positions stay finite", True)
+
+    print("\na finger holding a figure against the floor")
+    # 拖动时会剧烈抽搐, and this is what it was. The floor treats a carried figure in one of
+    # two ways depending on how far over the figure is turned; the two answers differ by
+    # HUNDREDS of pixels, and both of them MOVE the figure -- so a figure sitting on that
+    # threshold flips between them every single frame, and every flip throws it. Holding the
+    # hip just under the floor line made the root alternate 310 px per frame; on the line,
+    # 252 px. It was not the solver being stiff: it was a switch with no hysteresis, which is
+    # why the cure is two lines in Ragdoll.hanging rather than a gain.
+    # The finger target is recomputed from the hip every frame, and that is not an artificial
+    # detail -- it is what the APP does. A finger is a screen position, and the world point
+    # under it is pan + screen/zoom: with 镜头跟着 on, the camera slides to keep the pet in
+    # view, so the world point under a STATIONARY finger slides with the pet. A finger that
+    # keeps itself 20 px ahead of what it is holding is a shove that never ends, and the
+    # floor answers it every frame. (Holding the finger still instead -- the obvious way to
+    # write this test -- makes the vibration disappear, which is exactly how the WRONG cure
+    # was found first: a second ground pass after the pins fixed it here and cost the
+    # two-finger split test 60 px of reach.)
+    for label, target_y, before in (("just under the floor line", 90.0, 311.0),
+                                    ("right on the floor line", -5.0, 252.0)):
+        pet, bn = fresh(settle=150)
+        hip = bn["hip"]
+        roots = []
+        for _ in range(120):
+            pet.step(1.0 / 60.0, [("hip", (hip.wpos[0] + 20.0, pet.floor + target_y), 0.5)])
+            roots.append(pet.root_pos[1])
+        ratio, amp = tremor(roots)
+        report("the root holds still (%s)" % label, amp < 20.0,
+               "amp %.2f px, ratio %.2f (it was %.0f px)" % (amp, ratio, before))
+
+    print("\na pet lying on the bench, dragged along it")
+    # The same switch, in the pose it happens most: a pet lying on the bench is turned over
+    # just about exactly UPSIDE_DOWN, so dragging it by the hip is dragging it along the
+    # threshold. This also catches the WRONG cure: giving the floor the last word of the frame
+    # (a second ground pass after the pins) pushed this case from 0.4 px to 154 px.
+    pet, bn = lying()
+    pet, bn = lying()
+    hip = bn["hip"]
+    x0, y0 = hip.wpos
+    roots, feet = [], []
+    n = int(2.0 * 60)
+    for i in range(n):
+        t = i / (n - 1)
+        pet.step(1.0 / 60.0, [("hip", (x0 + 600.0 * t, y0), 0.5)])
+        roots.append(pet.root_pos[1])
+        feet.append(math.degrees(bn["foot_R"].wrot))
+    half = n // 2
+    ratio, amp = tremor(roots[half:])
+    foot_ratio, foot_amp = tremor(feet[half:])
+    report("the root does not vibrate while it is dragged", amp < 5.0,
+           "amp %.2f px, ratio %.2f (it was 154 px and 1.97)" % (amp, ratio))
+    # Printed and not asserted: the foot still flicks, the cause is known and written down in
+    # Ragdoll._solve_pin -- the pin's IK writes an angle WITHOUT absorbing it into ang_prev, so
+    # the correction is read back as velocity next frame. _turn_out already does this
+    # correctly, and the note there is the same note. Fixing the IK properly means re-tuning
+    # the carry gains afterwards, because that injected velocity is currently part of what
+    # turns a figure over when it is lifted by one limb; doing it half way broke four carry
+    # tests, which is how that was found out.
+    print("   ·   foot flicker (known, not asserted): amp %.1f deg, ratio %.2f"
+          % (foot_amp, foot_ratio))
 
     print("")
     if FAILURES:
