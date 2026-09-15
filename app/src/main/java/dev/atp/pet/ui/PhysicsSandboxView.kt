@@ -688,6 +688,90 @@ class PhysicsSandboxView @JvmOverloads constructor(
         if (moved) clampPan()
     }
 
+    /**
+     * Keep the pet itself in the window, the way follow() keeps it there sideways.
+     *
+     * follow() has only ever moved horizontally, and the room got deeper: the pet now stands
+     * near the BOTTOM of a room that is taller than a phone screen, so pinching to zoom --
+     * which the status line invites you to do -- slides the pet out of the window below, and
+     * nothing brought it back. An empty bench is the worst possible way to find out that the
+     * camera is looking at the wrong part of the room, and this is the half that was missing.
+     *
+     * The middle of the figure is what follows, not one bone: a pet picked up by an ankle is
+     * centred on the middle of what is hanging, which is where the eye is anyway.
+     */
+    private fun followVertical() {
+        val sk = skeleton ?: return
+        val vh = viewHeight()
+        if (vh <= 0f || sk.bones.isEmpty()) return
+        var top = Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
+        for (b in sk.bones) {
+            val y = b.worldPosition.y
+            if (y < top) top = y
+            if (y > bottom) bottom = y
+        }
+        if (top > bottom) return
+        val centre = (top + bottom) / 2f
+        // Entirely out of the window: go there now rather than easing towards it. Easing is
+        // the right answer for a nudge and the wrong one for a pet nobody can see.
+        if (bottom < panY || top > panY + vh) {
+            panY = centre - vh / 2f
+            clampPan()
+            return
+        }
+        val topEdge = panY + vh * FOLLOW_MARGIN
+        val bottomEdge = panY + vh * (1f - FOLLOW_MARGIN)
+        when {
+            centre < topEdge -> panY -= (topEdge - centre) * FOLLOW_EASE
+            centre > bottomEdge -> panY += (centre - bottomEdge) * FOLLOW_EASE
+            else -> return
+        }
+        clampPan()
+    }
+
+    /**
+     * A pet that is nowhere on the screen comes straight back.
+     *
+     * followVertical() eases, which is right for a nudge and wrong for a pet nobody can see:
+     * this is the same "window contains none of it" answer with no easing at all. It only
+     * fires when every bone is outside, so inside the dead zone it does nothing whatsoever.
+     *
+     * It runs under the same guard as the two above, which is deliberate. 镜头跟着 off means
+     * "do not move my camera" -- and a pet somewhere the user panned to is a pet they chose
+     * to look away from. The way back is the one that is already written on the screen:
+     * 双击复位, which reframes on the pet and works whatever the switches say.
+     */
+    private fun rescuePet() {
+        val sk = skeleton ?: return
+        if (sk.bones.isEmpty()) return
+        val vw = viewWidth()
+        val vh = viewHeight()
+        if (vw <= 0f || vh <= 0f) return
+        var left = Float.MAX_VALUE
+        var right = -Float.MAX_VALUE
+        var top = Float.MAX_VALUE
+        var bottom = -Float.MAX_VALUE
+        for (b in sk.bones) {
+            val p = b.worldPosition
+            if (p.x < left) left = p.x
+            if (p.x > right) right = p.x
+            if (p.y < top) top = p.y
+            if (p.y > bottom) bottom = p.y
+        }
+        if (left > right || top > bottom) return
+        var moved = false
+        if (right < panX || left > panX + vw) {
+            panX = (left + right) / 2f - vw / 2f
+            moved = true
+        }
+        if (bottom < panY || top > panY + vh) {
+            panY = (top + bottom) / 2f - vh / 2f
+            moved = true
+        }
+        if (moved) clampPan()
+    }
+
     // -- simulation ---------------------------------------------------------
 
     private fun simulate(dt: Float) {
@@ -917,7 +1001,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         simulate(if (dt > 0.05f) 0.05f else dt)
         if (!panning && heldProp == null && settings.followPet) {
             follow()
-            rescueGrip()
+            // While a finger is holding something the finger is what has to stay in view;
+            // with nothing held it is the pet.
+            if (heldTargets.isEmpty()) followVertical() else rescueGrip()
+            // Both of those ease towards where the pet should be; this one is for when it is
+            // nowhere at all. See rescuePet.
+            rescuePet()
         }
 
         if (settings.showGrid) {
@@ -1199,6 +1288,22 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
 
+        // A character whose parts folder is empty draws nothing at all: the rig is running,
+        // the rules fire, the physics is exactly right, and the bench is blank. Nothing else
+        // in the app says so, and "the pet is gone" is an alarming way to learn that a
+        // drawing is missing.
+        if (renderer == null) {
+            canvas.drawText(
+                "这个角色没有部位图：parts/ 是空的，所以什么都画不出来",
+                width / 2f, height / 2f,
+                Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    textSize = 13f * density
+                    color = 0xCCB03030.toInt()
+                    textAlign = Paint.Align.CENTER
+                },
+            )
+        }
+
         // The event log: what happened, in order. Rules are written by watching this.
         val lines = (engine?.log() ?: emptyList()).takeLast(6)
         if (lines.isNotEmpty()) {
@@ -1464,6 +1569,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         /** How many signals one event may set off before the rest are dropped. See drainSignals. */
         private const val MAX_SIGNALS_PER_FRAME = 32
+        /** How much of the window, at each edge, a followed pet may not go past. */
+        private const val FOLLOW_MARGIN = 0.10f
+        /** How much of the distance to a wandering pet the window closes per frame. */
+        private const val FOLLOW_EASE = 0.10f
         /** Above this the release is a throw, below it the pet was simply put down. */
         private const val THROW_SPEED = 700f
         private const val SHOT_SPEED = 2600f

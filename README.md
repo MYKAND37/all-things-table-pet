@@ -479,14 +479,24 @@ python3 tools/fluid_check.py      # 水洼会摊平会停、液滴认得自己�
 python3 tools/parts_check.py      # 图层、状态、画哪张图
 python3 tools/store_check.py      # character.json 四处读-改-写：骨架、状态图、深度、改名
 python3 tools/settings_check.py   # settings.json：缺键、越界、写坏了都不崩
+python3 tools/camera_check.py     # 镜头：默认缩放看得见宠物、放大后丢了它要能找回来、喷的液体落在窗口里
 python3 tools/kotlin_check.py     # Kotlin 源码：NaN 陷阱、枚举重名、括号、资源引用
+python3 tools/wiring_check.py     # 布局里的控件有没有人接线、函数有没有人调用
 ```
 
-**最后两个不是物理，是"物理测试永远看不见的那一类"**：
+**后四个不是物理，是"物理测试永远看不见的那一类"**：
 
 - `store_check.py` 镜像 `CharacterStore` 里**四处会改写 `character.json` 的地方**。
   四处都是**读-改-写用户自己的文件**：物理错了看得见，文件悄悄少了一样东西看不见。
   它已经抓出两个真 bug（保存骨架会删掉状态图、改名会把状态图落下）。
+- `camera_check.py` 镜像的是**视口**：默认缩放该看得见宠物，双指放大**丢了**宠物之后
+  要能自己找回来，喷出来的液体会不会落在窗口看的地方。**"角色不显示"这个报障出现过两次**，
+  两次都是镜头算错但看起来像应用坏了——一次是宠物被放在地面之上掉下去，
+  一次是房间变深之后宠物站在最底下、一放大就滑出窗口（跟着走的逻辑**只有横向**）。
+  它顶上还会把 Kotlin 那边的两个常数读回来核对：镜像漂了比没有镜像更糟。
+- `wiring_check.py` 抓的是"写完了没接线"：布局里有没有哪个**控件**一行 Kotlin 都没提到
+  （点了没反应，而且没有任何地方说为什么），以及哪些函数**定义了没人调用**。
+  前者是失败，后者只是一份阅读清单——见谁都喊的检查器会被无视。
 - `kotlin_check.py` 抓的是 Kotlin API 的坑。最典型的一个：
   `optDouble("roomAir")?.toFloat() ?: 兜底` —— org.json 单参数版在键不存在时返回
   **NaN 而不是 null**，`?:` 永远不触发，于是地面、骨骼坐标、视图变换全变 NaN，
@@ -544,6 +554,8 @@ tools/fluid_check.py         液体：摊平、停下、认得自己那种液体
 tools/parts_check.py         图层与状态：画哪张图
 tools/store_check.py         character.json 的读-改-写（数据不会悄悄少东西）
 tools/settings_check.py      settings.json 写坏了也不会崩
+tools/camera_check.py        视口：宠物在不在窗口里、丢了能不能找回来
+tools/wiring_check.py        控件有没有接线、函数有没有人调用
 tools/kotlin_check.py        Kotlin 源码的 NaN 陷阱 / 枚举重名 / 资源引用
 docs/ART_GUIDE.md        绘画规范（A + C）
 docs/template_female_base.png

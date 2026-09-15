@@ -17,7 +17,7 @@ the arithmetic that decides what is on screen can be tested instead of squinted 
 
     python3 tools/camera_check.py
 """
-import json, math, os, sys
+import json, math, os, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
@@ -31,6 +31,22 @@ FAILURES = []
 #: camera has to make a decision about where to look.
 TALL = (1080, 2160)
 SHORT = (1080, 1080)
+
+#: These two are the Kotlin's, and the first test below reads the Kotlin back and compares:
+#: a mirror that has drifted is worse than no mirror, because it keeps saying it is fine.
+FOLLOW_MARGIN = 0.10
+FOLLOW_EASE = 0.10
+
+VIEW = os.path.join(REPO, "app/src/main/java/dev/atp/pet/ui/PhysicsSandboxView.kt")
+
+
+def kotlin():
+    return open(VIEW, encoding="utf-8").read()
+
+
+def kotlin_constants():
+    return dict((m.group(1), float(m.group(2)))
+                for m in re.finditer(r"private const val (\w+) = ([0-9.]+)f", kotlin()))
 
 
 def report(label, ok, detail=""):
@@ -85,6 +101,23 @@ class Camera:
 
     # -- keeping things on screen ------------------------------------------
 
+    def on_draw(self, points, follow_on=True, panning=False, grip=None, holding_prop=False):
+        """
+        One frame of what onDraw does to the window, guard included.
+
+        The mirror models the GUARD as well as the parts, because the guard is where the
+        interesting decisions are: 镜头跟着 off has to mean the camera stays put, and a
+        finger holding something has to keep the FINGER in view rather than the middle of
+        a figure that is hanging off it.
+        """
+        if not panning and not holding_prop and follow_on:
+            self.follow()
+            if grip is None:
+                self.follow_vertical(points)
+            else:
+                self.rescue_grip(grip)
+            self.rescue_pet(points)
+
     def follow(self):
         vw = self.view_width()
         if vw <= 0:
@@ -111,12 +144,12 @@ class Camera:
             self.pan_y = centre - vh / 2.0
             self.clamp_pan()
             return
-        top_edge = self.pan_y + vh * 0.10
-        bottom_edge = self.pan_y + vh * 0.90
+        top_edge = self.pan_y + vh * FOLLOW_MARGIN
+        bottom_edge = self.pan_y + vh * (1.0 - FOLLOW_MARGIN)
         if centre < top_edge:
-            self.pan_y -= (top_edge - centre) * 0.10
+            self.pan_y -= (top_edge - centre) * FOLLOW_EASE
         elif centre > bottom_edge:
-            self.pan_y += (centre - bottom_edge) * 0.10
+            self.pan_y += (centre - bottom_edge) * FOLLOW_EASE
         else:
             return
         self.clamp_pan()
@@ -190,6 +223,16 @@ def main():
     print("room: floor %.0f, figure spans %.0f..%.0f"
           % (floor, min(p[1] for p in points), max(p[1] for p in points)))
 
+    print("== 0. the mirror and the view agree ==")
+    k = kotlin_constants()
+    for name, ours in (("FOLLOW_MARGIN", FOLLOW_MARGIN), ("FOLLOW_EASE", FOLLOW_EASE)):
+        report("%s is %.2f in both" % (name, ours),
+               abs(k.get(name, -1.0) - ours) < 1e-9, "Kotlin says %s" % k.get(name))
+    text = kotlin()
+    for name in ("followVertical", "rescuePet", "rescueGrip", "follow"):
+        calls = len(re.findall(r"\b%s\(\)" % name, text))
+        report("%s is defined and called" % name, calls >= 2, "%d occurrences" % calls)
+
     # 1. The default zoom fits the room, so the pet is on screen without anybody deciding
     #    anything. This is the case that has to be true or the bench looks broken.
     print("== 1. the default zoom shows the whole room ==")
@@ -217,11 +260,11 @@ def main():
            "window y %.0f..%.0f, pet %.0f..%.0f"
            % (cam.pan_y, cam.pan_y + cam.view_height(),
               min(p[1] for p in points), max(p[1] for p in points)))
-    cam.follow_vertical(points)
-    report("one frame of follow is not enough on its own", True)
+    cam.on_draw(points)
+    report("one frame is enough when it is nowhere on screen", cam.centre_inside(points),
+           "window y %.0f..%.0f" % (cam.pan_y, cam.pan_y + cam.view_height()))
     for _ in range(240):
-        cam.follow()
-        cam.follow_vertical(points)
+        cam.on_draw(points)
     report("the pet is back and stays", cam.centre_inside(points) and not cam.none_inside(points),
            "window y %.0f..%.0f" % (cam.pan_y, cam.pan_y + cam.view_height()))
 
@@ -233,11 +276,10 @@ def main():
     cam.on_size_changed()
     cam.scale = cam.default_scale * 3.0
     cam.clamp_pan()
-    cam.follow_vertical(points)
+    cam.on_draw(points)
     before = (cam.pan_x, cam.pan_y)
     for _ in range(60):
-        cam.follow()
-        cam.follow_vertical(points)
+        cam.on_draw(points)
     report("nothing moved", (cam.pan_x, cam.pan_y) == before,
            "pan %.1f,%.1f" % (cam.pan_x, cam.pan_y))
 
@@ -252,7 +294,7 @@ def main():
     lift = floor - 1500.0
     lifted = [(p[0], p[1] - (floor - 300.0 - max(q[1] for q in points))) for p in points]
     for _ in range(300):
-        cam.follow_vertical(lifted)
+        cam.on_draw(lifted)
     report("lifted pet is in the window", cam.centre_inside(lifted),
            "window y %.0f..%.0f, pet %.0f..%.0f"
            % (cam.pan_y, cam.pan_y + cam.view_height(),
@@ -269,21 +311,49 @@ def main():
     def at(x, y):
         return [(p[0] - cx + x, p[1] - cy + y) for p in points]
 
-    for name, moved in (("the far left", at(300.0, cy)),
-                        ("the far right", at(2800.0, cy)),
-                        ("just under the ceiling", at(cx, 900.0)),
-                        ("the floor of a wide room", at(2600.0, floor - 400.0))):
+    # Each case says where the WINDOW is left, because "off screen" only means anything
+    # relative to it: the pet is moved, the camera is put somewhere the user could have
+    # put it, and the rescue has to find its way back.
+    for name, moved, window in (
+            ("the far left", at(200.0, cy), (2000.0, None)),
+            ("the far right", at(2800.0, cy), (0.0, None)),
+            ("just under the ceiling", at(cx, 900.0), (None, "bottom")),
+            ("the floor of a wide room", at(2600.0, floor - 400.0), (0.0, "bottom"))):
         cam = Camera(spec, TALL)
         cam.set_root(root)
         cam.on_size_changed()
         cam.scale = cam.default_scale * 2.0
-        # What a zoomed-in window does by default: the bottom of the room, centred on the
-        # root. The pet is then somewhere else entirely, which is the whole point.
-        cam.frame_pet(root)
+        cam.clamp_pan()
+        if window[1] == "bottom":
+            cam.pan_y = max(0.0, floor - cam.view_height())
+        if window[0] is not None:
+            cam.pan_x = window[0]
+        cam.clamp_pan()
         lost = cam.none_inside(moved)
-        cam.rescue_pet(moved)
+        cam.on_draw(moved)
         report("rescued from %s" % name, lost and cam.centre_inside(moved),
                "window x %.0f y %.0f" % (cam.pan_x, cam.pan_y))
+
+    # 5b. And with 镜头跟着 turned off it does not touch the window at all. A camera that
+    #     ignores its own switch is worse than one that loses the pet: there is then no way
+    #     to look at anything except the pet.
+    print("== 5b. the follow switch is respected ==")
+    cam = Camera(spec, TALL)
+    cam.set_root(root)
+    cam.on_size_changed()
+    cam.scale = cam.default_scale * 2.0
+    cam.pan_x, cam.pan_y = 0.0, 0.0
+    cam.clamp_pan()
+    before = (cam.pan_x, cam.pan_y)
+    far = at(2800.0, cy)
+    for _ in range(120):
+        cam.on_draw(far, follow_on=False)
+    report("nothing moved with the switch off", (cam.pan_x, cam.pan_y) == before,
+           "pan %.1f,%.1f" % (cam.pan_x, cam.pan_y))
+    for _ in range(120):
+        cam.on_draw(far, follow_on=False, panning=True)
+    report("panning is left alone too", (cam.pan_x, cam.pan_y) == before,
+           "pan %.1f,%.1f" % (cam.pan_x, cam.pan_y))
 
     print("== 6. the window stays inside the room ==")
     cam = Camera(spec, SHORT)
