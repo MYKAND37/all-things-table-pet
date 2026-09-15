@@ -253,6 +253,21 @@ class CharacterSpec(
             return (0 until a.length()).map { a.getString(it) }
         }
 
+        /**
+         * The same parse, for the callers that have a screen to keep alive.
+         *
+         * Every screen that shows a character reads this file, and a file can be half-written
+         * by a full disk, truncated by a crash, or hand-edited into nonsense. parse() stays
+         * strict -- it is the one place that decides what a valid character IS -- and the
+         * screens use this instead, because the alternative is an app that closes on startup
+         * with no way back in short of clearing its data.
+         */
+        fun parseOrNull(text: String): CharacterSpec? = try {
+            parse(text)
+        } catch (e: Exception) {
+            null
+        }
+
         fun parse(text: String): CharacterSpec {
             val o = JSONObject(text)
             val canvas = o.getJSONObject("canvas")

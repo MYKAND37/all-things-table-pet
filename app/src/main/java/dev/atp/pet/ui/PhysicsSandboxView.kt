@@ -228,9 +228,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propSpecs: List<PropSpec>,
         propsDir: File?,
         objectLogic: Map<String, LogicSpec> = emptyMap(),
-    ) {
+    ): Boolean {
+        // A character whose file cannot be read must not take the app down with it. This is
+        // on the way IN -- the bench loads on launch and again after every edit -- so a
+        // truncated character.json used to mean an app that crashed on startup, every
+        // startup, with nothing to be done about it from inside the app. The bench goes
+        // empty and the caller says why.
+        val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: run {
+            unload()
+            return false
+        }
         library?.release()
-        val parsed = CharacterSpec.parse(folder.specText())
         val built = parsed.buildSkeleton()
         built.update()
         spec = parsed
@@ -275,6 +283,45 @@ class PhysicsSandboxView @JvmOverloads constructor(
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.SPAWN))
+        invalidate()
+        return true
+    }
+
+    /**
+     * Empty the bench, and mean it.
+     *
+     * Everything the world owns goes, the bitmaps included: a library that has been released
+     * but is still referenced is a renderer handing recycled pixels to a canvas, which is a
+     * crash a long way from the thing that caused it. The next successful load builds all of
+     * it again.
+     */
+    private fun unload() {
+        library?.release()
+        library = null
+        renderer = null
+        spec = null
+        skeleton = null
+        ragdoll = null
+        world = null
+        fluid = null
+        engine = null
+        propArt?.release()
+        propArt = null
+        propSpecs = emptyList()
+        objectEngines.clear()
+        propLanded.clear()
+        heldBones.clear()
+        heldTargets.clear()
+        heldOffsets.clear()
+        heldProp = null
+        propPointer = -1
+        ropes.clear()
+        broken.clear()
+        signals.clear()
+        particles.clear()
+        bubble = null
+        bubbleAt = null
+        framed = false
         invalidate()
     }
 

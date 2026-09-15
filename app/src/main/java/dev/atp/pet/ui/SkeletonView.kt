@@ -6,6 +6,7 @@ import android.graphics.Paint
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import dev.atp.pet.R
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.Bone
@@ -135,7 +136,16 @@ class SkeletonView @JvmOverloads constructor(
         // Must be dropped as well as released: rebuild() reuses the stored library when
         // there is one, and reusing a released one hands the renderer recycled bitmaps.
         library = null
-        val parsed = CharacterSpec.parse(folder.specText())
+        // A spec that will not parse leaves the editor empty and says so on the line that is
+        // already there for it, rather than taking the app down on the way in.
+        val parsed = CharacterSpec.parseOrNull(folder.specText())
+        if (parsed == null) {
+            spec = null
+            skeleton = null
+            onInfo?.invoke(context.getString(R.string.character_unreadable, folder.id))
+            invalidate()
+            return
+        }
         spec = parsed
         rebuild(parsed)
 

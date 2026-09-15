@@ -53,6 +53,7 @@
     <string name="pet_back">返回</string>
     <string name="pet_delete_confirm">删掉整只「%1$s」？\n\n%2$d 根骨骼、%3$d 张已导入的图、加上它的规则和动作，全部一起删掉，没有回收站。\n\n（内置那只是随 App 装的，重新安装就会回来，但它带着的东西不会。）</string>
     <string name="pet_deleted">已删除</string>
+    <string name="character_unreadable">「%1$s」的 character.json 读不出来，这场先空着。文件可能是空的、写坏了一半，或者手改坏了。</string>
     <string name="pet_edit_rig">看骨架 / 摆姿势</string>
     <string name="part_variant">状态版本</string>
     <string name="part_variant_hint">给这根骨骼多一张图，只在那个状态打开时才画。原来那张会自动变成"没有那个状态"时画。</string>

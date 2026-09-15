@@ -98,7 +98,13 @@ class PartAlignView @JvmOverloads constructor(
      */
     fun load(folder: CharacterFolder, boneName: String, bitmap: Bitmap, fileKey: String = boneName) {
         library?.release()
-        val parsed = CharacterSpec.parse(folder.specText())
+        library = null
+        renderer = null
+        spec = null
+        skeleton = null
+        // Nothing to line anything up against if the file will not parse: an empty view with
+        // its panel still on screen beats a crash on the way in.
+        val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return
         val built = parsed.buildSkeleton()
         built.update()
         spec = parsed

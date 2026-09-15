@@ -294,10 +294,17 @@ class MainActivity : AppCompatActivity() {
         sandboxView.stiffness = settings.defaultStiffness
         stiffnessStep = STIFFNESS_VALUES
             .indices.minByOrNull { abs(STIFFNESS_VALUES[it] - settings.defaultStiffness) } ?: 0
-        sandboxView.load(
+        val loaded = sandboxView.load(
             folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir,
             store.loadObjectLogic(),
         )
+        if (!loaded) {
+            // The bench is empty on purpose, so say so: an empty bench and a pet that has
+            // gone missing look exactly alike from here. See CharacterSpec.parseOrNull.
+            Toast.makeText(
+                this, getString(R.string.character_unreadable, folder.id), Toast.LENGTH_LONG,
+            ).show()
+        }
         sandboxView.applySettings(settings)
         buildPetChooser()
     }
@@ -538,11 +545,7 @@ class MainActivity : AppCompatActivity() {
         val poses = store.loadPoses(folder.id)
         // The preview is drawn from the skeleton alone; a spec that will not parse just
         // means the list comes up without pictures.
-        val spec = try {
-            CharacterSpec.parse(folder.specText())
-        } catch (e: Exception) {
-            null
-        }
+        val spec = CharacterSpec.parseOrNull(folder.specText())
         actionDialog?.setTitle(getString(R.string.action_list_title) + " (" + poses.size + ")")
 
         box.addView(
@@ -876,12 +879,8 @@ class MainActivity : AppCompatActivity() {
 
         // Which state each drawing is for comes out of the LAYERS, because that is where the
         // decision actually lives: a file on its own does not know when it is drawn.
-        val layers = try {
-            dev.atp.pet.engine.skeleton.CharacterSpec.parse(folder.specText())
-                .layers.filter { it.bone == bone }
-        } catch (e: Exception) {
-            emptyList()
-        }
+        val layers = CharacterSpec.parseOrNull(folder.specText())
+            ?.layers?.filter { it.bone == bone } ?: emptyList()
         fun layerOf(artKey: String) = layers.firstOrNull { it.artKey == artKey }
 
         val states = store.loadLogic(folder.id).states
@@ -1163,11 +1162,7 @@ class MainActivity : AppCompatActivity() {
     // ── 图层与深度 ──────────────────────────────────────────────────────────
 
     private fun openDepth(folder: CharacterFolder) {
-        val parsed = try {
-            CharacterSpec.parse(folder.specText())
-        } catch (e: Exception) {
-            null
-        } ?: return
+        val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return
 
         depthLayers = parsed.layers.sortedBy { it.z }.toMutableList()
         // A bone with artwork but no layer entry is never drawn at all. The shoulders were
@@ -1516,11 +1511,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun withDescendants(folder: CharacterFolder, bone: String): List<String> {
-        val parsed = try {
-            CharacterSpec.parse(folder.specText())
-        } catch (e: Exception) {
-            return listOf(bone)
-        }
+        val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return listOf(bone)
         val children = HashMap<String, MutableList<String>>()
         for (b in parsed.bones) {
             b.parentName?.let { children.getOrPut(it) { mutableListOf() }.add(b.name) }
@@ -4067,11 +4058,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun boneNames(folder: CharacterFolder): List<String> = try {
-        CharacterSpec.parse(folder.specText()).bones.map { it.name }
-    } catch (e: Exception) {
-        emptyList()
-    }
+    private fun boneNames(folder: CharacterFolder): List<String> =
+        CharacterSpec.parseOrNull(folder.specText())?.bones?.map { it.name }.orEmpty()
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 

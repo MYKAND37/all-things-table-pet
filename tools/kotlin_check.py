@@ -181,6 +181,31 @@ def check_references():
     report("every R.* the code names exists", not missing, "; ".join(missing[:8]))
 
 
+#: The one file allowed to call the strict parse: the one it lives in. Everyone else has a
+#: screen to keep alive and goes through parseOrNull.
+STRICT_PARSE = re.compile(r"CharacterSpec\.parse\s*\(")
+
+
+def check_strict_parse():
+    """
+    Only CharacterSpec.kt may call the throwing parse.
+
+    A character file can be half-written by a full disk or truncated by a crash, and this
+    parse is strict on purpose -- it is the one place that decides what a valid character IS.
+    Every screen that reads a character has to go through parseOrNull and decide what to show
+    instead. The alternative shipped: a truncated character.json meant an app that closed on
+    startup, on every startup, with no way back in short of clearing its data.
+    """
+    bad = []
+    for path in kotlin_files():
+        if os.path.basename(path) == "CharacterSpec.kt":
+            continue
+        for i, line in enumerate(open(path, encoding="utf-8"), 1):
+            if STRICT_PARSE.search(line.split("//")[0]):
+                bad.append("%s:%d  %s" % (os.path.basename(path), i, line.strip()[:80]))
+    report("only CharacterSpec.kt calls the throwing parse()", not bad, "\n         ".join(bad))
+
+
 #: Things the checker must and must not complain about. A checker that never fails is a
 #: checker nobody should trust, and the case it exists for is one line long.
 SELF_TEST = [
@@ -191,12 +216,24 @@ SELF_TEST = [
     ('// optDouble("roomAir") ?: 0 in a comment is not code', False),
 ]
 
+#: And the same for the parse rule, which has exactly one thing to get right.
+PARSE_SELF_TEST = [
+    ("val parsed = CharacterSpec.parse(folder.specText())", True),
+    ("val parsed = CharacterSpec.parseOrNull(folder.specText())", False),
+    ("// CharacterSpec.parse(folder.specText()) in a comment", False),
+]
+
 
 def self_test():
     ok = True
     for line, expected in SELF_TEST:
         code = line.split("//")[0]
         got = bool(OPT_ONE_ARG.search(code))
+        ok &= report("%-58s %s" % (line[:58], "flagged" if expected else "allowed"),
+                     got == expected)
+    for line, expected in PARSE_SELF_TEST:
+        code = line.split("//")[0]
+        got = bool(STRICT_PARSE.search(code))
         ok &= report("%-58s %s" % (line[:58], "flagged" if expected else "allowed"),
                      got == expected)
     return ok
@@ -215,6 +252,7 @@ def main():
     check_enums()
     check_balance()
     check_references()
+    check_strict_parse()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))
