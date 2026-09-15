@@ -469,10 +469,29 @@ Python 那套镜像永远抓不到这个 —— 它们测的是算法，而这�
 自己不知道气泡、骨头、粒子是什么。所以整个逻辑层能在本地测——
 
 ```bash
-python3 tools/logic_check.py      # 冷却、只一次、部位前缀、延时、规则顺序
-python3 tools/rig_prop_check.py   # 碰撞推出、接触节流、落地、投掷速度
+python3 tools/ragdoll.py          # 落地、倒吊、铰链限位、松开手的速度
 python3 tools/drag_check.py       # 拎着脚踝倒吊、两根手指劈叉、甩出去的速度
+python3 tools/carry_check.py      # 提脚整具身体翻过来（抬起多少、抓哪一段、什么帧率）
+python3 tools/logic_check.py      # 冷却、只一次、而且/或者、信号、延时、规则顺序
+python3 tools/rig_edit_check.py   # 加/删/换父级、部位属性的角度范围真的被求解器遵守
+python3 tools/rig_prop_check.py   # 碰撞推出、接触节流、落地、投掷速度
+python3 tools/fluid_check.py      # 水洼会摊平会停、液滴认得自己那种液体
+python3 tools/parts_check.py      # 图层、状态、画哪张图
+python3 tools/store_check.py      # character.json 四处读-改-写：骨架、状态图、深度、改名
+python3 tools/settings_check.py   # settings.json：缺键、越界、写坏了都不崩
+python3 tools/kotlin_check.py     # Kotlin 源码：NaN 陷阱、枚举重名、括号、资源引用
 ```
+
+**最后两个不是物理，是"物理测试永远看不见的那一类"**：
+
+- `store_check.py` 镜像 `CharacterStore` 里**四处会改写 `character.json` 的地方**。
+  四处都是**读-改-写用户自己的文件**：物理错了看得见，文件悄悄少了一样东西看不见。
+  它已经抓出两个真 bug（保存骨架会删掉状态图、改名会把状态图落下）。
+- `kotlin_check.py` 抓的是 Kotlin API 的坑。最典型的一个：
+  `optDouble("roomAir")?.toFloat() ?: 兜底` —— org.json 单参数版在键不存在时返回
+  **NaN 而不是 null**，`?:` 永远不触发，于是地面、骨骼坐标、视图变换全变 NaN，
+  **宠物画在"不是数字"的地方 = 什么都没画**。这个 bug 出过一次，
+  两条检查都带自测，而且都**拿真 bug 反过来验过**（把错改回去，它报错）。
 
 其中 `logic_check.py` 会**直接读 `LogicSpec.kt` 里那套默认规则**，
 把事件名、动作名、数值名和 Kotlin 枚举逐个对照——默认规则写错一个字母，
@@ -504,19 +523,28 @@ app/src/main/java/dev/atp/pet/
   engine/state/        StatSet（H / P 或任何数字）
   engine/logic/        LogicSpec, RuleEngine（当→如果→就）
   engine/prop/         PropSpec, PropWorld（四类道具 + 碰撞）
-  render/Particles.kt  血 / 汗 / 火花 / 灰尘
+  engine/fluid/        Fluid（液滴拥挤成水洼）, LiquidSpec
+  data/Settings.kt     全局设置（重力、画面开关、效果开关）+ 它的文件
+  render/PartRenderer.kt / PartLibrary.kt / Particles.kt
   ui/SkeletonView.kt   骨骼可视化 + 拖拽 + 改骨骼
   ui/PartAlignView.kt  导入部位时的对位
+  ui/LogicGraphView.kt 规则图（方块 + 连接词 + "＋"模块）
   ui/PosePreview.kt    动作列表里的骨架缩略图（只用 spec，不加载图片）
   ui/PhysicsSandboxView.kt  测试场
 app/src/main/assets/characters/female_base/character.json
 tools/skeleton_tool.py       参考实现 + 验证 + 模板生成
-tools/ragdoll.py             布娃娃参考实现 + 7 项测试
+tools/ragdoll.py             布娃娃参考实现 + 全部物理测试
 tools/pose_preview_check.py  动作缩略图的样子验证（出一张对比图）
-tools/rig_edit_check.py      加/删/改父级的 33 项测试
-tools/logic_check.py         规则引擎 40 项测试（含默认规则与代码的一致性）
-tools/drag_check.py          拖拽手感 20 项测试（倒吊、多指、甩出去）
-tools/rig_prop_check.py      道具物理 25 项测试
+tools/rig_edit_check.py      加/删/改父级 + 部位属性写回后求解器真的遵守
+tools/logic_check.py         规则引擎（含默认规则与代码的一致性、而且/或者、信号）
+tools/drag_check.py          拖拽手感（倒吊、多指、甩出去）
+tools/carry_check.py         提起一条腿，整具身体会不会翻过来
+tools/rig_prop_check.py      道具物理
+tools/fluid_check.py         液体：摊平、停下、认得自己那种液体
+tools/parts_check.py         图层与状态：画哪张图
+tools/store_check.py         character.json 的读-改-写（数据不会悄悄少东西）
+tools/settings_check.py      settings.json 写坏了也不会崩
+tools/kotlin_check.py        Kotlin 源码的 NaN 陷阱 / 枚举重名 / 资源引用
 docs/ART_GUIDE.md        绘画规范（A + C）
 docs/template_female_base.png
 ```
