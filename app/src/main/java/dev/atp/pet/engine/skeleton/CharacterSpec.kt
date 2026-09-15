@@ -208,6 +208,9 @@ class CharacterSpec(
         /** A room never gets less air than this, however small the figure is. */
         const val MIN_AIR = 720f
 
+        /** What a head is, as a fraction of the figure, when a file does not say. */
+        const val HEAD_OF_FIGURE = 0.163f
+
         private fun vec(a: JSONArray) = Vec2(a.getDouble(0).toFloat(), a.getDouble(1).toFloat())
 
         /**
@@ -313,6 +316,15 @@ class CharacterSpec(
             // room too, which is why this is computed here and not left to each file. The
             // value is derived, never written back: a rig round-trips through the editor in
             // art coordinates and gains nothing.
+            // How tall the figure is, off the authored joints. Two things are derived from it
+            // and both of them go wrong SILENTLY: the air above the floor (below), and the head
+            // height, which is the size of everything the physics has no other number for --
+            // how thick a bone is by default, and how far a finger may be from a bone and still
+            // take hold of it.
+            val rigTop = bones.minOf { kotlin.math.min(it.head.y, it.tail.y) }
+            val rigBottom = bones.maxOf { kotlin.math.max(it.head.y, it.tail.y) }
+            val rigSpan = kotlin.math.max(1f, rigBottom - rigTop)
+
             val artFloor = num(phys, "floorY", canvas.getDouble("height").toFloat())
             // ROOM_AIR is never written into a character file -- it is derived from the figure
             // every time -- and that is exactly why this read is dangerous: a key that is not
@@ -321,9 +333,7 @@ class CharacterSpec(
             val air = if (phys != null && phys.has("roomAir")) {
                 num(phys, "roomAir", MIN_AIR)
             } else {
-                val top = bones.minOf { kotlin.math.min(it.head.y, it.tail.y) }
-                val bottom = bones.maxOf { kotlin.math.max(it.head.y, it.tail.y) }
-                kotlin.math.max(MIN_AIR, (bottom - top) * ROOM_AIR)
+                kotlin.math.max(MIN_AIR, rigSpan * ROOM_AIR)
             }
 
             return CharacterSpec(
@@ -331,7 +341,13 @@ class CharacterSpec(
                 id = o.optString("id", "unnamed"),
                 canvasWidth = canvasW,
                 canvasHeight = canvas.getDouble("height").toFloat(),
-                headHeight = num(o, "headHeight", 0f),
+                // A file with no head height is a file whose pet cannot be picked up: the grab
+                // tolerance is measured in head heights, so zero means no finger is ever close
+                // enough to a bone to take hold of it. Derived from the rig instead, at the
+                // proportion the template uses (276 of 1690).
+                headHeight = num(o, "headHeight", 0f).let {
+                    if (it > 0f) it else rigSpan * HEAD_OF_FIGURE
+                },
                 bones = bones,
                 ikChains = chains,
                 layers = layers,

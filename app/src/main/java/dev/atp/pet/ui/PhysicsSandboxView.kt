@@ -311,6 +311,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** How many drops are on the bench, so the 液体 bar can say whether anything is there. */
     fun dropCount(): Int = fluid?.drops?.size ?: 0
 
+    /**
+     * Hand over the liquid definitions the rules and the buttons refer to.
+     *
+     * The bench keeps its own copy -- it needs one to look up a colour by name -- and editing
+     * 液体管理 deliberately does NOT reload the bench, because that would throw away the pet
+     * that is mid-fall on it. Without this, a liquid added in 液体管理 pours as whatever the
+     * default liquid happens to be, which is a colour that is not the one on the chip.
+     */
+    fun setLiquids(list: List<LiquidSpec>) {
+        liquids = list
+        invalidate()
+    }
+
     /** Mop the bench. The props and the pet are not touched. */
     fun clearLiquid() {
         fluid?.clear()

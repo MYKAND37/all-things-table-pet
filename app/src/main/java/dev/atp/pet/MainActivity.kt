@@ -2785,6 +2785,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             store.loadLogic(folder.id).liquids.toMutableList()
         }
+        sandboxView.setLiquids(logicLiquids.toList())
         buildLiquidList()
     }
 
@@ -2908,6 +2909,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun saveLiquids() {
         val folder = summoned ?: return
+        // The bench keeps its own copy of the list to look colours up by name; see setLiquids.
+        sandboxView.setLiquids(logicLiquids.toList())
         if (logicSubject == Subjects.PET) {
             saveLogic()
             return
