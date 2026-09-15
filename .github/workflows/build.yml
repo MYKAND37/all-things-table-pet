@@ -19,8 +19,25 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      # The SDK the runner image already has, plus the two packages this project needs.
+      #
+      # Deliberately NOT android-actions/setup-android: its first move is "sdkmanager tools",
+      # Google has retired the standalone "tools" package, and the action dies with
+      # "Failed to find package 'tools'" before a single line of Kotlin is compiled. A build
+      # that depends on somebody else's setup script for the one thing it cannot do without
+      # is a build that stops when they stop.
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          echo "sdk: $SDK"
+          SDKMANAGER="$(ls -d "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -1)"
+          test -n "$SDKMANAGER" || { echo 'no sdkmanager in the runner image'; exit 1; }
+          echo "sdkmanager: $SDKMANAGER"
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
