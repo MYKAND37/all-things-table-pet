@@ -306,23 +306,39 @@ class CharacterStore(private val context: Context) {
             val order = backToFront.filter { it in live } +
                 bones.map { it.name }.filter { it !in backToFront }
 
-            // Rebuilding the order must not throw away which state each part belongs to:
-            // that tag is the only thing that knows a shirt is a shirt.
-            val oldState = HashMap<String, String>()
+            // Reordering the layers must not REBUILD them.
+            //
+            // This used to write one layer per bone, carrying over only that bone's state tag,
+            // which quietly threw away everything else a layer can be. A bone with a drawing for
+            // a state owns TWO layers -- the plain one and the mechanical one -- so saving the rig
+            // from the bone editor deleted the state's drawing outright: the artwork stayed on
+            // disk and the pet simply stopped wearing it. Layers are carried over whole and only
+            // renumbered now, in the order the editor asked for, with the layers of a bone that is
+            // gone dropped.
             val oldLayers = root.optJSONArray("layers")
+            val byBone = LinkedHashMap<String, MutableList<JSONObject>>()
             for (i in 0 until (oldLayers?.length() ?: 0)) {
                 val l = oldLayers!!.getJSONObject(i)
-                val state = l.optString("state", "")
-                if (state.isEmpty()) continue
                 val name = l.getString("bone")
-                oldState[renames[name] ?: name] = state
+                val now = renames[name] ?: name
+                // A renamed bone keeps its layers, and they have to say the new name.
+                l.put("bone", now)
+                byBone.getOrPut(now) { mutableListOf() }.add(l)
             }
             val layers = JSONArray()
-            order.forEachIndexed { index, bone ->
-                val o = JSONObject().put("bone", bone).put("z", 10 + index * 10)
-                val state = oldState[bone]
-                if (!state.isNullOrEmpty()) o.put("state", state)
-                layers.put(o)
+            var nextZ = 10
+            for (bone in order) {
+                val own = byBone[bone]
+                if (own.isNullOrEmpty()) {
+                    layers.put(JSONObject().put("bone", bone).put("z", nextZ))
+                    nextZ += 10
+                    continue
+                }
+                for (l in own) {
+                    l.put("z", nextZ)
+                    nextZ += 10
+                    layers.put(l)
+                }
             }
             root.put("layers", layers)
 
