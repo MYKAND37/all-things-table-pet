@@ -323,6 +323,20 @@ class CharacterStore(private val context: Context) {
                 val now = renames[name] ?: name
                 // A renamed bone keeps its layers, and they have to say the new name.
                 l.put("bone", now)
+                // The ART key names a file, so it follows the bone as well. Without this a
+                // renamed bone still draws its drawing for a state -- the old file name is
+                // still what the layer says -- but the file is no longer recognised as
+                // belonging to the bone, so the part's folder stops showing it and deleting
+                // the drawing stops finding it.
+                val artKey = l.optString("art", "")
+                if (artKey.isNotEmpty()) {
+                    for ((from, to) in renames) {
+                        if (artKey == from || artKey.startsWith(from + VARIANT_SEPARATOR)) {
+                            l.put("art", to + artKey.removePrefix(from))
+                            break
+                        }
+                    }
+                }
                 byBone.getOrPut(now) { mutableListOf() }.add(l)
             }
             val layers = JSONArray()
@@ -390,6 +404,15 @@ class CharacterStore(private val context: Context) {
         for ((from, to) in renames) {
             val art = folder.partFile(from)
             if (art.isFile) art.renameTo(folder.partFile(to))
+            // And the drawings for its states, which live beside it as from__state.png.
+            val parts = folder.partsDir.listFiles() ?: emptyArray()
+            for (f in parts) {
+                if (!f.isFile || !f.name.endsWith(".png")) continue
+                val stem = f.name.removeSuffix(".png")
+                if (!stem.startsWith(from + VARIANT_SEPARATOR)) continue
+                val state = stem.removePrefix(from + VARIANT_SEPARATOR)
+                f.renameTo(File(folder.partsDir, to + VARIANT_SEPARATOR + state + ".png"))
+            }
         }
         return true
     }

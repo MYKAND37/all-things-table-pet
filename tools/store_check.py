@@ -38,7 +38,32 @@ def variant_key(bone, state):
 
 # ------------------- mirrors of the four operations -------------------
 
-def save_rig(root, bones, order):
+def rename_art(art_key, renames):
+    """Art keys name files, so they follow a renamed bone: see CharacterStore.saveRig."""
+    if not art_key:
+        return art_key
+    for old, new in renames.items():
+        if art_key == old or art_key.startswith(old + SEPARATOR):
+            return new + art_key[len(old):]
+    return art_key
+
+
+def rename_files(names, renames):
+    """Every file a bone owns: '<bone>.png' and '<bone>__<state>.png'."""
+    out = []
+    for n in names:
+        for old, new in renames.items():
+            if n == old + ".png":
+                n = new + ".png"
+                break
+            if n.startswith(old + SEPARATOR):
+                n = new + n[len(old):]
+                break
+        out.append(n)
+    return out
+
+
+def save_rig(root, bones, order, renames=None):
     """
     bones: [{"name", "parent", "head", "tail", "limits", "collider"}], parents first.
     Everything the file said about a bone that is still there is kept, except the four
@@ -67,7 +92,11 @@ def save_rig(root, bones, order):
     # state's drawing every time the rig was saved.
     by_bone = {}
     for l in root.get("layers", []):
-        by_bone.setdefault(l["bone"], []).append(l)
+        now = (renames or {}).get(l["bone"], l["bone"])
+        l["bone"] = now
+        if l.get("art"):
+            l["art"] = rename_art(l["art"], renames or {})
+        by_bone.setdefault(now, []).append(l)
     layers = []
     z = 10
     for name in order:
@@ -200,6 +229,32 @@ def main():
     report("no other part was touched",
            len([l for l in out["layers"] if l["bone"] != "upperarm_L"]) ==
            len([l for l in base["layers"] if l["bone"] != "upperarm_L"]))
+
+    print("\nrenaming a bone takes its drawings with it")
+    root = load()
+    root = add_variant(root, "upperarm_L", "mech")
+    before_files = ["upperarm_L.png", "upperarm_L__mech.png", "shin_L.png"]
+    renames = {"upperarm_L": "arm_L"}
+    # The editor has already renamed the bone by the time it saves, so the bone list it hands
+    # over carries the new name and the renames map is only for the layers and the files.
+    renamed_names = ["arm_L" if n == "upperarm_L" else n for n in names]
+    renamed_bones = bones_of(root)
+    for b in renamed_bones:
+        if b["name"] == "upperarm_L":
+            b["name"] = "arm_L"
+    out = save_rig(root, renamed_bones, renamed_names, renames)
+    after_files = rename_files(before_files, renames)
+    report("the base drawing is renamed", "arm_L.png" in after_files, str(after_files))
+    report("so is the drawing for its state",
+           "arm_L__mech.png" in after_files and "upperarm_L__mech.png" not in after_files,
+           str(after_files))
+    report("and nothing else moves", "shin_L.png" in after_files)
+    arts = sorted(l.get("art", l["bone"]) for l in out["layers"] if l["bone"] == "arm_L")
+    report("the layers point at the new files",
+           arts == ["arm_L", "arm_L__mech"], str(arts))
+    report("and the layers say the new bone name",
+           all(l["bone"] == "arm_L" for l in out["layers"]
+               if l.get("art", "").startswith("arm_L")))
 
     print("\nthe draw order round trips")
     order = [{"bone": n} for n in reversed(names)]
