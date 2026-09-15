@@ -130,7 +130,21 @@ class PartRenderer(
         return if (rule.triggerType == "tipBelow") tip > line else tip < line
     }
 
+    /**
+     * How many layers actually drew last frame, and how many of them could have.
+     *
+     * The bench asks these two questions. A character whose drawings are on disk but which
+     * drew NOTHING is an empty room with the physics still running, and it has been reported
+     * as "the pet has gone" more than once; two numbers turn that into an answer.
+     */
+    var drawnLastFrame = 0
+        private set
+
+    /** Layers whose artwork exists on disk: the most that could ever draw. */
+    val drawable: Int get() = baseOrder.size
+
     fun draw(canvas: Canvas) {
+        var drawn = 0
         for (layer in currentOrder()) {
             if (layer.bone in hidden) continue
             if (!layer.visible(states)) continue
@@ -155,6 +169,8 @@ class PartRenderer(
                 )
             )
             canvas.drawBitmap(part.bitmap, matrix, paint)
+            drawn++
         }
+        drawnLastFrame = drawn
     }
 }

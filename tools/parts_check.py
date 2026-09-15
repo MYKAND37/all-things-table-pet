@@ -33,6 +33,29 @@ def art_key(layer):
     return layer.get("art") or layer["bone"]
 
 
+def drawable(layers, library):
+    """PartRenderer.baseOrder: the layers whose artwork is on disk, states ignored."""
+    return [art_key(layer) for layer in layers if art_key(layer) in library]
+
+
+def blank_reason(parts, can_draw, drew):
+    """
+    What the bench says when it drew nothing, in the same order as the Kotlin.
+
+    Mirrors PhysicsSandboxView.blankReason. The order is the point: no drawings on disk,
+    drawings no layer names, and drawings a state is hiding are three different problems
+    whose fixes are in three different screens -- and an empty room looks the same for all
+    three, which is why this exists at all.
+    """
+    if parts == 0:
+        return "no parts at all"
+    if can_draw == 0:
+        return "no layer names any of them"
+    if drew == 0:
+        return "every one of them is hidden by a state"
+    return ""
+
+
 def drawn(layers, states, library):
     """Back to front, the layers that actually draw. Library: which files exist."""
     out = []
@@ -75,6 +98,14 @@ def main():
     report("a variant with no file draws nothing rather than the plain one",
            drawn(layers, {"mech": True}, {"upperarm_L"}) == [])
 
+    print("\nwhat the bench says when it drew nothing")
+    report("an empty parts folder is its own answer", blank_reason(0, 0, 0) == "no parts at all")
+    report("drawings that no layer names is a different one",
+           blank_reason(19, 0, 0) == "no layer names any of them")
+    report("drawings a state hides is a third",
+           blank_reason(19, 19, 0) == "every one of them is hidden by a state")
+    report("and a frame that drew something says nothing", blank_reason(19, 19, 19) == "")
+
     print("\nthe shipped character file still parses")
     spec = json.load(open(SPEC))
     layers = spec.get("layers", [])
@@ -82,6 +113,17 @@ def main():
            all(l["bone"] in {b["name"] for b in spec["bones"]} for l in layers))
     report("and every layer has a z",
            all(isinstance(l.get("z"), int) for l in layers), str(len(layers)) + " layers")
+
+    # The real file, and the same file with its layer list gone: this is the damaged-data
+    # case the bench now names instead of showing an empty room.
+    library = set(art_key(l) for l in layers)
+    report("the shipped file draws every one of its layers",
+           blank_reason(len(library), len(drawable(layers, library)),
+                        len(drawn(layers, {}, library))) == "",
+           "%d layers" % len(layers))
+    report("a file whose layers were lost says so",
+           blank_reason(len(library), len(drawable([], library)), 0)
+           == "no layer names any of them")
 
     print("")
     if FAILURES:

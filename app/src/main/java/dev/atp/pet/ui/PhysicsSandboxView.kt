@@ -1335,14 +1335,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
 
-        // A character whose parts folder is empty draws nothing at all: the rig is running,
-        // the rules fire, the physics is exactly right, and the bench is blank. Nothing else
-        // in the app says so, and "the pet is gone" is an alarming way to learn that a
-        // drawing is missing.
-        if (renderer == null) {
+        // Why the bench is empty, when the bench is empty.
+        //
+        // Every one of these has actually happened here: a parts folder with nothing in it, a
+        // layer list that no longer matches the files, every drawing hidden by a state, and --
+        // twice -- a pet drawn somewhere that is not the screen. From the outside they look
+        // identical, an empty room, which is the worst possible way to be told about any of
+        // them. So the bench works out which one it is and says it in the middle of the room.
+        val blank = blankReason()
+        if (blank.isNotEmpty()) {
             canvas.drawText(
-                "这个角色没有部位图：parts/ 是空的，所以什么都画不出来",
-                width / 2f, height / 2f,
+                blank, width / 2f, height / 2f,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
                     textSize = 13f * density
                     color = 0xCCB03030.toInt()
@@ -1366,6 +1369,25 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 canvas.drawText(line, 12f * density, y, smallPaint)
                 y += lineHeight
             }
+        }
+    }
+
+    /**
+     * The one line the bench shows when it drew no part at all, or "" when it drew something.
+     *
+     * Two numbers do all the work: how many layers COULD draw (their artwork is on disk) and
+     * how many did. Nothing here is a guess about the physics -- it is the renderer reporting
+     * on itself, which is the only part of the app that knows.
+     */
+    private fun blankReason(): String {
+        val art = renderer ?: return "这个角色没有部位图：parts/ 是空的，所以什么都画不出来"
+        val parts = library?.size ?: 0
+        return when {
+            art.drawable == 0 ->
+                "有 " + parts + " 张部位图，但 character.json 里没有和它们对得上的图层"
+            art.drawnLastFrame == 0 ->
+                "这个状态下所有图都被藏起来了：看看状态开关，和图层的状态标记"
+            else -> ""
         }
     }
 
