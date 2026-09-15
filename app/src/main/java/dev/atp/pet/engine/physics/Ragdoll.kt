@@ -572,7 +572,7 @@ class Ragdoll(
 
         for (round in 0 until PIN_OUTER) {
             for (pin in pins) {
-                byName[pin.bone]?.let { solvePin(it, pin.target, pin.offset) }
+                byName[pin.bone]?.let { solvePin(it, pin.target, pin.offset, dt) }
             }
         }
 
@@ -622,7 +622,7 @@ class Ragdoll(
      * gravity undo each other every frame; a figure held by the ankle then sticks at
      * whatever angle they happen to cancel at, with its torso out sideways.
      */
-    private fun solvePin(bone: Bone, target: Vec2, offset: Float) {
+    private fun solvePin(bone: Bone, target: Vec2, offset: Float, dt: Float) {
         val chain = chainToRoot(bone)
         for (iteration in 0 until PIN_IK_ITERATIONS) {
             val end = gripPoint(bone, offset)
@@ -636,6 +636,11 @@ class Ragdoll(
                 val wanted = atan2(target.y - py, target.x - px)
                 var turn = normalizeAngle(wanted - current)
                 if (b.parent == null) turn *= ROOT_PIN_GAIN
+                // A limit on how fast a joint may be swung toward the finger. See MAX_IK_RATE:
+                // an exact aim applied every frame to a body that is also being integrated is
+                // a fight, and the fight is the buzz.
+                val cap = MAX_IK_RATE * dt
+                turn = turn.coerceIn(-cap, cap)
                 val turned = (b.rotation + turn).coerceIn(lowLimit(b), highLimit(b))
                 if (turned != b.rotation) {
                     b.rotation = turned
@@ -854,6 +859,24 @@ class Ragdoll(
          * ROOT_PIN_GAIN in tools/ragdoll.py, where tools/drag_check.py pins both ends.
          */
         const val ROOT_PIN_GAIN = 0.15f
+
+        /**
+         * How fast the pin's IK may turn a joint, in radians per second.
+         *
+         * The aim is exact -- the joint is pointed straight at the target -- and an exact aim
+         * applied every frame to a body that is also being integrated is a FIGHT. Measured:
+         * the held hand jumped 55 degrees in one frame, then 39 the next, and then rode its
+         * joint limits back and forth, which is the buzz reported as 振幅不大、频率大 with
+         * v1.0.0. A limb pulls toward what it is holding at a finite rate; this is that rate.
+         *
+         * It is a RATE rather than a per-frame step so that a 120 Hz phone behaves like a
+         * 60 Hz one. Measured against no limit at all: the bone being held went from a tremor
+         * ratio of 1.32 and an amplitude of 13.2 degrees to 0.99 and 4.6, and the foot that
+         * used to swing 60 degrees while a lying pet was dragged went to 11.6. Slower than
+         * this and the floor starts winning arguments it should lose (the floor-hold cases in
+         * tools/drag_check.py go red at 6).
+         */
+        const val MAX_IK_RATE = 9.0f
 
         /**
          * How much of the finger's pull the ROOT takes, before the chain is solved at all.

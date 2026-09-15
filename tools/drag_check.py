@@ -298,6 +298,29 @@ def main():
         report("the root holds still (%s)" % label, amp < 20.0,
                "amp %.2f px, ratio %.2f (it was %.0f px)" % (amp, ratio, before))
 
+    print("\na dragged figure does not buzz")
+    # 振幅不大、频率大 -- the report that came with v1.0.0. The pin's IK aimed EXACTLY at the
+    # finger every frame, on a body that is also being integrated: measured, the held hand
+    # jumped 55 degrees in one frame, then 39 the next, and then rode its joint limits back and
+    # forth. A limb pulls toward what it is holding at a finite rate; MAX_IK_RATE is that rate,
+    # and it is a RATE so that a 120 Hz phone behaves like a 60 Hz one.
+    #
+    #   held bone      tremor ratio   amplitude      (unbounded -> 9 rad/s)
+    #   hand sideways      1.32          13.2 deg
+    #                      0.99           4.6 deg
+    pet, bn = fresh()
+    hand = bn["hand_R"]
+    x0, y0 = hand.wpos
+    held = []
+    for i in range(180):
+        t = i / 60.0
+        pet.step(1.0 / 60.0, [("hand_R", (x0 + 260.0 * t, y0), 0.5)])
+        if i > 30:
+            held.append(math.degrees(hand.wrot))
+    ratio, amp = tremor(held)
+    report("the bone being held does not buzz", ratio < 1.1 and amp < 8.0,
+           "ratio %.2f, amp %.2f deg (unbounded it was 1.32 and 13.2)" % (ratio, amp))
+
     print("\na pet lying on the bench, dragged along it")
     # The same switch, in the pose it happens most: a pet lying on the bench is turned over
     # just about exactly UPSIDE_DOWN, so dragging it by the hip is dragging it along the

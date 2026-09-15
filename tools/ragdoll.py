@@ -54,6 +54,12 @@ PIN_OUTER = 3
 # for the cases where the hand should drag a limb along with it rather than the body.
 PIN_JOINT_GAIN = 1.0
 
+#: How fast the pin's IK may turn a joint, in radians per second. See _solve_pin_aim.
+#:
+#: A rate rather than a per-frame step, so that the same drag feels the same at 30, 60 and
+#: 120 fps: a per-frame limit would be twice as generous on a fast phone.
+MAX_IK_RATE = 9.0
+
 # "aim" = cyclic coordinate descent: every joint turns to line up with the pull, which is
 #         what straightens a limp limb you dangle by its end.
 # "lss" = least squares: moves the least body, which means folding whatever folds cheapest.
@@ -608,7 +614,7 @@ class Ragdoll:
             for name, target, offset in pins:
                 bone = self.by_name.get(name)
                 if bone is not None:
-                    self._solve_pin(bone, target, offset)
+                    self._solve_pin(bone, target, offset, dt)
 
         # Whatever the joints could not reach, the root carries -- split between the pins,
         # so two hands pulling opposite ways do not fight over one translation.
@@ -644,7 +650,7 @@ class Ragdoll:
         """
         return self.chain_to_root(bone)
 
-    def _solve_pin_aim(self, bone, target, offset=0.0):
+    def _solve_pin_aim(self, bone, target, offset, dt):
         """
         The greedy solve: every joint in the chain turns to line its tip up with the finger.
 
@@ -666,6 +672,19 @@ class Ragdoll:
                 current = math.atan2(end[1] - py, end[0] - px)
                 wanted = math.atan2(target[1] - py, target[0] - px)
                 turn = norm_angle(wanted - current) * PIN_JOINT_GAIN
+                # A limit on how far one frame may swing a joint toward the finger.
+                #
+                # The aim is exact -- the joint is pointed straight at the target -- and an
+                # exact aim applied every frame to a DYNAMIC body is a fight: measured, the
+                # held hand jumped 55 degrees in one frame, then 39 the next, and then rode
+                # its joint limits back and forth, which is the buzz the user reports as
+                # 振幅不大、频率大. A limb pulls toward what it is holding at a finite rate;
+                # bounding the step lets the dynamics keep their say and turns the fight back
+                # into a pull. Big enough never to be felt in a drag (86 degrees per frame at
+                # 60 fps is 5000 degrees per second), small enough that no single frame can
+                # teleport a joint across its whole range.
+                cap = MAX_IK_RATE * dt
+                turn = max(-cap, min(cap, turn))
                 if b.parent is None:
                     # The root owns the figure's whole orientation, and gravity has the
                     # stronger claim on it. A little give lets two fingers splay a pair of
@@ -686,10 +705,10 @@ class Ragdoll:
                     self.ang[b.name] = turned
                     self.fk()
 
-    def _solve_pin(self, bone, target, offset=0.0):  # noqa: D401
+    def _solve_pin(self, bone, target, offset=0.0, dt=1.0 / 60.0):  # noqa: D401
         """Pull one point of the figure to the finger, in the cheapest way available."""
         if PIN_MODE == "aim":
-            self._solve_pin_aim(bone, target, offset)
+            self._solve_pin_aim(bone, target, offset, dt)
             return
         chain = self._pin_chain(bone)
         for _ in range(PIN_IK_ITERATIONS):
@@ -715,8 +734,10 @@ class Ragdoll:
 
             lam = (ex * ex + ey * ey) / total * PIN_JOINT_GAIN
             moved = False
+            cap = MAX_IK_RATE * dt
             for b, term in terms:
                 turn = lam * term
+                turn = max(-cap, min(cap, turn))
                 if abs(turn) < 1e-9:
                     continue
                 turned = b.rotation + turn

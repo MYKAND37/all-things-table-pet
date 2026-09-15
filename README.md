@@ -475,7 +475,7 @@ Python 那套镜像永远抓不到这个 —— 它们测的是算法，而这�
 
 ```bash
 python3 tools/ragdoll.py          # 落地、倒吊、铰链限位、松开手的速度
-python3 tools/drag_check.py       # 拎着脚踝倒吊、两根手指劈叉、甩出去的速度
+python3 tools/drag_check.py       # 拎着脚踝倒吊、两根手指劈叉、甩出去的速度、拖起来会不会抖
 python3 tools/carry_check.py      # 提脚整具身体翻过来（抬起多少、抓哪一段、什么帧率）
 python3 tools/logic_check.py      # 冷却、只一次、而且/或者、信号、延时、规则顺序
 python3 tools/rig_edit_check.py   # 加/删/换父级、部位属性的角度范围真的被求解器遵守
@@ -485,6 +485,7 @@ python3 tools/parts_check.py      # 图层、状态、画哪张图
 python3 tools/store_check.py      # character.json 四处读-改-写：骨架、状态图、深度、改名
 python3 tools/settings_check.py   # settings.json：缺键、越界、写坏了都不崩
 python3 tools/camera_check.py     # 镜头：默认缩放看得见宠物、放大后丢了它要能找回来、喷的液体落在窗口里
+python3 tools/mirror_check.py     # Kotlin 和 Python 两份实现的常数是不是同一个数（漂了就红色）
 python3 tools/kotlin_check.py     # Kotlin 源码：NaN 陷阱、枚举重名、括号、资源引用
 python3 tools/wiring_check.py     # 布局里的控件有没有人接线、函数有没有人调用
 ```
@@ -560,6 +561,7 @@ tools/parts_check.py         图层与状态：画哪张图
 tools/store_check.py         character.json 的读-改-写（数据不会悄悄少东西）
 tools/settings_check.py      settings.json 写坏了也不会崩
 tools/camera_check.py        视口：宠物在不在窗口里、丢了能不能找回来
+tools/mirror_check.py        Kotlin 与 Python 两份实现的常数对照
 tools/wiring_check.py        控件有没有接线、函数有没有人调用
 tools/kotlin_check.py        Kotlin 源码的 NaN 陷阱 / 枚举重名 / 资源引用
 docs/ART_GUIDE.md        绘画规范（A + C）
