@@ -3,7 +3,7 @@ package dev.atp.pet.render
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import dev.atp.pet.data.CharacterStore
+import dev.atp.pet.data.VARIANT_SEPARATOR
 import java.io.File
 import java.io.IOException
 
@@ -52,8 +52,7 @@ class PartLibrary(val parts: Map<String, Part>) {
                 // art the library does not have: the file was on disk, the parts folder listed
                 // it, the layer pointed at it, and the pet never wore it. It looked exactly
                 // like importing a picture that goes nowhere, because that is what it was.
-                val belongs = stem in names ||
-                    stem.substringBefore(CharacterStore.VARIANT_SEPARATOR) in names
+                val belongs = stem in names || stem.substringBefore(VARIANT_SEPARATOR) in names
                 if (!belongs) continue
                 val source = open(file) ?: continue
                 val part = crop(source) ?: continue

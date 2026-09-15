@@ -15,6 +15,17 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
 
+/**
+ * How a drawing for a STATE is named: upperarm_L__mech.png for the mech state.
+ *
+ * Top level and public rather than tucked into the store's private companion, because it is a
+ * contract between two halves of the app, not a detail of one: the store names the files this
+ * way, and the renderer's loader has to recognise the same names. It lived in a
+ * ~private companion~, the loader reached for it, and nothing local noticed until CI compiled
+ * it — which is the one kind of mistake this project's checks could not see, and now can.
+ */
+const val VARIANT_SEPARATOR = "__"
+
 /** One character package on disk. */
 class CharacterFolder(val dir: File) {
     val id: String get() = dir.name
@@ -783,9 +794,6 @@ class CharacterStore(private val context: Context) {
         const val LOGIC_FILE = "logic.json"
 
         private val RULE_LISTS = listOf("parts", "behind")
-
-        /** How a variant's file is named: upperarm_L__mech.png for the mech state. */
-        const val VARIANT_SEPARATOR = "__"
 
         /** Props are shared by every character, so they sit at the top level. */
         const val PROPS_DIR = "props"

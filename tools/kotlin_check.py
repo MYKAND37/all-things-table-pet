@@ -206,6 +206,43 @@ def check_strict_parse():
     report("only CharacterSpec.kt calls the throwing parse()", not bad, "\n         ".join(bad))
 
 
+#: A reference to a member of somebody else's class: ClassName.MEMBER.
+FOREIGN_MEMBER = re.compile(r"\b([A-Z]\w*)\.([A-Z][A-Z0-9_]{2,})\b")
+
+
+def check_private_companions():
+    """
+    A constant in a private companion object cannot be reached as ClassName.MEMBER.
+
+    This is the one class of mistake the Python mirrors can never see and the local checks
+    could not either: it does not compile, and only CI compiles. It cost a build --
+    PartLibrary.load reached for CharacterStore.VARIANT_SEPARATOR, which sits in a private
+    companion, and finding that out costs five minutes and a red release.
+
+    Deliberately narrow: it knows about private COMPANIONS and about SCREAMING_CASE members,
+    because that is the shape the mistake had. It is not a type checker and does not pretend
+    to be one.
+    """
+    owners = {}
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        for m in re.finditer(r"private companion object\s*\{([^}]*)\}", text, re.S):
+            for name in re.findall(r"\b(?:const )?val (\w+)", m.group(1)):
+                owners[name] = os.path.basename(path)
+
+    bad = []
+    for path in kotlin_files():
+        mine = os.path.basename(path)
+        for i, line in enumerate(open(path, encoding="utf-8"), 1):
+            code = line.split("//")[0]
+            for klass, member in FOREIGN_MEMBER.findall(code):
+                if member in owners and owners[member] != mine:
+                    bad.append("%s:%d  %s.%s is private to %s"
+                               % (mine, i, klass, member, owners[member]))
+    report("no private companion member is reached from another file",
+           not bad, "; ".join(bad[:4]))
+
+
 #: Things the checker must and must not complain about. A checker that never fails is a
 #: checker nobody should trust, and the case it exists for is one line long.
 SELF_TEST = [
@@ -253,6 +290,7 @@ def main():
     check_balance()
     check_references()
     check_strict_parse()
+    check_private_companions()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))
