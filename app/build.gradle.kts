@@ -12,8 +12,10 @@ val keyAliasName: String = System.getenv("ATP_KEY_ALIAS") ?: "atp-release"
 val haveReleaseKey = keystorePath != null && keystorePassword != null
 
 // Android also refuses an in-place update unless versionCode goes up, and the CI run
-// number is already monotonic, so it makes a free version code.
+// number is already monotonic, so it makes a free version code. The NAME is separate and
+// comes from gradle.properties: a version code is a counter, a version name is a claim.
 val ciRun: Int = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull() ?: 1
+val appVersion: String = (project.findProperty("appVersion") as String?) ?: "1.0.0"
 
 android {
     namespace = "dev.atp.pet"
@@ -24,7 +26,7 @@ android {
         minSdk = 26
         targetSdk = 34
         versionCode = ciRun
-        versionName = "0.6." + ciRun
+        versionName = appVersion
     }
 
     signingConfigs {

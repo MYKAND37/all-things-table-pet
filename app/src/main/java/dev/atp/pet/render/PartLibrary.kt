@@ -3,6 +3,7 @@ package dev.atp.pet.render
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
+import dev.atp.pet.data.CharacterStore
 import java.io.File
 import java.io.IOException
 
@@ -37,12 +38,26 @@ class PartLibrary(val parts: Map<String, Part>) {
 
         fun load(partsDir: File, boneNames: List<String>): PartLibrary {
             val out = LinkedHashMap<String, Part>()
-            for (name in boneNames) {
-                val file = File(partsDir, name + ".png")
-                if (!file.isFile) continue
+            val names = boneNames.toHashSet()
+            val files = partsDir.listFiles { f -> f.isFile && f.name.endsWith(".png") }
+                ?: return PartLibrary(out)
+            for (file in files.sortedBy { it.name }) {
+                val stem = file.name.substringBeforeLast(".png")
+                // The bone's own drawing, and the drawings of its STATES.
+                //
+                // A state drawing is a second file for the same bone — <bone>__<state>, see
+                // CharacterStore.VARIANT_SEPARATOR — and the key a layer names for it is that
+                // whole stem, not the bone name. Loading only the bone names therefore left
+                // every variant OUT of the library, and PartRenderer drops any layer whose
+                // art the library does not have: the file was on disk, the parts folder listed
+                // it, the layer pointed at it, and the pet never wore it. It looked exactly
+                // like importing a picture that goes nowhere, because that is what it was.
+                val belongs = stem in names ||
+                    stem.substringBefore(CharacterStore.VARIANT_SEPARATOR) in names
+                if (!belongs) continue
                 val source = open(file) ?: continue
-                val part = crop(source)
-                if (part != null) out[name] = part
+                val part = crop(source) ?: continue
+                out[stem] = part
             }
             return PartLibrary(out)
         }
