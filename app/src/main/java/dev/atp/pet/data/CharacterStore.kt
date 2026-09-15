@@ -508,11 +508,20 @@ class CharacterStore(private val context: Context) {
      * is not written until the user changes something. That is deliberate: once it exists
      * it is theirs, and nothing the app ships will ever overwrite a rule somebody wrote.
      */
+    /**
+     * A character's rules.
+     *
+     * The shipped defaults stand in for a file that is NOT THERE -- never for one that is
+     * there and empty. Delete every stat and every rule and the character keeps having none;
+     * quietly handing back the default set would be the app putting rules back that somebody
+     * deliberately removed, which is the most confusing thing a file format can do.
+     */
     fun loadLogic(id: String): LogicSpec {
-        val file = folder(id)?.let { File(it.dir, LOGIC_FILE) } ?: return LogicSpec.parse(LogicSpec.DEFAULT)
+        val file = folder(id)?.let { File(it.dir, LOGIC_FILE) }
+            ?: return LogicSpec.parse(LogicSpec.DEFAULT)
         if (!file.isFile) return LogicSpec.parse(LogicSpec.DEFAULT)
         return try {
-            LogicSpec.parse(file.readText())
+            LogicSpec.parseObject(file.readText())
         } catch (e: Exception) {
             LogicSpec.parse(LogicSpec.DEFAULT)
         }

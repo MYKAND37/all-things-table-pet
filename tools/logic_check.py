@@ -34,6 +34,26 @@ def shipped_default():
     return json.loads(src[start:end])
 
 
+def store_load_logic(file_exists, text):
+    """
+    Mirror of CharacterStore.loadLogic's decision, which is a rule about FILES:
+
+      no file            -> the shipped defaults
+      a file that parses -> exactly what it says, even if it says "no stats, no rules"
+      a file that does not parse -> the shipped defaults
+
+    The middle line is the one that is easy to get wrong. Handing the defaults back for a
+    file that is merely EMPTY would be the app putting rules back that somebody deliberately
+    deleted, which is the most confusing thing a file format can do.
+    """
+    if not file_exists:
+        return shipped_default()
+    try:
+        return json.loads(text)
+    except Exception:
+        return shipped_default()
+
+
 def enum_ids(path, pattern):
     src = open(path, encoding="utf-8").read()
     return set(re.findall(pattern, src))
@@ -365,6 +385,20 @@ def main():
                         "rules": [{"on": "emit", "part": "打", "cooldown": 0.0,
                                    "then": [{"kind": "say", "text": "家族"}]}]})
                 .handle("emit", part="打了")) == ["家族"])
+
+    print("\nan empty file is not a missing file")
+    report("no file at all gets the default rules",
+           len(store_load_logic(False, "")["rules"]) == len(default["rules"]))
+    emptied = {"version": 1, "stats": [], "states": [], "liquids": [], "rules": []}
+    got = store_load_logic(True, json.dumps(emptied))
+    report("a file someone emptied stays emptied", got.get("rules") == [] and got.get("stats") == [],
+           str(got))
+    kept = {"version": 1, "stats": [{"id": "X", "name": "X", "value": 1, "min": 0, "max": 9}],
+            "states": [], "liquids": [], "rules": []}
+    report("a file with one stat and no rules keeps exactly that",
+           store_load_logic(True, json.dumps(kept))["stats"] == kept["stats"])
+    report("a file that is not JSON gets the defaults",
+           len(store_load_logic(True, "{ broken")["rules"]) == len(default["rules"]))
 
     print("\nnumbers clamp, and report what actually happened")
     e = Engine(default)

@@ -660,6 +660,34 @@ class PhysicsSandboxView @JvmOverloads constructor(
         clampPan()
     }
 
+    /**
+     * Bring the finger back into view, if a zoomed-in window has lost it.
+     *
+     * Only when it is completely off the screen, and only just inside when it is: this is a
+     * rescue, not a camera. Following a drag continuously is the obvious thing to write and it
+     * fights the finger -- the window moves, the world under the finger moves with it, and the
+     * pet is dragged by the camera as much as by the hand. Off-screen is a state the user can
+     * see and did not ask for; a few pixels inside the edge is a state they can act on.
+     */
+    private fun rescueGrip() {
+        val grip = heldTargets.values.firstOrNull() ?: return
+        val vh = viewHeight()
+        if (vh <= 0f) return
+        val margin = vh * 0.12f
+        val moved = when {
+            grip.y < panY + margin -> {
+                panY = grip.y - margin
+                true
+            }
+            grip.y > panY + vh - margin -> {
+                panY = grip.y - vh + margin
+                true
+            }
+            else -> false
+        }
+        if (moved) clampPan()
+    }
+
     // -- simulation ---------------------------------------------------------
 
     private fun simulate(dt: Float) {
@@ -887,7 +915,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val dt = if (lastFrameNs == 0L) 0f else (now - lastFrameNs) / 1_000_000_000f
         lastFrameNs = now
         simulate(if (dt > 0.05f) 0.05f else dt)
-        if (!panning && heldProp == null && settings.followPet) follow()
+        if (!panning && heldProp == null && settings.followPet) {
+            follow()
+            rescueGrip()
+        }
 
         if (settings.showGrid) {
             val step = 256f
