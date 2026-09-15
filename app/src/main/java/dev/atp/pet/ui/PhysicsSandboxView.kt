@@ -671,7 +671,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
         if (bubbleLeft > 0f) bubbleLeft -= dt
 
         val actions = engine?.step(dt) ?: emptyList()
-        if (actions.isNotEmpty()) perform(actions, null)
+        if (actions.isNotEmpty()) {
+            perform(actions, null)
+            // Every path that performs actions has to drain what they raised, and this one is
+            // not fire(): a signal raised by a 每隔一会儿 rule would otherwise sit in the queue
+            // until the next touch, which is a rule that works when you poke the pet and does
+            // nothing when you leave it alone.
+            drainSignals()
+        }
         // Handed over every frame rather than once: the renderer is rebuilt whenever the
         // rig changes, and a stale state map would show clothes that are not being worn.
         engine?.let { renderer?.states = it.states }
@@ -767,7 +774,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         for ((subject, engine) in objectEngines) {
             if (subject !in present) continue
             val actions = engine.step(dt)
-            if (actions.isNotEmpty()) perform(actions, null, subject)
+            if (actions.isNotEmpty()) {
+                perform(actions, null, subject)
+                drainSignals()
+            }
         }
     }
 
@@ -777,6 +787,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val actions = engine.handle(event.copy(at = clock))
         if (actions.isEmpty()) return
         perform(actions, event, subject)
+        drainSignals()
     }
 
     /**
