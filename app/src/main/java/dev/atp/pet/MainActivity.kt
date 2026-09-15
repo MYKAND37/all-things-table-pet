@@ -65,7 +65,6 @@ class MainActivity : AppCompatActivity() {
 
     private enum class Pane {
         PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_PART_FILES, PET_RIG, PART_ALIGN, PET_DEPTH,
-        LIQUIDS, SETTINGS,
         PET_PROPS, PET_LOGIC, LIQUIDS, SETTINGS
     }
 

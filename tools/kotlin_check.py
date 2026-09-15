@@ -125,6 +125,34 @@ def check_balance():
     report("every file's brackets balance", not bad, "; ".join(bad))
 
 
+def check_enums():
+    """
+    Enum entries that appear twice.
+
+    Kotlin reports this as "Conflicting declarations: enum entry LIQUIDS, enum entry LIQUIDS"
+    plus a cascade of impossible-looking errors in every when() that uses the enum, which is
+    a confusing way to be told that a paste went in twice. Cheap to check, annoying to read.
+    """
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        for m in re.finditer(r"enum class \w+[^{]*\{([^}]*)\}", text, re.S):
+            # Only the entry list: everything after the first ";" is the enum's members, and
+            # a member that mentions an entry by name is not a second declaration.
+            body = m.group(1).split(";")[0]
+            names = re.findall(r"\b([A-Z][A-Z0-9_]{2,})\s*[(,;]|\b([A-Z][A-Z0-9_]{2,})\s*$",
+                               body, re.M)
+            flat = [a or b for a, b in names]
+            seen, dupes = set(), set()
+            for n in flat:
+                if n in seen:
+                    dupes.add(n)
+                seen.add(n)
+            if dupes:
+                bad.append("%s: %s" % (os.path.basename(path), ", ".join(sorted(dupes))))
+    report("no enum entry is declared twice", not bad, "; ".join(bad))
+
+
 def defined_resources():
     strings, drawables, ids = set(), set(), set()
     for base, _, names in os.walk(RES):
@@ -184,6 +212,7 @@ def main():
         return 0
     print("Kotlin sources: %d files" % len(list(kotlin_files())))
     check_opt_defaults()
+    check_enums()
     check_balance()
     check_references()
     print("")
