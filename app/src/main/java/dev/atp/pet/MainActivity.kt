@@ -302,7 +302,7 @@ class MainActivity : AppCompatActivity() {
             .indices.minByOrNull { abs(STIFFNESS_VALUES[it] - settings.defaultStiffness) } ?: 0
         val loaded = sandboxView.load(
             folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir,
-            store.loadObjectLogic(),
+            store.loadObjectLogic(folder),
         )
         if (!loaded) {
             // The bench is empty on purpose, so say so: an empty bench and a pet that has
@@ -428,7 +428,14 @@ class MainActivity : AppCompatActivity() {
     /** The states a bone can have a drawing for: the character's own, and the part's own. */
     private fun partsStates(folder: CharacterFolder, bone: String): List<StateSpec> =
         store.loadLogic(folder.id).states +
-            (store.loadObjectLogic()[Subjects.part(bone)]?.states ?: emptyList())
+            (store.loadObjectLogic(folder)[Subjects.part(bone)]?.states ?: emptyList())
+
+    /**
+     * The character whose subjects are being edited: the one on the bench, or the one whose
+     * screen is open. A part's rules and a liquid's rules live inside a character's folder, so
+     * "whose" is a real question and this is the one place that answers it.
+     */
+    private fun editingFolder(): CharacterFolder? = summoned ?: opened
 
     /**
      * Every switch on the bench, as (tag, label).
@@ -442,7 +449,7 @@ class MainActivity : AppCompatActivity() {
         val out = mutableListOf<Pair<String, String>>()
         for (state in store.loadLogic(folder.id).states) out.add(state.id to state.name)
         for (bone in boneNames(folder)) {
-            val own = store.loadObjectLogic()[Subjects.part(bone)]?.states ?: continue
+            val own = store.loadObjectLogic(folder)[Subjects.part(bone)]?.states ?: continue
             for (state in own) {
                 out.add(
                     Subjects.stateTag(bone, state.id) to
@@ -1548,7 +1555,8 @@ class MainActivity : AppCompatActivity() {
         val known = if (bone.isEmpty()) {
             depthStates.any { it.id == id }
         } else {
-            store.loadObjectLogic()[Subjects.part(bone)]?.states?.any { it.id == id } == true
+            store.loadObjectLogic(editingFolder())[Subjects.part(bone)]?.states
+                ?.any { it.id == id } == true
         }
         return getString(R.string.depth_state) + (if (off) "不" else "") +
             (if (known) stateLabel(layer.state) else id + "（已不存在）")
@@ -1568,7 +1576,8 @@ class MainActivity : AppCompatActivity() {
         // under a tag that says so. A layer belongs to one bone, so the only local states it
         // can mean are that bone's -- offering every part's would be offering a rule the
         // drawing can never satisfy.
-        val own = store.loadObjectLogic()[Subjects.part(layer.bone)]?.states ?: emptyList()
+        val own = store.loadObjectLogic(editingFolder())[Subjects.part(layer.bone)]
+            ?.states ?: emptyList()
         for (s in depthStates + own) {
             val tag = if (own.any { it.id == s.id }) Subjects.stateTag(layer.bone, s.id) else s.id
             val name = if (tag == s.id) s.name else s.name + "·" + boneLabel(layer.bone)
@@ -2394,7 +2403,7 @@ class MainActivity : AppCompatActivity() {
         val spec = when {
             // An object's logic does not need a character to be summoned: it lives in the
             // shared props directory, and 道具管理 is a perfectly good place to open it from.
-            subject != Subjects.PET -> store.loadObjectLogic()[subject]
+            subject != Subjects.PET -> store.loadObjectLogic(folder)[subject]
                 ?: LogicSpec.parseObject(LogicSpec.OBJECT_DEFAULT)
             folder == null -> LogicSpec(emptyList(), emptyList())   // nothing to edit yet
             else -> store.loadLogic(folder.id)
@@ -2433,9 +2442,9 @@ class MainActivity : AppCompatActivity() {
             // character's liquids and particles so the pickers had something in them, and
             // copying those into a prop's file would be the app making declarations nobody
             // asked for. Its rules and stats are what this file is for.
-            val own = store.loadObjectLogic()[logicSubject]
+            val own = store.loadObjectLogic(folder)[logicSubject]
             store.saveObjectLogic(
-                logicSubject,
+                folder, logicSubject,
                 LogicSpec(
                     stats = spec.stats, rules = spec.rules, states = spec.states,
                     liquids = own?.liquids ?: emptyList(),
@@ -3397,10 +3406,10 @@ class MainActivity : AppCompatActivity() {
     private fun saveParticles() {
         val folder = summoned ?: return
         sandboxView.setParticles(logicParticles.toList())
-        if (logicSubject == Subjects.PET) {
-            saveLogic()
-            return
-        }
+        // Particles are DECLARED by the character, and 粒子管理 is a character screen -- so this
+        // writes the character's own file whatever subject the logic pane happened to be showing
+        // last. (It used to route by logicSubject, which meant opening a part's rules and then
+        // editing a particle wrote the character's file anyway -- but only sometimes.)
         val spec = store.loadLogic(folder.id)
         store.saveLogic(
             folder.id,
@@ -3689,7 +3698,7 @@ class MainActivity : AppCompatActivity() {
         val name = if (bone.isEmpty()) {
             stateName(id)
         } else {
-            val own = store.loadObjectLogic()[Subjects.part(bone)]?.states
+            val own = store.loadObjectLogic(editingFolder())[Subjects.part(bone)]?.states
             (own?.firstOrNull { it.id == id }?.name ?: id) + "·" + boneLabel(bone).ifEmpty { bone }
         }
         return name

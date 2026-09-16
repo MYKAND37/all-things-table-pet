@@ -599,8 +599,81 @@ class CharacterStore(private val context: Context) {
      * deleted loads exactly as well as one that names a prop that exists, and simply has
      * nothing on the bench to run against.
      */
-    fun loadObjectLogic(): Map<String, LogicSpec> {
-        val file = File(propsDir, OBJECT_LOGIC_FILE)
+    /**
+     * Where a subject's rules live: one folder per thing that can hold logic.
+     *
+     * ```
+     * props/<道具>/logic.json                        一个道具的规则（所有角色共用）
+     * characters/<角色>/liquids/<液体>/logic.json      一种液体的规则
+     * characters/<角色>/parts/<骨骼>/logic.json        一个部件的规则
+     * props/object-logic.json                          旧的：全挤在一个文件里（只读）
+     * ```
+     *
+     * A subject that is not one of those three has no file, and the old one is where its rules
+     * will be found instead. See [loadObjectLogic] for the reading rule.
+     */
+    fun objectLogicFile(folder: CharacterFolder?, subject: String): File? = when {
+        Subjects.isProp(subject) ->
+            File(File(propsDir, Subjects.propId(subject)), LOGIC_FILE)
+        Subjects.isLiquid(subject) && folder != null ->
+            File(File(File(folder.dir, LIQUIDS_DIR), Subjects.liquidId(subject)), LOGIC_FILE)
+        // A part's folder sits INSIDE parts/, beside the drawings: parts/hand_L/ next to
+        // parts/hand_L.png and parts/hand_L__sweat.png.
+        Subjects.isPart(subject) && folder != null ->
+            File(File(folder.partsDir, Subjects.partId(subject)), LOGIC_FILE)
+        else -> null
+    }
+
+    /**
+     * Every subject's rules, from wherever they live now.
+     *
+     * The new locations are read first, and the old single file is the FALLBACK: rules written
+     * before the folders existed are the user's, and an upgrade must not lose them. Nothing is
+     * ever written back to the old file, so it retires by itself once every subject has been
+     * saved once.
+     *
+     * The one rule that is easy to get wrong, and has been got wrong here before: a new file
+     * that EXISTS AND IS EMPTY is not a file that is missing. Empty means "this thing has no
+     * rules"; falling back would be the app putting back rules somebody deleted.
+     */
+    fun loadObjectLogic(folder: CharacterFolder? = null): Map<String, LogicSpec> {
+        val out = LinkedHashMap<String, LogicSpec>()
+        for ((subject, spec) in readObjectLogicFile(File(propsDir, OBJECT_LOGIC_FILE))) {
+            out[subject] = spec
+        }
+        // The new locations win, including when they say "nothing".
+        for (file in walkLogicFiles(propsDir)) {
+            val id = file.parentFile?.name ?: continue
+            out[Subjects.prop(id)] = readOneObjectLogic(file) ?: continue
+        }
+        if (folder != null) {
+            for (file in walkLogicFiles(File(folder.dir, LIQUIDS_DIR))) {
+                val id = file.parentFile?.name ?: continue
+                out[Subjects.liquid(id)] = readOneObjectLogic(file) ?: continue
+            }
+            for (file in walkLogicFiles(folder.partsDir)) {
+                val id = file.parentFile?.name ?: continue
+                out[Subjects.part(id)] = readOneObjectLogic(file) ?: continue
+            }
+        }
+        return out
+    }
+
+    /** Every logic.json exactly one folder down from [dir], in a stable order. */
+    private fun walkLogicFiles(dir: File): List<File> =
+        (dir.listFiles() ?: emptyArray())
+            .filter { it.isDirectory }
+            .sortedBy { it.name }
+            .map { File(it, LOGIC_FILE) }
+            .filter { it.isFile }
+
+    private fun readOneObjectLogic(file: File): LogicSpec? = try {
+        LogicSpec.parseObject(file.readText())
+    } catch (e: Exception) {
+        null
+    }
+
+    private fun readObjectLogicFile(file: File): Map<String, LogicSpec> {
         if (!file.isFile) return emptyMap()
         return try {
             val root = JSONObject(file.readText())
@@ -614,25 +687,16 @@ class CharacterStore(private val context: Context) {
         }
     }
 
-    fun saveObjectLogic(subject: String, spec: LogicSpec): Boolean {
-        propsDir.mkdirs()
-        return try {
-            val file = File(propsDir, OBJECT_LOGIC_FILE)
-            val root = if (file.isFile) JSONObject(file.readText()) else JSONObject()
-            root.put(subject, JSONObject(LogicSpec.toJson(spec)))
-            writeText(file, root.toString(2))
-        } catch (e: Exception) {
-            false
-        }
+    fun saveObjectLogic(folder: CharacterFolder?, subject: String, spec: LogicSpec): Boolean {
+        val file = objectLogicFile(folder, subject) ?: return false
+        return writeText(file, LogicSpec.toJson(spec))
     }
 
-    fun forgetObjectLogic(subject: String): Boolean {
-        val file = File(propsDir, OBJECT_LOGIC_FILE)
-        if (!file.isFile) return false
+    /** Forget a subject's rules outright: delete the file that holds them. */
+    fun forgetObjectLogic(folder: CharacterFolder?, subject: String): Boolean {
+        val file = objectLogicFile(folder, subject) ?: return false
         return try {
-            val root = JSONObject(file.readText())
-            root.remove(subject)
-            writeText(file, root.toString(2))
+            file.delete()
         } catch (e: Exception) {
             false
         }
@@ -813,6 +877,9 @@ class CharacterStore(private val context: Context) {
 
         /** The logic of every prop and every liquid, keyed by subject. See Subjects. */
         const val OBJECT_LOGIC_FILE = "object-logic.json"
+
+        /** One folder per thing that holds logic: characters/<角色>/liquids/<液体>/logic.json. */
+        const val LIQUIDS_DIR = "liquids"
         const val PROPS_FILE = "props.json"
     }
 }

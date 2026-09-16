@@ -11,11 +11,12 @@ Mirrors CharacterStore.saveRig / addVariant / deleteDrawing / saveDepth.
 
     python3 tools/store_check.py
 """
-import copy, json, os, sys
+import copy, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 SPEC = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
+STORE_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/data/CharacterStore.kt")
 
 SEPARATOR = "__"
 FAILURES = []
@@ -117,6 +118,46 @@ def save_rig(root, bones, order, renames=None):
             layers.append(l)
     root["layers"] = layers
     return root
+
+
+def logic_file_name():
+    """The file name every subject's rules go in, read back out of the Kotlin."""
+    text = open(STORE_KT, encoding="utf-8").read()
+    m = re.search(r'const val LOGIC_FILE = "([^"]+)"', text)
+    return m.group(1) if m else "logic.json"
+
+
+def object_logic_path(subject, character_id=None, file_name=None):
+    """
+    Where a subject's rules live. Mirrors CharacterStore.objectLogicFile, path for path.
+
+    One folder per thing that can hold logic: a prop is shared by every character, a liquid and
+    a part belong to one. The old single file is not here on purpose -- nothing is written to it
+    any more, and it is only ever read as a fallback.
+    """
+    name = file_name or logic_file_name()
+    if subject.startswith("prop:"):
+        return "props/%s/%s" % (subject.split(":", 1)[1], name)
+    if character_id:
+        if subject.startswith("liquid:"):
+            return "characters/%s/liquids/%s/%s" % (character_id, subject.split(":", 1)[1], name)
+        if subject.startswith("part:"):
+            return "characters/%s/parts/%s/%s" % (character_id, subject.split(":", 1)[1], name)
+    return None
+
+
+def resolve_object_logic(new_files, old_root, subject):
+    """
+    Which rules a subject has, given everywhere they might be. Mirrors loadObjectLogic.
+
+    The new location wins, INCLUDING WHEN IT IS EMPTY. An empty file means "this thing has no
+    rules"; falling back to the old one would be the app putting back rules somebody deleted,
+    which is the one rule in this project that has already been got wrong once -- see
+    CharacterStore.loadLogic's note, and now this one.
+    """
+    if subject in new_files:
+        return new_files[subject]
+    return old_root.get(subject)
 
 
 def state_tag(bone, state, local):
@@ -261,6 +302,40 @@ def main():
            sorted(arts) == sorted(["upperarm_L", "upperarm_L" + SEPARATOR + "mech"]), str(arts))
     report("and exactly one of them is drawn at a time",
            sorted(states) == sorted(["!mech", "mech"]), str(states))
+
+    print("\n每样东西一个文件夹：规则现在住哪儿")
+    name = logic_file_name()
+    report("the file name is the Kotlin's", name == "logic.json", name)
+    report("a prop's rules live in its own folder",
+           object_logic_path("prop:candle", "female_base") == "props/candle/" + name,
+           str(object_logic_path("prop:candle", "female_base")))
+    report("a liquid's live under the character that declares them",
+           object_logic_path("liquid:slime", "female_base") ==
+           "characters/female_base/liquids/slime/" + name,
+           str(object_logic_path("liquid:slime", "female_base")))
+    report("a part's live beside its own drawings",
+           object_logic_path("part:hand_L", "female_base") ==
+           "characters/female_base/parts/hand_L/" + name,
+           str(object_logic_path("part:hand_L", "female_base")))
+    report("and the character is not one of the objects", object_logic_path("pet") is None)
+    report("a liquid without a character has nowhere to live",
+           object_logic_path("liquid:slime", None) is None,
+           "liquids belong to a character; a prop belongs to everybody")
+
+    print("\n搬迁：新位置赢，旧文件兜底，空文件不算没有")
+    old = {"prop:candle": '{"rules": ["old"]}', "liquid:slime": '{"rules": ["old"]}'}
+    new_only = {"prop:candle": '{"rules": ["new"]}'}
+    report("a subject only in the old file keeps its rules",
+           resolve_object_logic({}, old, "prop:candle") == old["prop:candle"])
+    report("a subject only in the new place uses that",
+           resolve_object_logic(new_only, old, "prop:candle") == '{"rules": ["new"]}')
+    report("and when both exist the new one wins",
+           resolve_object_logic(new_only, old, "prop:candle") != old["prop:candle"])
+    report("an EMPTY new file means no rules, NOT 'look in the old one'",
+           resolve_object_logic({"prop:candle": ""}, old, "prop:candle") == "",
+           "空 != 没有 —— 这条已经踩过一次")
+    report("a subject in neither place has none",
+           resolve_object_logic({}, old, "part:head") is None)
 
     print("\n一个状态的图：全局的和局部的，标记不一样")
     # The two levels may share a name -- a hand that sweats and a character that sweats -- so
