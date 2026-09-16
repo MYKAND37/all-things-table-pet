@@ -74,7 +74,29 @@ def clamp(v, lo, hi):
 #: because it keeps saying everything is fine.
 def kotlin_prefixes():
     text = open(LOGIC_KT, encoding="utf-8").read()
-    return dict(re.findall(r'const val (\w+_PREFIX) = "([^"]+)"', text))
+    return dict(re.findall(r'const val (\w+_(?:PREFIX|SEPARATOR)) = "([^"]+)"', text))
+
+
+#: How a PART's own state is tagged on a drawing: "hand_L:sweat", and "!hand_L:sweat" for
+#: the layer that draws while it is off. A global state is its plain name. Read back out of
+#: the Kotlin with the prefixes, because it is a file format too.
+def state_tag(bone, state):
+    sep = kotlin_prefixes().get("STATE_SEPARATOR", ":")
+    return bone + sep + state
+
+
+def tag_bone(tag):
+    """Which bone a layer's state tag belongs to, or "" for a global state."""
+    tag = tag.removeprefix("!")
+    sep = kotlin_prefixes().get("STATE_SEPARATOR", ":")
+    return tag.split(sep, 1)[0] if sep in tag else ""
+
+
+def tag_state(tag):
+    """The state id inside a tag, whichever level it is."""
+    tag = tag.removeprefix("!")
+    sep = kotlin_prefixes().get("STATE_SEPARATOR", ":")
+    return tag.split(sep, 1)[1] if sep in tag else tag
 
 
 def part_subject(bone):
@@ -719,6 +741,31 @@ def main():
     report("and the prop keeps its own events to itself",
            hears("prop:candle", {"type": "landed", "prop": "candle"}) and
            not is_part("prop:candle"))
+
+    print("\n全局状态和局部状态：两种开关，一个名字也不会撞")
+    sep = kotlin_prefixes().get("STATE_SEPARATOR", ":")
+    report("the state separator agrees with the Kotlin source", sep == ":", repr(sep))
+    report("a part's state tag names its bone",
+           state_tag("hand_L", "sweat") == "hand_L:sweat" and
+           tag_bone("hand_L:sweat") == "hand_L" and tag_state("hand_L:sweat") == "sweat",
+           state_tag("hand_L", "sweat"))
+    report("a global state has no bone",
+           tag_bone("dressed") == "" and tag_state("dressed") == "dressed")
+    report("the bang travels with the tag",
+           tag_bone("!hand_L:sweat") == "hand_L" and tag_state("!hand_L:sweat") == "sweat",
+           "the layer that draws while it is OFF")
+    # The point of the two levels: the same name in two engines is two switches. A hand that
+    # sweats and a character that sweats are not the same fact about the world, and a rule on
+    # the hand must not be able to turn the character's on.
+    parts = {"stats": [], "states": [{"id": "sweat", "name": "出汗", "on": False}]}
+    pet = {"stats": [], "states": [{"id": "sweat", "name": "出汗", "on": False}]}
+    hand = Engine(parts)
+    character = Engine(pet)
+    hand.states["sweat"] = True
+    report("a part's state and the character's state are different switches",
+           hand.state_on("sweat") and not character.state_on("sweat"))
+    report("and the character's own rule cannot reach the part's",
+           character.state_on("sweat") is False)
 
     print("\nTICK is raised on its own schedule")
     e = Engine(default)

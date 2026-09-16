@@ -122,6 +122,26 @@ def main():
     report("a variant with no file draws nothing rather than the plain one",
            drawn(layers, {"mech": True}, {"upperarm_L"}) == [])
 
+    print("\n两层状态：全局的和部件自己的，各画各的")
+    # The renderer holds ONE map of switches, so a part's own state goes in under the tag its
+    # layers use -- "hand_L:sweat" -- and the character's goes in under its plain name. That is
+    # the whole of the two levels as far as drawing is concerned: visible() needs no change,
+    # because a tag is a key either way. What it does need is that the two never stand in
+    # for each other, which is what this checks.
+    two_levels = [
+        {"bone": "hand_L", "z": 10, "state": "sweat", "art": "hand_L__sweat"},
+        {"bone": "hand_L", "z": 20, "state": "hand_L:sweat", "art": "hand_L__own"},
+    ]
+    two_library = {"hand_L__sweat", "hand_L__own"}
+    report("nothing draws while both are off", drawn(two_levels, {}, two_library) == [])
+    report("the character's state draws its own",
+           drawn(two_levels, {"sweat": True}, two_library) == ["hand_L__sweat"])
+    report("the hand's own state draws its own",
+           drawn(two_levels, {"hand_L:sweat": True}, two_library) == ["hand_L__own"])
+    report("and neither stands in for the other",
+           len(drawn(two_levels, {"sweat": True}, two_library)) == 1 and
+           len(drawn(two_levels, {"hand_L:sweat": True}, two_library)) == 1)
+
     print("\nwhat the loader puts in the library")
     bones = {"upperarm_L"}
     files = ["upperarm_L.png", "upperarm_L__mech.png", "notes.txt"]

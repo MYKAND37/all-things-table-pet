@@ -337,12 +337,37 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * what the other drawing looks like, and there is no way to write a rule about an arm
      * you have never seen fitted.
      */
-    fun stateOn(id: String): Boolean = engine?.stateOn(id) == true
+    fun stateOn(tag: String): Boolean = engineFor(tag)?.stateOn(Subjects.tagState(tag)) == true
 
-    fun toggleState(id: String) {
-        val e = engine ?: return
+    fun toggleState(tag: String) {
+        val e = engineFor(tag) ?: return
+        val id = Subjects.tagState(tag)
         e.states[id] = !(e.states[id] ?: false)
         invalidate()
+    }
+
+    /**
+     * Which engine owns a switch, from the tag the screen and the layers use.
+     *
+     * A tag is a plain state id for the character's own states, or "hand_L:sweat" for a part's
+     * -- the same tag a layer carries, which is why the two levels can share a name without
+     * anybody having to remember which one they are looking at. See Subjects.stateTag.
+     */
+    /** Every switch there is, keyed the way the layers name them. See engineFor. */
+    private fun mergedStates(): Map<String, Boolean> {
+        val out = LinkedHashMap<String, Boolean>()
+        engine?.states?.let { out.putAll(it) }
+        for ((subject, e) in objectEngines) {
+            if (!Subjects.isPart(subject)) continue
+            val bone = Subjects.partId(subject)
+            for ((id, on) in e.states) out[Subjects.stateTag(bone, id)] = on
+        }
+        return out
+    }
+
+    private fun engineFor(tag: String): RuleEngine? {
+        val bone = Subjects.tagBone(tag)
+        return if (bone.isEmpty()) engine else objectEngines[Subjects.part(bone)]
     }
 
     /**
@@ -412,8 +437,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /** How many drawings hang off a state, so the 状态 panel can say whether it is used. */
-    fun stateLayerCount(id: String): Int =
-        layersNow.count { it.state.removePrefix("!") == id }
+    fun stateLayerCount(tag: String): Int =
+        layersNow.count { it.state.removePrefix("!") == tag }
 
     /** Where the character stands, in canvas coordinates: spawns and bursts land here. */
     private fun homeX(): Float = ragdoll?.rootPos?.x ?: (spec?.centreX ?: 0f)
@@ -892,7 +917,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         // Handed over every frame rather than once: the renderer is rebuilt whenever the
         // rig changes, and a stale state map would show clothes that are not being worn.
-        engine?.let { renderer?.states = it.states }
+        //
+        // The renderer holds ONE map of switches, so a part's own states go in under the tag
+        // the layers use -- "hand_L:sweat" -- and the character's own go in under their plain
+        // names. That is the whole of the two levels as far as drawing is concerned:
+        // LayerSpec.visible needs no change, because a tag is a key either way.
+        renderer?.states = mergedStates()
 
         val pins = heldBones.entries.mapNotNull { entry ->
             heldTargets[entry.key]?.let {
@@ -984,7 +1014,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         for (subject in present) {
             if (objectEngines.containsKey(subject)) continue
             val spec = objectLogic[subject] ?: continue
-            if (spec.rules.isEmpty()) continue
+            // Rules OR states: a part whose only logic is a switch of its own still needs an
+            // engine, because that engine is what owns the switch -- the bench's chip flips it
+            // and the drawing waits on it, and neither has anything to do with a rule.
+            if (spec.rules.isEmpty() && spec.states.isEmpty()) continue
             // One generator per subject, and a different one each time the subject appears:
             // see the note on the character's own engine.
             val engine = RuleEngine(spec, seed = System.nanoTime())

@@ -425,6 +425,34 @@ class MainActivity : AppCompatActivity() {
 
     // ── 测试场 ──────────────────────────────────────────────────────────────
 
+    /** The states a bone can have a drawing for: the character's own, and the part's own. */
+    private fun partsStates(folder: CharacterFolder, bone: String): List<StateSpec> =
+        store.loadLogic(folder.id).states +
+            (store.loadObjectLogic()[Subjects.part(bone)]?.states ?: emptyList())
+
+    /**
+     * Every switch on the bench, as (tag, label).
+     *
+     * A global state is just its name; a part's own is tagged with the bone, which is the same
+     * tag its drawings carry -- so the chip, the layer and the engine all agree about which
+     * "出汗" they mean. See Subjects.stateTag.
+     */
+    private fun benchStates(): List<Pair<String, String>> {
+        val folder = summoned ?: return emptyList()
+        val out = mutableListOf<Pair<String, String>>()
+        for (state in store.loadLogic(folder.id).states) out.add(state.id to state.name)
+        for (bone in boneNames(folder)) {
+            val own = store.loadObjectLogic()[Subjects.part(bone)]?.states ?: continue
+            for (state in own) {
+                out.add(
+                    Subjects.stateTag(bone, state.id) to
+                        state.name + "·" + boneLabel(bone).ifEmpty { bone },
+                )
+            }
+        }
+        return out
+    }
+
     private fun buildPetChooser() {
         petChooser.removeAllViews()
         if (characters.isEmpty()) {
@@ -487,10 +515,13 @@ class MainActivity : AppCompatActivity() {
         // is no way to write a rule about a mechanical arm you have never seen fitted, and
         // no way to see it fitted except by writing a rule. So they are chips, and tapping
         // one turns it on.
-        val states = summoned?.let { store.loadLogic(it.id).states } ?: emptyList()
-        for (state in states) {
-            val on = sandboxView.stateOn(state.id)
-            val chip = label((if (on) "● " else "○ ") + state.name, 12f, if (on) INK else MUTED)
+        // ...the character's own states, and every part's own. 全局状态和局部状态: a hand that
+        // sweats and a character that sweats are two switches, and both are worth flipping
+        // from here -- a chip says which is which by naming the part.
+        val states = benchStates()
+        for ((tag, state) in states) {
+            val on = sandboxView.stateOn(tag)
+            val chip = label((if (on) "● " else "○ ") + state, 12f, if (on) INK else MUTED)
             chip.background = getDrawable(
                 if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
             )
@@ -502,7 +533,7 @@ class MainActivity : AppCompatActivity() {
             sp2.marginEnd = dp(6)
             chip.layoutParams = sp2
             chip.setOnClickListener {
-                sandboxView.toggleState(state.id)
+                sandboxView.toggleState(tag)
                 buildPetChooser()
                 buildLogicPaneIfOpen()
             }
@@ -913,7 +944,10 @@ class MainActivity : AppCompatActivity() {
             ?.layers?.filter { it.bone == bone } ?: emptyList()
         fun layerOf(artKey: String) = layers.firstOrNull { it.artKey == artKey }
 
-        val states = store.loadLogic(folder.id).states
+        // Both levels: the character's own states, and the ones THIS part declares. A drawing
+        // can be shown while "穿着" is on, or while this hand's own "出汗" is on -- and the
+        // two may share a name, which is why addVariant tags the layer with the bone.
+        val states = partsStates(folder, bone)
         val drawings = store.partDrawings(folder.id, bone)
         if (drawings.isEmpty()) {
             partFilesList.addView(label(getString(R.string.part_files_none), 11f, MUTED, bottom = 10))
@@ -968,11 +1002,9 @@ class MainActivity : AppCompatActivity() {
             val whenText = when {
                 layer == null -> getString(R.string.part_files_unused)
                 layer.state.isEmpty() -> getString(R.string.part_files_always)
-                layer.state.startsWith("!") -> {
-                    val id = layer.state.substring(1)
-                    getString(R.string.part_files_when_off, stateName(id))
-                }
-                else -> getString(R.string.part_files_when_on, stateName(layer.state))
+                layer.state.startsWith("!") ->
+                    getString(R.string.part_files_when_off, stateLabel(layer.state.substring(1)))
+                else -> getString(R.string.part_files_when_on, stateLabel(layer.state))
             }
             text.addView(label(whenText, 10f, MUTED))
             row.addView(text)
@@ -1098,7 +1130,7 @@ class MainActivity : AppCompatActivity() {
      * state that says which one is fitted.
      */
     private fun askAddVariant(folder: CharacterFolder, bone: String) {
-        val states = store.loadLogic(folder.id).states
+        val states = partsStates(folder, bone)
         if (states.isEmpty()) {
             Toast.makeText(this, R.string.part_no_states, Toast.LENGTH_SHORT).show()
             return
@@ -1508,10 +1540,18 @@ class MainActivity : AppCompatActivity() {
     private fun stateChipText(layer: LayerSpec): String {
         if (layer.state.isEmpty()) return getString(R.string.depth_state_none)
         val off = layer.state.startsWith("!")
-        val id = layer.state.removePrefix("!")
-        val known = depthStates.firstOrNull { it.id == id }
+        // The tag says which level it is, so "which state is this" is answerable without
+        // guessing: a bone prefix means that part's own state, no prefix means the
+        // character's. See Subjects.tagBone.
+        val bone = Subjects.tagBone(layer.state)
+        val id = Subjects.tagState(layer.state)
+        val known = if (bone.isEmpty()) {
+            depthStates.any { it.id == id }
+        } else {
+            store.loadObjectLogic()[Subjects.part(bone)]?.states?.any { it.id == id } == true
+        }
         return getString(R.string.depth_state) + (if (off) "不" else "") +
-            (known?.name ?: id + "（已不存在）")
+            (if (known) stateLabel(layer.state) else id + "（已不存在）")
     }
 
     /**
@@ -1524,9 +1564,16 @@ class MainActivity : AppCompatActivity() {
     private fun askPartState(index: Int) {
         val layer = depthLayers.getOrNull(index) ?: return
         val options = mutableListOf("" to getString(R.string.depth_state_none))
-        for (s in depthStates) {
-            options.add(s.id to getString(R.string.depth_state) + s.name)
-            options.add("!" + s.id to getString(R.string.depth_state_not) + s.name)
+        // Both levels: the character's own states under their names, and this bone's own
+        // under a tag that says so. A layer belongs to one bone, so the only local states it
+        // can mean are that bone's -- offering every part's would be offering a rule the
+        // drawing can never satisfy.
+        val own = store.loadObjectLogic()[Subjects.part(layer.bone)]?.states ?: emptyList()
+        for (s in depthStates + own) {
+            val tag = if (own.any { it.id == s.id }) Subjects.stateTag(layer.bone, s.id) else s.id
+            val name = if (tag == s.id) s.name else s.name + "·" + boneLabel(layer.bone)
+            options.add(tag to getString(R.string.depth_state) + name)
+            options.add("!" + tag to getString(R.string.depth_state_not) + name)
         }
         pickList(
             title = getString(R.string.depth_state) + " · " + layer.bone,
@@ -3437,7 +3484,15 @@ class MainActivity : AppCompatActivity() {
         text.layoutParams = LinearLayout.LayoutParams(
             0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
         )
-        val art = sandboxView.stateLayerCount(state.id)
+        // The tag, not the bare id: a part's own state and a global one with the same name
+        // are two switches, and the drawings are counted per switch. See Subjects.stateTag.
+        val art = sandboxView.stateLayerCount(
+            if (Subjects.isPart(logicSubject)) {
+                Subjects.stateTag(Subjects.partId(logicSubject), state.id)
+            } else {
+                state.id
+            },
+        )
         val rules = logicRules.count { rule ->
             rule.conditions.any { it.kind == "state" && it.state == state.id } ||
                 (rule.actions + rule.elseActions).any { it.state == state.id }
@@ -3620,6 +3675,25 @@ class MainActivity : AppCompatActivity() {
 
     private fun stateName(id: String): String =
         logicStates.firstOrNull { it.id == id }?.name ?: id
+
+    /**
+     * What to call a state a LAYER names.
+     *
+     * A layer's tag is either a global state's id or "<bone>:<id>" for a part's own, so this
+     * strips the tag, finds the name wherever it is declared, and says which part it belongs
+     * to when it belongs to one -- "出汗·手" reads better than two chips that both say 出汗.
+     */
+    private fun stateLabel(tag: String): String {
+        val bone = Subjects.tagBone(tag)
+        val id = Subjects.tagState(tag)
+        val name = if (bone.isEmpty()) {
+            stateName(id)
+        } else {
+            val own = store.loadObjectLogic()[Subjects.part(bone)]?.states
+            (own?.firstOrNull { it.id == id }?.name ?: id) + "·" + boneLabel(bone).ifEmpty { bone }
+        }
+        return name
+    }
 
     private fun pickState(title: String, onPick: (String) -> Unit) {
         pickList(

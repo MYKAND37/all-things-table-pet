@@ -74,6 +74,32 @@ object Subjects {
      */
     const val PART_PREFIX = "part:"
 
+    /**
+     * How a PART's own state is tagged on a drawing: `hand_L:sweat`, and `!hand_L:sweat` for
+     * the layer that draws while it is off. A global state is its plain name.
+     *
+     * This is what lets the two levels share a name. A hand that sweats and a character that
+     * sweats are two different switches, and the renderer holds one map of them — so the map's
+     * key has to say which one it is, and the layer's tag says it in the file as well. Written
+     * by CharacterStore.addVariant, read by LayerSpec.visible (which needs no change at all:
+     * the tag IS the key).
+     */
+    const val STATE_SEPARATOR = ":"
+
+    fun stateTag(bone: String, state: String): String = bone + STATE_SEPARATOR + state
+
+    /** Which bone a layer's state tag belongs to, or "" for a global state. */
+    fun tagBone(tag: String): String {
+        val bare = tag.removePrefix("!")
+        return if (bare.contains(STATE_SEPARATOR)) bare.substringBefore(STATE_SEPARATOR) else ""
+    }
+
+    /** The state id inside a tag, whichever level it is. "!" is not part of the id. */
+    fun tagState(tag: String): String {
+        val bare = tag.removePrefix("!")
+        return if (bare.contains(STATE_SEPARATOR)) bare.substringAfter(STATE_SEPARATOR) else bare
+    }
+
     fun prop(id: String): String = PROP_PREFIX + id
 
     fun liquid(id: String): String = LIQUID_PREFIX + id

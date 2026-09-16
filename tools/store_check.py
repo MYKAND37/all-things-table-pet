@@ -119,13 +119,25 @@ def save_rig(root, bones, order, renames=None):
     return root
 
 
-def add_variant(root, bone, state):
+def state_tag(bone, state, local):
+    """
+    The tag a state drawing carries. Mirrors Subjects.stateTag and the choice addVariant makes.
+
+    A state the PART declares is tagged with the bone -- "hand_L:sweat" -- and a global one is
+    just its name, because the two levels may share a name and the layer has to say which one
+    it is for. Nothing else in the file format changes: the art key is still 骨骼__状态.
+    """
+    return bone + ":" + state if local else state
+
+
+def add_variant(root, bone, state, local=False):
     arr = root.setdefault("layers", [])
     top = max([l.get("z", 0) for l in arr] or [0])
+    tag = state_tag(bone, state, local)
     for l in arr:
         if l["bone"] == bone and not l.get("state", ""):
-            l["state"] = "!" + state
-    arr.append({"bone": bone, "z": top + 10, "state": state, "art": variant_key(bone, state)})
+            l["state"] = "!" + tag
+    arr.append({"bone": bone, "z": top + 10, "state": tag, "art": variant_key(bone, state)})
     return root
 
 
@@ -249,6 +261,22 @@ def main():
            sorted(arts) == sorted(["upperarm_L", "upperarm_L" + SEPARATOR + "mech"]), str(arts))
     report("and exactly one of them is drawn at a time",
            sorted(states) == sorted(["!mech", "mech"]), str(states))
+
+    print("\n一个状态的图：全局的和局部的，标记不一样")
+    # The two levels may share a name -- a hand that sweats and a character that sweats -- so
+    # the layer has to say which one it is for, and it says it with a bone prefix. Nothing else
+    # changes: the art key is still 骨骼__状态.
+    global_arm = add_variant(load(), "upperarm_L", "mech")
+    arm_states = [l.get("state", "") for l in global_arm["layers"] if l["bone"] == "upperarm_L"]
+    report("a global state is tagged with its own name",
+           sorted(arm_states) == sorted(["!mech", "mech"]), str(arm_states))
+    local_arm = add_variant(load(), "upperarm_L", "mech", local=True)
+    arm_states = [l.get("state", "") for l in local_arm["layers"] if l["bone"] == "upperarm_L"]
+    report("a part's own state is tagged with the bone",
+           sorted(arm_states) == sorted(["!upperarm_L:mech", "upperarm_L:mech"]), str(arm_states))
+    arts = [l.get("art", l["bone"]) for l in local_arm["layers"] if l["bone"] == "upperarm_L"]
+    report("and the art key is unchanged either way",
+           sorted(arts) == sorted(["upperarm_L", "upperarm_L" + SEPARATOR + "mech"]), str(arts))
 
     print("\ndeleting a drawing puts the part back the way it was")
     out = delete_drawing(out, "upperarm_L", "upperarm_L" + SEPARATOR + "mech")

@@ -2,6 +2,7 @@ package dev.atp.pet.data
 
 import android.content.Context
 import dev.atp.pet.engine.logic.LogicSpec
+import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.prop.PropSpecs
 import dev.atp.pet.engine.skeleton.BoneSpec
@@ -169,6 +170,14 @@ class CharacterStore(private val context: Context) {
      */
     fun addVariant(id: String, bone: String, state: String): Boolean {
         val folder = folder(id) ?: return false
+        // Which LEVEL this state belongs to, decided by who declares it: a state the PART
+        // declares is tagged with the bone ("hand_L:sweat"), a global one is just its name.
+        // The two levels may share a name -- a hand that sweats and a character that sweats are
+        // two different switches -- so a drawing has to say which one it is for. See
+        // Subjects.stateTag, and LayerSpec.visible, which looks the tag up as a key.
+        val local = loadObjectLogic()[Subjects.part(bone)]
+            ?.states?.any { it.id == state } == true
+        val tag = if (local) Subjects.stateTag(bone, state) else state
         return try {
             val root = JSONObject(folder.specText())
             val arr = root.optJSONArray("layers") ?: JSONArray()
@@ -177,13 +186,13 @@ class CharacterStore(private val context: Context) {
                 val l = arr.getJSONObject(i)
                 top = maxOf(top, l.optInt("z", 0))
                 if (l.getString("bone") == bone && l.optString("state", "").isEmpty()) {
-                    l.put("state", "!" + state)
+                    l.put("state", "!" + tag)
                 }
             }
             arr.put(
                 JSONObject()
                     .put("bone", bone).put("z", top + 10)
-                    .put("state", state).put("art", bone + VARIANT_SEPARATOR + state)
+                    .put("state", tag).put("art", bone + VARIANT_SEPARATOR + state)
             )
             root.put("layers", arr)
             root.put("version", root.optInt("version", 0) + 1)
