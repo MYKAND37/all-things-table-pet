@@ -120,6 +120,8 @@ class World:
                                  if not k.startswith(str(p.serial) + "|")}
         for p in gone:
             self.live.remove(p)
+        # 道具对道具放在最后：邻居把它推进去的东西，不该由骨头和地面来收尾。
+        self._separate()
         return hits
 
     def _borders(self, p):
@@ -167,6 +169,63 @@ class World:
                 self.last_hit[key] = self.clock
                 hits.append((p, name, max(speed, MIN_HIT) * p.spec.force))
             speed = 0.0
+
+    def _separate(self):
+        """道具对道具：圆对圆。重叠对半分，除非其中一个被手指按着。
+
+        对半分是个决定，不是默认值。道具的「重量」按设计不在 PropSpec 里
+        （"how heavy it is ... is the rule set's business"），所以规格能支撑的分法
+        只有对半。从 force 里读一个质量出来，等于凭空发明一个编辑器从没写过、
+        规则也够不着的数；锤子和垫子必须是同一个道具配不同规则，这里也得成立。
+        """
+        # 用 set 不用 list：一个道具同一帧可能卷进三场碰撞，边界仍然只能为它跑一次。
+        # 跑两次就是收两次静置摩擦。
+        moved = set()
+        for i in range(len(self.live)):
+            a = self.live[i]
+            for j in range(i + 1, len(self.live)):
+                b = self.live[j]
+                gap = a.spec.radius + b.spec.radius
+                ox, oy = b.x - a.x, b.y - a.y
+                d = math.hypot(ox, oy)
+                if d >= gap:
+                    continue
+                if d < 1e-3:
+                    nx, ny = 0.0, -1.0
+                else:
+                    nx, ny = ox / d, oy / d
+                overlap = gap - d
+
+                # 两根手指把两个道具按在一起：谁也不让。
+                if a.held and b.held:
+                    continue
+                share_a = 0.0 if a.held else (1.0 if b.held else 0.5)
+                if share_a > 0:
+                    a.x -= nx * overlap * share_a
+                    a.y -= ny * overlap * share_a
+                    moved.add(a)
+                if share_a < 1:
+                    b.x += nx * overlap * (1 - share_a)
+                    b.y += ny * overlap * (1 - share_a)
+                    moved.add(b)
+
+                # 只有「正在靠近」的一对才反弹。两个靠在一起的道具并没有在靠近，
+                # 每帧都把它们弹开就会抖 —— 和地面那一遍把静止的骨头转两次是同一个错。
+                closing = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny
+                if closing >= 0:
+                    continue
+                kick = (1 + RESTITUTION) * closing
+                if share_a > 0:
+                    a.vx += nx * kick * share_a
+                    a.vy += ny * kick * share_a
+                if share_a < 1:
+                    b.vx -= nx * kick * (1 - share_a)
+                    b.vy -= ny * kick * (1 - share_a)
+
+        # 被推开的道具可能被推进地面或墙里，所以边界要最后说话 —— 但只对真的动过的那些。
+        # _borders 顺带施加静置摩擦，对没动过的道具再跑一遍就是在一帧里收两次摩擦。
+        for p in moved:
+            self._borders(p)
 
 
 def closest_on_segment(p, a, b):
@@ -277,6 +336,63 @@ def main():
     q.begin_drag()
     q.drag_to((100.5, 100.0), 1 / 60)
     report("a slow placement leaves it still", math.hypot(q.vx, q.vy) < 40.0)
+
+    print("\nprops against each other")
+    noop = lambda *a: None
+
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (1000.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (1080.0, 1000.0))
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    gap = math.hypot(b.x - a.x, b.y - a.y)
+    report("two props stop overlapping", abs(gap - 120.0) < 1e-6, "gap=%.4f" % gap)
+    report("and they share the separation evenly",
+           abs((a.x - 1000.0) - (1080.0 - b.x)) < 1e-6,
+           "a moved %.4f, b moved %+.4f" % (a.x - 1000.0, b.x - 1080.0))
+
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (1000.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (1080.0, 1000.0))
+    a.begin_drag()
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("a held prop does not give", abs(a.x - 1000.0) < 1e-6, "x=%.4f" % a.x)
+    report("the other one takes the whole separation", abs(b.x - 1120.0) < 1e-6, "x=%.4f" % b.x)
+
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (1000.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (1080.0, 1000.0))
+    a.begin_drag()
+    b.begin_drag()
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("two fingers pressing two props together move neither",
+           a.x == 1000.0 and b.x == 1080.0, "a=%.1f b=%.1f" % (a.x, b.x))
+
+    # 一个飞过来的撞上一个静止的：相对法向速度按 RESTITUTION 反向。
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (1000.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (1100.0, 1000.0), (-600.0, 0.0))
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("a closing pair bounces",
+           abs((b.vx - a.vx) - RESTITUTION * 600.0) < 1e-6, "%.2f px/s apart" % (b.vx - a.vx))
+    report("and the one at rest is the one that gets shoved", a.vx < -1.0, "a.vx=%.2f" % a.vx)
+
+    # 静止的一对：分开一次就该停住，不能每帧互相弹。
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (1000.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (1100.0, 1000.0))
+    for _ in range(120):
+        w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("a resting pair separates once and then stays put",
+           abs((b.x - a.x) - 120.0) < 1e-6 and a.vx == 0.0 and b.vx == 0.0,
+           "gap=%.4f a.vx=%.4f b.vx=%.4f" % (b.x - a.x, a.vx, b.vx))
+
+    # 被邻居推进墙里：边界要最后说话。
+    w = World(2000.0, 3000.0)
+    a = w.spawn(Spec("a", radius=60.0), (60.0, 1000.0))
+    b = w.spawn(Spec("b", radius=60.0), (140.0, 1000.0))
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("a prop shoved at a wall is put back inside it",
+           a.x >= 60.0 - 1e-6, "x=%.4f" % a.x)
 
     print("")
     if FAILURES:

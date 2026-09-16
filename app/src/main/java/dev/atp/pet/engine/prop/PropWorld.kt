@@ -161,7 +161,77 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
             }
         }
         live.removeAll(gone)
+        // Props against each other LAST, so that what a prop was pushed into by its neighbour
+        // is not something the bones and the floor have already had their say about.
+        separate()
         return hits
+    }
+
+    /**
+     * Prop against prop. A prop is the circle its drawing is, so this is circle against circle.
+     *
+     * The overlap is split EVENLY, and that is a decision rather than a default. A prop's weight
+     * is deliberately not in PropSpec — "how heavy it is ... is the rule set's business" — so an
+     * even split is the only one the spec can justify. Reading a mass out of `force` would be
+     * inventing a number the editor never wrote and no rule can reach; a hammer and a cushion
+     * are the same prop with different rules, and that has to stay true here too.
+     *
+     * It is also what Fluid already does when two drops overlap (`(reach - dist) * 0.5f`), and
+     * for the same reason: two things of the same kind have no way to tell each other apart.
+     *
+     * A held prop does not give. The finger owns its position, for the same reason a held prop
+     * is allowed to be pressed INTO the character instead of being shoved off it: a hand is not
+     * something the world pushes back. The other prop therefore takes the whole separation,
+     * which is what lets a held hammer knock a thrown one out of the air.
+     */
+    private fun separate() {
+        // A set, not a list: one prop can be in three collisions in the same frame, and the
+        // borders must still run for it ONCE. Twice would be twice the resting friction.
+        val moved = mutableSetOf<Prop>()
+        for (i in live.indices) {
+            val a = live[i]
+            for (j in i + 1 until live.size) {
+                val b = live[j]
+                val gap = a.spec.radius + b.spec.radius
+                val offset = b.position - a.position
+                val distance = offset.length()
+                if (distance >= gap) continue
+                val normal = if (distance < 1e-3f) Vec2(0f, -1f) else offset / distance
+                val overlap = gap - distance
+
+                // Two fingers pressing two props together: neither one is the one that gives.
+                if (a.held && b.held) continue
+                val shareA = if (a.held) 0f else if (b.held) 1f else 0.5f
+                if (shareA > 0f) {
+                    a.position = a.position - normal * (overlap * shareA)
+                    moved.add(a)
+                }
+                if (shareA < 1f) {
+                    b.position = b.position + normal * (overlap * (1f - shareA))
+                    moved.add(b)
+                }
+
+                // Only a CLOSING pair bounces. Two props resting against each other are not
+                // closing, and if they were kicked apart every frame they would buzz -- the
+                // same mistake the floor pass makes when it turns a resting bone twice.
+                val closing = (b.velocity.x - a.velocity.x) * normal.x +
+                    (b.velocity.y - a.velocity.y) * normal.y
+                if (closing >= 0f) continue
+                val kick = (1f + RESTITUTION) * closing
+                if (shareA > 0f) {
+                    a.velocity = a.velocity + normal * (kick * shareA)
+                }
+                if (shareA < 1f) {
+                    b.velocity = b.velocity - normal * (kick * (1f - shareA))
+                }
+            }
+        }
+
+        // A prop pushed aside can be pushed into the floor or a wall, so the borders get the
+        // last word — but ONLY for the ones that actually moved. borders() also applies the
+        // resting friction, so running it a second time for a prop that never moved would
+        // charge that friction twice in one frame.
+        for (p in moved) borders(p)
     }
 
     /** The floor and the arena walls. A prop that has come to rest reports it. */
