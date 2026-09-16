@@ -2355,8 +2355,14 @@ class MainActivity : AppCompatActivity() {
         logicStats = spec.stats.toMutableList()
         logicRules = spec.rules.toMutableList()
         logicStates = spec.states.toMutableList()
-        logicLiquids = spec.liquids.toMutableList()
-        logicParticles = spec.particles.toMutableList()
+        // Liquids and particles are DECLARED by the character; a prop's file and a part's file
+        // have none of their own. Their definitions come from the character even while another
+        // subject's rules are being written -- otherwise the 喷液体 and 喷粒子 pickers are empty
+        // exactly where they are wanted, and "a rule on the hand that sprays sweat" cannot be
+        // written at all. The RULES still belong to the subject; only the vocabulary is shared.
+        val declared = folder?.let { store.loadLogic(it.id) }
+        logicLiquids = (declared?.liquids ?: spec.liquids).toMutableList()
+        logicParticles = (declared?.particles ?: spec.particles).toMutableList()
         buildLogicPane()
     }
 
@@ -2376,7 +2382,19 @@ class MainActivity : AppCompatActivity() {
         if (logicSubject == Subjects.PET) {
             store.saveLogic(folder.id, spec)
         } else {
-            store.saveObjectLogic(logicSubject, spec)
+            // The subject's own file keeps its own vocabulary: the editor was showing the
+            // character's liquids and particles so the pickers had something in them, and
+            // copying those into a prop's file would be the app making declarations nobody
+            // asked for. Its rules and stats are what this file is for.
+            val own = store.loadObjectLogic()[logicSubject]
+            store.saveObjectLogic(
+                logicSubject,
+                LogicSpec(
+                    stats = spec.stats, rules = spec.rules, states = spec.states,
+                    liquids = own?.liquids ?: emptyList(),
+                    particles = own?.particles ?: emptyList(),
+                ),
+            )
         }
     }
 
