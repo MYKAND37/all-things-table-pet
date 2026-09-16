@@ -69,6 +69,19 @@ class MainActivity : AppCompatActivity() {
         PET_PROPS, PET_LOGIC, LIQUIDS, PARTICLES, SETTINGS
     }
 
+    /**
+     * The four folders 逻辑管理 is divided into, in the order they are shown.
+     *
+     * Everything that can hold rules is one of these four, and until this existed they were all
+     * one flat row of chips: the character, every prop, every liquid, and every bone of the rig
+     * -- twenty-odd of them, in no order that said which was which. A row like that is not a
+     * list, it is a heap, and the one thing it cannot show is the thing the screen is about:
+     * 让手流汗 is a rule about the hand, and 火花 落地 is a rule about sparks.
+     */
+    private enum class LogicFolder { CHARACTER, PROPS, LIQUIDS, PARTICLES }
+
+    private var logicFolder = LogicFolder.CHARACTER
+
     private lateinit var store: CharacterStore
     private var characters: List<CharacterFolder> = emptyList()
     private var summoned: CharacterFolder? = null
@@ -140,6 +153,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var propList: LinearLayout
     private lateinit var logicPane: View
     private lateinit var logicGraph: LogicGraphView
+    private lateinit var logicFolderBar: LinearLayout
     private lateinit var logicBar: LinearLayout
 
     /** Props are shared by every character, and edited in memory until saved. */
@@ -197,6 +211,7 @@ class MainActivity : AppCompatActivity() {
         propList = findViewById(R.id.propList)
         logicPane = findViewById(R.id.logicPane)
         logicGraph = findViewById(R.id.logicGraph)
+        logicFolderBar = findViewById(R.id.logicFolderBar)
         logicBar = findViewById(R.id.logicBar)
         logicGraph.onTap = { rule, node ->
             when (node.role) {
@@ -2537,22 +2552,44 @@ class MainActivity : AppCompatActivity() {
         buildLiquidBar()
 
         logicBar.removeAllViews()
+        logicFolderBar.removeAllViews()
 
-        // Whose logic this is. A prop can have rules of its own, and this is the switch that
-        // says which set the graph is showing.
-        for ((id, text) in subjectOptions()) {
-            val chip = label(text, 12f, if (id == logicSubject) INK else MUTED)
-            chip.background = getDrawable(
-                if (id == logicSubject) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-            )
-            chip.setPadding(dp(10), dp(6), dp(10), dp(6))
-            chip.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginEnd = dp(5) }
-            chip.setOnClickListener { openLogic(id) }
-            logicBar.addView(chip)
+        // 第一层：四个文件夹。点一个就换一层，并把打开的主体收回那一类里。
+        for (folder in LogicFolder.values()) {
+            val c = chip(folderLabel(folder), folder == logicFolder, 13f)
+            c.setOnClickListener {
+                if (folder != logicFolder) {
+                    logicFolder = folder
+                    settleFolder()
+                    openLogic(logicSubject)
+                }
+            }
+            logicFolderBar.addView(c)
         }
+
+        // 第二层：这一类里具体写给谁。角色逻辑有"全局 / 局部"两组，因为整具身体和
+        // 单独一根骨头是两种不同的东西；另外三类各自只有一组。
+        val groups = folderSubjects(logicFolder)
+        val anySubject = groups.any { it.second.isNotEmpty() }
+        for ((groupLabel, subjects) in groups) {
+            if (subjects.isEmpty()) continue
+            // A group label only earns its space when there is more than one group to tell
+            // apart: on 道具逻辑 a lone "道具" in front of a row of props is noise.
+            if (groupLabel.isNotEmpty() && groups.count { it.second.isNotEmpty() } > 1) {
+                logicBar.addView(label(groupLabel, 11f, MUTED))
+            }
+            for ((id, text) in subjects) {
+                val c = chip(text, id == logicSubject)
+                c.setOnClickListener { openLogic(id) }
+                logicBar.addView(c)
+            }
+        }
+        if (!anySubject) logicBar.addView(label(getString(R.string.logic_folder_empty), 11f, MUTED))
+
+        // The spill bar belongs to the liquids and is shown with them. It used to sit under
+        // every folder, which is the pile this screen was rearranged to get rid of: a row of
+        // liquid chips is not something to read while writing a rule about a spark.
+        liquidBar.visibility = if (logicFolder == LogicFolder.LIQUIDS) View.VISIBLE else View.GONE
 
         logicBar.addView(small(getString(R.string.logic_add_rule)) {
             logicRules.add(
@@ -2636,31 +2673,87 @@ class MainActivity : AppCompatActivity() {
         liquidBar.addView(small(getString(R.string.logic_add_liquid)) { askEditLiquid(null) { buildLogicPane() } })
     }
 
+    // subjectOptions() used to live here: one flat list of every subject, which is what the
+    // bar drew. It is folderSubjects(folder) now, because a single row cannot say that
+    // hand_L is a part of the character and 火花 is a kind of particle -- and the one thing
+    // this screen is about is which of those a rule is written on.
+
     /**
-     * Every logic set there is, as chips: the character, then each prop, then each liquid.
+     * The subjects inside one folder, as (group label, subjects).
      *
-     * Nothing is offered that cannot be used. A prop that has been deleted from 道具管理 is
-     * not on this row, and its rules are left in the file rather than deleted with it — the
-     * same bargain the rig makes with a deleted bone.
+     * Groups rather than one row, because under 角色逻辑 there are two levels and they are not
+     * the same kind of thing: 全局 is the figure itself and 局部 is one bone. Both are "the
+     * character" and a rule about one is not a rule about the other, so the row says which is
+     * which instead of leaving it to the chip's colour.
+     *
+     * The liquids and the particles come from the CHARACTER's file even while a prop's logic is
+     * being edited: both are declared by the character, and a prop whose own file has none would
+     * otherwise hide every liquid and every particle from this screen and make them unreachable.
      */
-    private fun subjectOptions(): List<Pair<String, String>> {
-        val out = mutableListOf(Subjects.PET to getString(R.string.logic_subject_pet))
-        for (prop in props) out.add(Subjects.prop(prop.id) to getString(R.string.logic_subject_prop, prop.name))
-        // The liquids come from the CHARACTER's file even while a prop's logic is being
-        // edited: liquids are declared by the character, and a prop whose own file has none
-        // would otherwise hide every liquid from this row and make them unreachable.
-        val liquids = summoned?.let { store.loadLogic(it.id).liquids } ?: emptyList()
-        for (liquid in liquids) {
-            out.add(Subjects.liquid(liquid.id) to getString(R.string.logic_subject_liquid, liquid.name))
+    private fun folderSubjects(folder: LogicFolder): List<Pair<String, List<Pair<String, String>>>> =
+        when (folder) {
+            LogicFolder.CHARACTER -> listOf(
+                getString(R.string.logic_scope_global) to
+                    listOf(Subjects.PET to getString(R.string.logic_subject_pet)),
+                getString(R.string.logic_scope_local) to
+                    (summoned?.let { boneNames(it) } ?: emptyList()).map {
+                        Subjects.part(it) to getString(R.string.logic_subject_part, boneLabel(it))
+                    },
+            )
+            LogicFolder.PROPS -> listOf(
+                "" to props.map {
+                    Subjects.prop(it.id) to getString(R.string.logic_subject_prop, it.name)
+                },
+            )
+            LogicFolder.LIQUIDS -> listOf(
+                "" to (summoned?.let { store.loadLogic(it.id).liquids } ?: emptyList()).map {
+                    Subjects.liquid(it.id) to getString(R.string.logic_subject_liquid, it.name)
+                },
+            )
+            LogicFolder.PARTICLES -> listOf(
+                "" to (summoned?.let { store.loadLogic(it.id).particles } ?: emptyList()).map {
+                    Subjects.particle(it.id) to getString(R.string.logic_subject_particle, it.name)
+                },
+            )
         }
-        // And every part of the character. 让手流汗 is a rule that lives on the hand: it is
-        // written here, next to the character's own rules, and it only hears what happens to
-        // that hand (or to the whole figure). See Subjects.hears.
-        val bones = summoned?.let { boneNames(it) } ?: emptyList()
-        for (bone in bones) {
-            out.add(Subjects.part(bone) to getString(R.string.logic_subject_part, boneLabel(bone)))
+
+    /** Every subject in a folder, whichever group it is in. */
+    private fun folderSubjectIds(folder: LogicFolder): List<String> =
+        folderSubjects(folder).flatMap { (_, subjects) -> subjects.map { it.first } }
+
+    /**
+     * Keep the open subject inside the open folder.
+     *
+     * Switching folders has to land somewhere, and landing on the subject from the folder you
+     * just left would leave the graph showing rules that the row above no longer offers -- the
+     * screen would say "粒子逻辑" and be editing the hand.
+     */
+    private fun settleFolder() {
+        val here = folderSubjectIds(logicFolder)
+        if (logicSubject !in here) logicSubject = here.firstOrNull() ?: Subjects.PET
+    }
+
+    private fun folderLabel(folder: LogicFolder): String = getString(
+        when (folder) {
+            LogicFolder.CHARACTER -> R.string.logic_folder_character
+            LogicFolder.PROPS -> R.string.logic_folder_props
+            LogicFolder.LIQUIDS -> R.string.logic_folder_liquids
+            LogicFolder.PARTICLES -> R.string.logic_folder_particles
         }
-        return out
+    )
+
+    /** A chip: one tappable piece of a bar, lit when it is the one that is open. */
+    private fun chip(text: String, lit: Boolean, size: Float = 12f): TextView {
+        val v = label(text, size, if (lit) INK else MUTED)
+        v.background = getDrawable(
+            if (lit) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+        )
+        v.setPadding(dp(10), dp(6), dp(10), dp(6))
+        v.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = dp(5) }
+        return v
     }
 
     /** The 当 box: everything about the rule that is not a node of its own. */

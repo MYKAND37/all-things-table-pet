@@ -308,6 +308,26 @@
                     android:layout_height="0dp"
                     android:layout_weight="1" />
 
+                <!-- 第一层：四个文件夹。逻辑管理长的东西太多了（角色 + 每个道具 + 每种液体 +
+                     每种粒子 + 19 根骨头），全挤在一条上就成了一堆看不出关系的 chip。
+                     这一栏说的是"哪一类"，下面那一栏才是"这一类里的哪一个"。 -->
+                <HorizontalScrollView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:scrollbars="none">
+
+                    <LinearLayout
+                        android:id="@+id/logicFolderBar"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="2dp" />
+                </HorizontalScrollView>
+
                 <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"

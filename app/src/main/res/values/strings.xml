@@ -229,6 +229,17 @@
     <string name="logic_subject_prop">道具·%1$s</string>
     <string name="logic_subject_liquid">液体·%1$s</string>
     <string name="logic_subject_part">部件·%1$s</string>
+    <string name="logic_subject_particle">粒子·%1$s</string>
+    <!-- 逻辑管理的四个文件夹。长的东西太多，全挤在一条上就看不出谁是谁了。 -->
+    <string name="logic_folder_character">角色逻辑</string>
+    <string name="logic_folder_props">道具逻辑</string>
+    <string name="logic_folder_liquids">液体逻辑</string>
+    <string name="logic_folder_particles">粒子逻辑</string>
+    <!-- 角色逻辑里的两级：整具身体，和单独一根骨头。 -->
+    <string name="logic_scope_global">全局</string>
+    <string name="logic_scope_local">局部（部位）</string>
+    <string name="logic_folder_empty">这一类还没有东西。先去对应的「管理」里加一个。</string>
+    <string name="logic_folder_hint">逻辑分四类，每一类里才是具体写给谁的。角色逻辑分两级：**全局**是整具身体，**局部**是单独一根骨头——「让手流汗」长在手上，不是长在角色身上再加一句"哪只手"。</string>
     <string name="logic_subject_hint">这一套规则是给谁的。道具、液体和**部件**都可以有自己的逻辑：它们自己的事件（出现、落地、被打到、每隔一会儿）驱动它。写在某个部件上的规则只听得见发生在**那个部件**身上的事（以及发生在整具身体上的事）。</string>
     <string name="logic_any_signal">任何信号</string>
     <string name="logic_signal_hint">信号是规则自己的事件：一个「就」发出来，另一个「当」接住。写 hand 会接住 hand_L 这类同名前缀。</string>
