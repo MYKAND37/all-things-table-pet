@@ -579,6 +579,7 @@ tools/mirror_check.py        Kotlin 与 Python 两份实现的常数对照
 tools/wiring_check.py        控件有没有接线、函数有没有人调用
 tools/kotlin_check.py        Kotlin 源码的 NaN 陷阱 / 枚举重名 / 资源引用
 docs/ART_GUIDE.md        绘画规范（A + C）
+docs/PART_SUBJECTS.md    设计：部件作为主体、状态两级、每种东西一个文件夹（**还没写**）
 docs/template_female_base.png
 ```
 
