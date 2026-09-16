@@ -3,6 +3,8 @@ package dev.atp.pet.engine.logic
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.fluid.parseColour
+import dev.atp.pet.engine.particle.ParticleKinds
+import dev.atp.pet.engine.particle.ParticleSpec
 import dev.atp.pet.engine.state.StatSpec
 import org.json.JSONArray
 import org.json.JSONObject
@@ -233,6 +235,12 @@ class LogicSpec(
     val states: List<StateSpec> = emptyList(),
     /** The liquids a rule can spill. Editable, because "blood" is a decision. */
     val liquids: List<LiquidSpec> = Liquids.DEFAULTS,
+    /**
+     * The particles a rule can spray. Editable for the same reason, and because two of the
+     * six switches -- does it fall, does it leave a mark -- are the whole personality of a
+     * particle: 汗 and 火花 are the same code with different answers.
+     */
+    val particles: List<ParticleSpec> = ParticleKinds.DEFAULTS,
 ) {
 
     fun rule(index: Int): RuleSpec? = rules.getOrNull(index)
@@ -291,6 +299,26 @@ class LogicSpec(
                 }
             }
 
+            // The same rule as liquids: a file that says nothing gets the shipped kinds, and
+            // a file that says something -- even an empty list -- is taken at its word.
+            val particleArr = o.optJSONArray("particles")
+            val particles = if (particleArr == null || particleArr.length() == 0) {
+                ParticleKinds.DEFAULTS
+            } else {
+                (0 until particleArr.length()).map { i ->
+                    val p = particleArr.getJSONObject(i)
+                    val id = p.optString("id", "particle" + i)
+                    ParticleSpec(
+                        id = id,
+                        name = p.optString("name", id),
+                        colour = parseColour(p.optString("colour", ""), 0xFF9A8FA6.toInt()),
+                        size = p.optDouble("size", 1.0).toFloat().coerceIn(0.2f, 4f),
+                        gravity = p.optBoolean("gravity", true),
+                        stains = p.optBoolean("stains", false),
+                    )
+                }
+            }
+
             val ruleArr = o.optJSONArray("rules")
             val rules = (0 until (ruleArr?.length() ?: 0)).map { i ->
                 val r = ruleArr!!.getJSONObject(i)
@@ -341,7 +369,7 @@ class LogicSpec(
                     },
                 )
             }
-            return LogicSpec(stats, rules, states, liquids)
+            return LogicSpec(stats, rules, states, liquids, particles)
         }
 
         fun toJson(spec: LogicSpec): String {
@@ -375,6 +403,19 @@ class LogicSpec(
                 )
             }
             root.put("liquids", liquids)
+
+            val particles = JSONArray()
+            for (p in spec.particles) {
+                particles.put(
+                    JSONObject()
+                        .put("id", p.id).put("name", p.name)
+                        .put("colour", String.format("#%06X", p.colour and 0xFFFFFF))
+                        .put("size", p.size.toDouble())
+                        .put("gravity", p.gravity)
+                        .put("stains", p.stains)
+                )
+            }
+            root.put("particles", particles)
 
             val rules = JSONArray()
             for (r in spec.rules) {
@@ -436,6 +477,7 @@ class LogicSpec(
   "stats": [ { "id": "L", "name": "耐久", "value": 100, "min": 0, "max": 100 } ],
   "states": [],
   "liquids": [],
+  "particles": [],
   "rules": []
 }
 """
@@ -456,6 +498,14 @@ class LogicSpec(
     { "id": "water", "name": "水", "colour": "#3D8FD1", "viscosity": 0.0 },
     { "id": "slime", "name": "史莱姆", "colour": "#5FA83C", "viscosity": 0.8 },
     { "id": "ink", "name": "墨", "colour": "#23202E", "viscosity": 0.15 }
+  ],
+  "particles": [
+    { "id": "blood", "name": "血", "colour": "#C92A2A", "size": 1.0, "gravity": true, "stains": true },
+    { "id": "sweat", "name": "汗", "colour": "#4C8DE0", "size": 1.0, "gravity": true, "stains": true },
+    { "id": "spark", "name": "火花", "colour": "#F2A93B", "size": 1.0, "gravity": true, "stains": false },
+    { "id": "dust", "name": "灰尘", "colour": "#9A8FA6", "size": 1.0, "gravity": true, "stains": false },
+    { "id": "star", "name": "星星", "colour": "#E45CA8", "size": 1.0, "gravity": false, "stains": false },
+    { "id": "heart", "name": "爱心", "colour": "#E2557B", "size": 1.0, "gravity": false, "stains": false }
   ],
   "rules": [
     {

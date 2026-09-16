@@ -7,6 +7,25 @@
     <string name="menu_pets">桌宠管理</string>
     <string name="menu_props">道具管理</string>
     <string name="menu_logic">逻辑管理</string>
+    <string name="menu_particles">粒子管理</string>
+    <string name="particle_subtitle">粒子是规则"喷"出来的小东西。受不受重力、留不留印子，每种粒子自己说了算。</string>
+    <string name="particle_new">＋ 新粒子</string>
+    <string name="particle_need_pet">粒子是角色自己声明的东西：先去测试场上面选一只桌宠。</string>
+    <string name="particle_burst">喷一把</string>
+    <string name="particle_burst_from">喷一把 %1$s</string>
+    <string name="particle_gravity_on">受重力（会掉下来）</string>
+    <string name="particle_gravity_off">不受重力（飘着）</string>
+    <string name="particle_stains_on">会留印子</string>
+    <string name="particle_stains_off">不留印子</string>
+    <string name="particle_size">大小</string>
+    <string name="particle_colour">颜色</string>
+    <string name="particle_delete_confirm">删掉「%1$s」？已经喷出来的那些不会消失。</string>
+    <string name="particle_on_bench">场上有 %1$d 个粒子</string>
+    <string name="particle_none_on_bench">场上还没有粒子</string>
+    <string name="particle_clear">清空场上粒子</string>
+    <string name="particle_cleared">场上粒子已清空</string>
+    <string name="particle_sprayed">喷了 %1$s · 回测试场看</string>
+    <string name="particle_add">＋ 加一种粒子</string>
     <string name="menu_liquids">液体管理</string>
     <string name="menu_settings">全局设置</string>
 

@@ -87,6 +87,11 @@
                 android:text="@string/menu_liquids" />
 
             <TextView
+                android:id="@+id/menuParticles"
+                style="@style/MenuItem"
+                android:text="@string/menu_particles" />
+
+            <TextView
                 android:id="@+id/menuSettings"
                 style="@style/MenuItem"
                 android:text="@string/menu_settings" />
@@ -238,6 +243,21 @@
 
                 <LinearLayout
                     android:id="@+id/liquidList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 粒子管理 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/particleScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/particleList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"

@@ -267,6 +267,19 @@ def main():
                     if a.get("kind") == "spill"}
     report("every liquid spilled exists", used_liquids <= liquid_ids,
            "unknown: " + str(used_liquids - liquid_ids))
+    # The particles a 喷粒子 action can name, and the two switches each one carries. The
+    # shipped file lists all six, so a rule written on day one still names something real.
+    particle_ids = {p["id"] for p in default.get("particles", [])}
+    used_particles = {a.get("text") for r in default["rules"] for a in r.get("then", [])
+                      if a.get("kind") == "burst"}
+    report("every particle sprayed exists", used_particles <= particle_ids,
+           "unknown: " + str(used_particles - particle_ids))
+    report("the shipped particles carry both switches",
+           all("gravity" in p and "stains" in p for p in default.get("particles", [])),
+           "%d kinds" % len(default.get("particles", [])))
+    report("and at least one of them floats",
+           any(p["gravity"] is False for p in default.get("particles", [])),
+           "a star drifts, dust falls")
     # The kinds a condition can be are a closed set in the Kotlin (see ConditionSpec), and a
     # file with a fourth kind in it would simply never fire. The shipped defaults are the
     # example everybody reads, so they are where a typo in one gets caught.

@@ -40,7 +40,8 @@ import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import dev.atp.pet.engine.logic.StateSpec
 import dev.atp.pet.engine.state.StatSpec
-import dev.atp.pet.render.ParticleKind
+import dev.atp.pet.engine.particle.ParticleKinds
+import dev.atp.pet.engine.particle.ParticleSpec
 import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.LogicGraphView
 import dev.atp.pet.ui.PhysicsSandboxView
@@ -65,7 +66,7 @@ class MainActivity : AppCompatActivity() {
 
     private enum class Pane {
         PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_PART_FILES, PET_RIG, PART_ALIGN, PET_DEPTH,
-        PET_PROPS, PET_LOGIC, LIQUIDS, SETTINGS
+        PET_PROPS, PET_LOGIC, LIQUIDS, PARTICLES, SETTINGS
     }
 
     private lateinit var store: CharacterStore
@@ -123,6 +124,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var partListScroll: View
     private lateinit var liquidScroll: View
     private lateinit var liquidList: LinearLayout
+    private lateinit var particleScroll: View
+    private lateinit var particleList: LinearLayout
     private lateinit var settingsScroll: View
     private lateinit var settingsList: LinearLayout
     private lateinit var liquidBar: LinearLayout
@@ -148,6 +151,7 @@ class MainActivity : AppCompatActivity() {
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
     private var logicStates: MutableList<StateSpec> = mutableListOf()
     private var logicLiquids: MutableList<LiquidSpec> = mutableListOf()
+    private var logicParticles: MutableList<ParticleSpec> = mutableListOf()
 
     /** Whose logic the pane is editing: the character, or a prop, or a liquid. See Subjects. */
     private var logicSubject: String = Subjects.PET
@@ -181,6 +185,8 @@ class MainActivity : AppCompatActivity() {
         partListScroll = findViewById(R.id.partListScroll)
         liquidScroll = findViewById(R.id.liquidScroll)
         liquidList = findViewById(R.id.liquidList)
+        particleScroll = findViewById(R.id.particleScroll)
+        particleList = findViewById(R.id.particleList)
         settingsScroll = findViewById(R.id.settingsScroll)
         settingsList = findViewById(R.id.settingsList)
         liquidBar = findViewById(R.id.liquidBar)
@@ -340,6 +346,10 @@ class MainActivity : AppCompatActivity() {
                 openLiquids()
                 show(Pane.LIQUIDS)
             }
+            R.id.menuParticles -> {
+                openParticles()
+                show(Pane.PARTICLES)
+            }
             R.id.menuSettings -> {
                 buildSettingsPane()
                 show(Pane.SETTINGS)
@@ -360,6 +370,7 @@ class MainActivity : AppCompatActivity() {
         propListScroll.visibility = if (pane == Pane.PET_PROPS) View.VISIBLE else View.GONE
         logicPane.visibility = if (pane == Pane.PET_LOGIC) View.VISIBLE else View.GONE
         liquidScroll.visibility = if (pane == Pane.LIQUIDS) View.VISIBLE else View.GONE
+        particleScroll.visibility = if (pane == Pane.PARTICLES) View.VISIBLE else View.GONE
         settingsScroll.visibility = if (pane == Pane.SETTINGS) View.VISIBLE else View.GONE
         rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         if (pane != Pane.PET_RIG && rigBoneMode) {
@@ -370,7 +381,7 @@ class MainActivity : AppCompatActivity() {
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN ||
                 pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES ||
-                pane == Pane.LIQUIDS || pane == Pane.SETTINGS
+                pane == Pane.LIQUIDS || pane == Pane.PARTICLES || pane == Pane.SETTINGS
             ) View.VISIBLE else View.GONE
 
         when (pane) {
@@ -392,6 +403,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_subject_hint)
                 }
             Pane.LIQUIDS -> statusLine.text = getString(R.string.liquid_subtitle)
+            Pane.PARTICLES -> statusLine.text = getString(R.string.particle_subtitle)
             Pane.SETTINGS -> statusLine.text = getString(R.string.settings_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
         }
@@ -2310,13 +2322,14 @@ class MainActivity : AppCompatActivity() {
             // shared props directory, and 道具管理 is a perfectly good place to open it from.
             subject != Subjects.PET -> store.loadObjectLogic()[subject]
                 ?: LogicSpec.parseObject(LogicSpec.OBJECT_DEFAULT)
-            folder == null -> LogicSpec(emptyList(), emptyList())
+            folder == null -> LogicSpec(emptyList(), emptyList())   // nothing to edit yet
             else -> store.loadLogic(folder.id)
         }
         logicStats = spec.stats.toMutableList()
         logicRules = spec.rules.toMutableList()
         logicStates = spec.states.toMutableList()
         logicLiquids = spec.liquids.toMutableList()
+        logicParticles = spec.particles.toMutableList()
         buildLogicPane()
     }
 
@@ -2331,7 +2344,7 @@ class MainActivity : AppCompatActivity() {
         val folder = summoned ?: return
         val spec = LogicSpec(
             logicStats.toList(), logicRules.toList(),
-            logicStates.toList(), logicLiquids.toList(),
+            logicStates.toList(), logicLiquids.toList(), logicParticles.toList(),
         )
         if (logicSubject == Subjects.PET) {
             store.saveLogic(folder.id, spec)
@@ -2940,7 +2953,12 @@ class MainActivity : AppCompatActivity() {
         val spec = store.loadLogic(folder.id)
         store.saveLogic(
             folder.id,
-            LogicSpec(spec.stats, spec.rules, spec.states, logicLiquids.toList()),
+            // Named rather than positional: this constructor has grown a list per subsystem,
+            // and a positional call here is how a save silently drops the one that was added.
+            LogicSpec(
+                stats = spec.stats, rules = spec.rules, states = spec.states,
+                liquids = logicLiquids.toList(), particles = spec.particles,
+            ),
         )
     }
 
@@ -3023,6 +3041,282 @@ class MainActivity : AppCompatActivity() {
                 if (picked) INK else 0x33000000,
             )
         }
+    }
+
+
+    // ── 粒子管理 ──────────────────────────────────────────────────────────────
+
+    /**
+     * 粒子管理: the particles themselves, with a tap that sprays one.
+     *
+     * The same shape as 液体管理, and for the same reason: a particle is a colour and a few
+     * switches, and "does this read as sweat at this size" is a question you answer by looking
+     * rather than by editing a file. The difference is what the switches are: a particle can
+     * be told to ignore gravity (a star drifts, dust falls) and whether it leaves a mark where
+     * it lands, which between them are the whole personality of a puff of dust.
+     */
+    private fun openParticles() {
+        val folder = summoned
+        logicParticles = if (folder == null) {
+            mutableListOf()
+        } else {
+            store.loadLogic(folder.id).particles.toMutableList()
+        }
+        sandboxView.setParticles(logicParticles.toList())
+        buildParticleList()
+    }
+
+    private fun refreshParticles() {
+        if (particleScroll.visibility == View.VISIBLE) buildParticleList()
+    }
+
+    private fun buildParticleList() {
+        particleList.removeAllViews()
+        particleList.addView(label(getString(R.string.menu_particles), 17f, INK, bottom = 4))
+        particleList.addView(label(getString(R.string.particle_subtitle), 11f, MUTED, bottom = 12))
+
+        if (summoned == null) {
+            particleList.addView(label(getString(R.string.particle_need_pet), 12f, MUTED))
+            return
+        }
+
+        val alive = sandboxView.particleCount()
+        val marks = sandboxView.stainCount()
+        val bench = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(10))
+        }
+        bench.addView(
+            label(
+                if (alive == 0) getString(R.string.particle_none_on_bench)
+                else getString(R.string.particle_on_bench, alive) + " · " + marks + " 个印子",
+                11f, MUTED,
+            )
+        )
+        if (alive > 0 || marks > 0) {
+            bench.addView(small(getString(R.string.particle_clear)) {
+                sandboxView.clearParticles()
+                Toast.makeText(this, R.string.particle_cleared, Toast.LENGTH_SHORT).show()
+                buildParticleList()
+            })
+        }
+        particleList.addView(bench)
+
+        for (particle in logicParticles.toList()) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                isClickable = true
+                isFocusable = true
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+            row.addView(swatch(particle.colour, 16))
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            text.addView(label(particle.name, 14f, INK))
+            text.addView(
+                label(
+                    "代号 " + particle.id +
+                        " · " + getString(
+                            if (particle.gravity) R.string.particle_gravity_on
+                            else R.string.particle_gravity_off
+                        ) +
+                        " · " + getString(
+                            if (particle.stains) R.string.particle_stains_on
+                            else R.string.particle_stains_off
+                        ) +
+                        " · 大小 " + "%.2f".format(particle.size) + "×",
+                    10f, MUTED,
+                )
+            )
+            row.addView(text)
+            row.setOnClickListener { askEditParticle(particle) { refreshParticles() } }
+
+            val spray = label(getString(R.string.particle_burst), 11f, INK)
+            spray.setPadding(dp(8), dp(6), dp(8), dp(6))
+            spray.setOnClickListener {
+                sandboxView.spray(particle.id)
+                Toast.makeText(
+                    this, getString(R.string.particle_sprayed, particle.name), Toast.LENGTH_SHORT,
+                ).show()
+                buildParticleList()
+            }
+            row.addView(spray)
+
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+            remove.setOnClickListener {
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.action_delete) + " · " + particle.name)
+                    .setMessage(getString(R.string.particle_delete_confirm, particle.name))
+                    .setPositiveButton(R.string.depth_remove) { _, _ ->
+                        logicParticles.removeAll { it.id == particle.id }
+                        saveParticles()
+                        refreshParticles()
+                    }
+                    .setNegativeButton(R.string.depth_cancel, null)
+                    .show()
+            }
+            row.addView(remove)
+            particleList.addView(row)
+        }
+
+        val add = label(getString(R.string.particle_new), 13f, INK)
+        add.setPadding(dp(14), dp(11), dp(14), dp(11))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        )
+        add.setOnClickListener { askEditParticle(null) { refreshParticles() } }
+        particleList.addView(add)
+    }
+
+    /**
+     * Add or edit one kind of particle.
+     *
+     * The two switches are the point of the screen, so they are chips you flip rather than
+     * numbers you type: 受重力 / 不受重力 and 留印子 / 不留印子. The size is a multiplier, because
+     * "the same spark, but bigger" is what somebody actually wants.
+     */
+    private fun askEditParticle(existing: ParticleSpec?, after: (() -> Unit)? = null) {
+        var colour = existing?.colour ?: LIQUID_PALETTE[0]
+        var gravity = existing?.gravity ?: true
+        var stains = existing?.stains ?: false
+
+        val idInput = EditText(this).apply {
+            setText(existing?.id ?: nextParticleId())
+            hint = getString(R.string.logic_stat_id)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val nameInput = EditText(this).apply {
+            setText(existing?.name ?: "")
+            hint = getString(R.string.logic_stat_name)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+
+        val chipViews = mutableListOf<View>()
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (c in LIQUID_PALETTE) {
+            val chip = View(this)
+            chip.background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(c)
+                cornerRadius = dp(6).toFloat()
+                setStroke(dp(1), 0x33000000)
+            }
+            chip.layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply {
+                marginEnd = dp(6)
+            }
+            chip.setOnClickListener {
+                colour = c
+                paintSwatches(chipViews, LIQUID_PALETTE, colour)
+            }
+            chipViews.add(chip)
+            chips.addView(chip)
+        }
+
+        val (sizeRow, sizeOf) = stepperRow(
+            getString(R.string.particle_size), existing?.size ?: 1f, 0.25f, 0.25f, 4f,
+        ) { "%.2f×".format(it) }
+
+        val gravityChip = label(getString(R.string.particle_gravity_on), 12f, INK)
+        val stainChip = label(getString(R.string.particle_stains_on), 12f, INK)
+        val switchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (chip in listOf(gravityChip, stainChip)) {
+            chip.setPadding(dp(10), dp(8), dp(10), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(6) }
+            switchRow.addView(chip)
+        }
+        fun paintSwitches() {
+            gravityChip.text = getString(
+                if (gravity) R.string.particle_gravity_on else R.string.particle_gravity_off
+            )
+            gravityChip.background = getDrawable(
+                if (gravity) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            stainChip.text = getString(
+                if (stains) R.string.particle_stains_on else R.string.particle_stains_off
+            )
+            stainChip.background = getDrawable(
+                if (stains) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+        }
+        gravityChip.setOnClickListener { gravity = !gravity; paintSwitches() }
+        stainChip.setOnClickListener { stains = !stains; paintSwitches() }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        box.addView(idInput)
+        box.addView(nameInput)
+        box.addView(label(getString(R.string.particle_colour), 11f, MUTED, top = 8, bottom = 6))
+        box.addView(chips)
+        box.addView(sizeRow)
+        box.addView(label(getString(R.string.menu_particles), 11f, MUTED, top = 10, bottom = 6))
+        box.addView(switchRow)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) R.string.particle_add else R.string.menu_particles)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextParticleId() }
+                val name = nameInput.text.toString().trim().ifEmpty { id }
+                logicParticles.removeAll { it.id == id || (existing != null && it.id == existing.id) }
+                logicParticles.add(
+                    ParticleSpec(id, name, colour, sizeOf(), gravity = gravity, stains = stains)
+                )
+                saveParticles()
+                refreshParticles()
+                after?.invoke()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+        paintSwatches(chipViews, LIQUID_PALETTE, colour)
+        paintSwitches()
+    }
+
+    /**
+     * Save the particle list, and hand the bench the new one.
+     *
+     * Nothing is reloaded: the bench keeps its own copy of the kinds so a spray can look its
+     * colour up by name, and rebuilding the world to pick up a colour would throw away
+     * whatever is mid-fall on it. See PhysicsSandboxView.setParticles.
+     */
+    private fun saveParticles() {
+        val folder = summoned ?: return
+        sandboxView.setParticles(logicParticles.toList())
+        if (logicSubject == Subjects.PET) {
+            saveLogic()
+            return
+        }
+        val spec = store.loadLogic(folder.id)
+        store.saveLogic(
+            folder.id,
+            LogicSpec(
+                stats = spec.stats, rules = spec.rules, states = spec.states,
+                liquids = spec.liquids, particles = logicParticles.toList(),
+            ),
+        )
+    }
+
+    private fun nextParticleId(): String {
+        val taken = logicParticles.map { it.id }.toSet()
+        var n = 1
+        while (("p" + n) in taken) n++
+        return "p" + n
     }
 
     private fun nextLiquidId(): String {
@@ -3398,7 +3692,7 @@ class MainActivity : AppCompatActivity() {
         "pose" -> "摆动作 " + a.text
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
-        "burst" -> "喷" + ParticleKind.of(a.text).label
+        "burst" -> "喷" + ParticleKinds.of(a.text, logicParticles).name
         "impulse" -> "推" + directionText(a.text) + " " +
             (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "break" -> "打坏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
@@ -3822,7 +4116,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 "burst" -> pickList(
                     getString(R.string.logic_pick_burst),
-                    ParticleKind.values().map { it.id to it.label },
+                    logicParticles.map { it.id to it.name },
                     "",
                     existing?.text,
                 ) { burstId ->

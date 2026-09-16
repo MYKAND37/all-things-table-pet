@@ -489,6 +489,7 @@ python3 tools/logic_check.py      # 冷却、只一次、而且/或者、信号�
 python3 tools/rig_edit_check.py   # 加/删/换父级、部位属性的角度范围真的被求解器遵守
 python3 tools/rig_prop_check.py   # 碰撞推出、接触节流、落地、投掷速度
 python3 tools/fluid_check.py      # 水洼会摊平会停、液滴认得自己那种液体
+python3 tools/particle_check.py   # 粒子：受不受重力、落在地上留不留印子、颜色和大小是哪种粒子的
 python3 tools/parts_check.py      # 图层、状态、画哪张图
 python3 tools/store_check.py      # character.json 四处读-改-写：骨架、状态图、深度、改名
 python3 tools/settings_check.py   # settings.json：缺键、越界、写坏了都不崩
@@ -565,6 +566,7 @@ tools/drag_check.py          拖拽手感（倒吊、多指、甩出去）
 tools/carry_check.py         提起一条腿，整具身体会不会翻过来
 tools/rig_prop_check.py      道具物理
 tools/fluid_check.py         液体：摊平、停下、认得自己那种液体
+tools/particle_check.py      粒子：重力的开关、留印子的开关、颜色与大小
 tools/parts_check.py         图层与状态：画哪张图
 tools/store_check.py         character.json 的读-改-写（数据不会悄悄少东西）
 tools/settings_check.py      settings.json 写坏了也不会崩

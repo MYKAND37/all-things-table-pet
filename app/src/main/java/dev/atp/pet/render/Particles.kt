@@ -3,6 +3,8 @@ package dev.atp.pet.render
 import android.graphics.Canvas
 import android.graphics.Paint
 import dev.atp.pet.engine.math.Vec2
+import dev.atp.pet.engine.particle.ParticleKinds
+import dev.atp.pet.engine.particle.ParticleSpec
 import kotlin.math.max
 import kotlin.random.Random
 
@@ -13,20 +15,12 @@ import kotlin.random.Random
  * mark leave one. A real simulation (pressure, flow, pooling) is a different project, and
  * the thing a table pet actually needs is "it got hit and something came off".
  */
-enum class ParticleKind(val id: String, val label: String, val colour: Int) {
-    BLOOD("blood", "血", 0xFFC92A2A.toInt()),
-    SWEAT("sweat", "汗", 0xFF4C8DE0.toInt()),
-    SPARK("spark", "火花", 0xFFF2A93B.toInt()),
-    DUST("dust", "灰尘", 0xFF9A8FA6.toInt()),
-    STAR("star", "星星", 0xFFE45CA8.toInt()),
-    HEART("heart", "爱心", 0xFFE2557B.toInt());
-
-    /** Blood and sweat soak in; sparks and dust do not. */
-    val stains: Boolean get() = this == BLOOD || this == SWEAT
-
-    companion object {
-        fun of(id: String): ParticleKind = values().firstOrNull { it.id == id } ?: DUST
-    }
+//: What a kind of particle IS -- its colour, its size and its three switches -- lives in
+//: dev.atp.pet.engine.particle.ParticleSpec, because it is written into the character's file
+//: and edited in 粒子管理. This file only knows how to move them.
+object ParticlesDefaults {
+    /** Mirrors ParticleKinds.DEFAULTS, for the callers that just want a colour to draw. */
+    val KINDS: List<ParticleSpec> get() = ParticleKinds.DEFAULTS
 }
 
 /**
@@ -63,6 +57,20 @@ class Particles {
     private val stains = ArrayList<Stain>()
     private val random = Random(7717)
 
+    /**
+     * The kinds this character declares, kept here the same way the bench keeps its liquids:
+     * a spray has to look its colour up by name, and 粒子管理 edits the list without
+     * reloading the bench (which would throw away whatever is mid-fall on it).
+     */
+    private var kinds: List<ParticleSpec> = ParticleKinds.DEFAULTS
+
+    fun setKinds(list: List<ParticleSpec>) {
+        kinds = list
+    }
+
+    /** The kinds as they are right now, for a screen that wants to show them. */
+    fun kinds(): List<ParticleSpec> = kinds
+
     val size: Int get() = particles.size
     val stainCount: Int get() = stains.size
 
@@ -76,7 +84,7 @@ class Particles {
      * 14 whatever the frame rate is doing.
      */
     fun burst(kindId: String, at: Vec2, count: Int) {
-        val kind = ParticleKind.of(kindId)
+        val kind = ParticleKinds.of(kindId, kinds)
         val n = count.coerceIn(0, 60)
         for (i in 0 until n) {
             if (particles.size >= MAX_PARTICLES) break
@@ -91,9 +99,11 @@ class Particles {
                     vy = kotlin.math.sin(angle) * speed - 260f,
                     life = life,
                     maxLife = life,
-                    size = 3f + random.nextFloat() * 5f,
+                    size = (3f + random.nextFloat() * 5f) * kind.size,
                     colour = kind.colour,
-                    gravity = if (kind == ParticleKind.STAR || kind == ParticleKind.HEART) 140f else 1300f,
+                    // The switch, not a special case for two of the six names: floating was
+                    // hardcoded for stars and hearts until a kind could be edited.
+                    gravity = if (kind.gravity) FALLING else FLOATING,
                     stains = kind.stains,
                 )
             )
@@ -156,5 +166,9 @@ class Particles {
         private const val MAX_PARTICLES = 400
         private const val MAX_STAINS = 60
         private const val TWO_PI = 6.2831855f
+
+        /** How hard a particle that HAS gravity is pulled, and what a floating one gets. */
+        const val FALLING = 1300f
+        const val FLOATING = 140f
     }
 }

@@ -11,6 +11,7 @@ import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
 import dev.atp.pet.engine.fluid.Fluid
+import dev.atp.pet.engine.particle.ParticleSpec
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.logic.ActionSpec
@@ -256,6 +257,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         ragdoll = Ragdoll(built, parsed, stiffness)
         layersNow = parsed.drawOrder()
         liquids = logic.liquids
+        particles.setKinds(logic.particles)
         this.propSpecs = propSpecs
         propArt?.release()
         propArt = propsDir?.let { PartLibrary.loadFree(it) }
@@ -371,6 +373,35 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     fun setLiquids(list: List<LiquidSpec>) {
         liquids = list
+        invalidate()
+    }
+
+    /**
+     * The particles this character declares, handed over the same way the liquids are.
+     *
+     * Same reason, too: 粒子管理 edits the list while the pet is standing on the bench, and
+     * reloading the bench to pick up a colour would throw away whatever is mid-fall on it.
+     */
+    fun setParticles(list: List<ParticleSpec>) {
+        particles.setKinds(list)
+        invalidate()
+    }
+
+    /** Spray some of a particle out, from a button rather than from a rule. */
+    fun spray(id: String, count: Int = 14) {
+        particles.burst(id, Vec2(homeX(), homeY() - 300f), count)
+        invalidate()
+    }
+
+    /** How many particles are alive, so 粒子管理 can say whether anything is there. */
+    fun particleCount(): Int = particles.size
+
+    /** How many marks they have left on the floor. */
+    fun stainCount(): Int = particles.stainCount
+
+    /** Sweep the bench. The pet, the props and the liquid are not touched. */
+    fun clearParticles() {
+        particles.clear()
         invalidate()
     }
 
