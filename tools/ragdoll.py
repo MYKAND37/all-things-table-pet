@@ -1235,6 +1235,100 @@ def run(spec_path):
         globals()["PIN_MODE"] = _saved_mode
 
     print("")
+    print("=== 7. the pin and the floor keep their per-frame promises ===")
+    # 抖动（振幅不大、频率大）真正的成因是两条「每帧的承诺」被破了，而它们都是**确定的**，
+    # 不是统计的：
+    #   · pin 一帧之内给一个关节的转动，不能超过 MAX_IK_RATE * dt
+    #   · 地面一遍对同一根骨头只能转一次
+    # 所以这里不设抖动阈值 —— 差分比那种东西会飘，而且实测它在出 bug 时也只有 1.16~1.27，
+    # 一个不飘的阈值根本拦不住它。断言不变量，不断言手感。
+    _drag_spec = room(json.load(open(spec_path)))
+    by4, order4 = bake(_drag_spec["bones"])
+    drag = Ragdoll(_drag_spec, by4, order4, stiffness=0.0)
+    for _ in range(180):
+        drag.step(1.0 / 60.0)
+
+    pin_worst = [0.0]
+    _real_pins = Ragdoll._pins
+
+    def _spy_pins(self, dt, pins):
+        before = {b.name: b.rotation for b in self.order}
+        _real_pins(self, dt, pins)
+        for b in self.order:
+            d = abs(b.rotation - before[b.name])
+            if d > pin_worst[0]:
+                pin_worst[0] = d
+
+    turn_counts = {}
+    turn_worst = [0]
+    turn_total = [0]
+    _real_ground = Ragdoll._ground
+    _real_turn = Ragdoll._turn_out
+
+    def _spy_ground(self, dt):
+        turn_counts.clear()
+        r = _real_ground(self, dt)
+        if turn_counts:
+            turn_worst[0] = max(turn_worst[0], max(turn_counts.values()))
+        return r
+
+    def _spy_turn(self, bone, pen):
+        turn_counts[bone.name] = turn_counts.get(bone.name, 0) + 1
+        turn_total[0] += 1
+        return _real_turn(self, bone, pen)
+
+    Ragdoll._pins = _spy_pins
+    Ragdoll._ground = _spy_ground
+    Ragdoll._turn_out = _spy_turn
+    try:
+        # 场景要用**当初真的复现出问题的那一个**：快速横向拖手（600 px/s）。
+        # 轻轻拖脚的话上限根本不吃劲，那样这条测试是绿的、也是瞎的。
+        bone4 = by4["hand_R"]
+        for i in range(180):
+            t = i / 60.0
+            drag.step(1.0 / 60.0, [("hand_R", (bone4.wpos[0] + 600.0 * t, bone4.wpos[1]), 0.5)])
+    finally:
+        Ragdoll._pins = _real_pins
+        Ragdoll._ground = _real_ground
+        Ragdoll._turn_out = _real_turn
+
+    budget = MAX_IK_RATE / 60.0
+    ok &= _report("the pin never spends more than one frame's budget on a joint",
+                  "%.3f deg of %.3f" % (math.degrees(pin_worst[0]), math.degrees(budget)),
+                  pin_worst[0] <= budget + 1e-9)
+    ok &= _report("and it did actually pull", "%.3f deg" % math.degrees(pin_worst[0]),
+                  pin_worst[0] > 1e-6)
+
+    # 地面那一半要**另一个场景**：快速拖手时全身都在地面之上，地面一次都不出手，
+    # 拿它去测地面就是一条永远绿的瞎测试。
+    #
+    # 而"砸到地上"也测不出来（实测最多还是 1 次）：那一下渗透很快就过去了。真正会触发的
+    # 是**把手按到地面以下并按住** —— 渗透不会自己消失，地面那一遍就会盯着同一根骨头反复
+    # 出手，正是当初"一帧内来回四次"的成因。这个场景是拿回退版一个个试出来的，不是猜的：
+    # 按手/按脚/按头、60px 和 200px 都能到 2 次，砸下来只有 1 次。
+    turn_counts.clear()
+    turn_worst[0] = 0
+    turn_total[0] = 0
+    Ragdoll._ground = _spy_ground
+    Ragdoll._turn_out = _spy_turn
+    try:
+        by5, order5 = bake(_drag_spec["bones"])
+        pressed = Ragdoll(_drag_spec, by5, order5, stiffness=0.0)
+        for _ in range(120):
+            pressed.step(1.0 / 60.0)
+        hand5 = by5["hand_R"]
+        hx, _ = hand5.wpos
+        for _ in range(60):
+            pressed.step(1.0 / 60.0, [("hand_R", (hx, pressed.floor + 60.0), 0.5)])
+    finally:
+        Ragdoll._ground = _real_ground
+        Ragdoll._turn_out = _real_turn
+
+    ok &= _report("the floor did turn something", "%d turns" % turn_total[0], turn_total[0] > 0)
+    ok &= _report("the floor turns a bone at most once per frame",
+                  "most %d" % turn_worst[0], turn_worst[0] <= 1)
+
+    print("")
     print("ALL OK" if ok else "SOME CHECKS FAILED")
     return 0 if ok else 1
 
