@@ -193,6 +193,13 @@
     <string name="sandbox_tune_phase_pins">IK</string>
     <string name="sandbox_tune_phase_carry">carry</string>
     <string name="sandbox_tune_culprit">← 凶手</string>
+    <!-- 时间读数：本帧 physics 收到的步长（ms）、最近一秒的峰值、一帧里 step 跑了几次。 -->
+    <string name="sandbox_tune_timing">步进 %1$.1fms 峰值 %2$.1fms · 每帧 %3$d 步</string>
+    <!-- IK 限速：一个滑杆 + 一个「关掉限速」开关（关掉时数值显示「关」）。 -->
+    <string name="sandbox_tune_rate_limit">IK 限速</string>
+    <string name="sandbox_tune_rate_off">关掉限速</string>
+    <string name="sandbox_tune_rate_default">恢复 9.0</string>
+    <string name="sandbox_tune_rate_none">关</string>
 
     <!-- 逻辑管理 -->
     <string name="logic_stats">数值</string>

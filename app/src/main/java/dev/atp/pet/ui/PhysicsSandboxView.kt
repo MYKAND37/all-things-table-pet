@@ -38,6 +38,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.pow
 import java.io.File
 
@@ -945,6 +946,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         clock += dt
         if (bubbleLeft > 0f) bubbleLeft -= dt
+        // Counted from zero every frame rather than accumulated for ever: what the panel
+        // prints is how many steps THIS frame's delta was spread over. See stepsPerFrame.
+        stepsPerFrame = 0
 
         val actions = engine?.step(dt) ?: emptyList()
         if (actions.isNotEmpty()) {
@@ -978,6 +982,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val watched = heldBones.values.firstOrNull()
         rag.probeBone = watched
         rag.step(dt, pins)
+        // What that step was handed, and that there was one of it. Taken here rather than in
+        // onDraw because this is the call the number is about: the panel prints the delta the
+        // physics actually got, not the one the frame was measured at. See stepMs.
+        stepMs = dt * 1000f
+        stepMsRing[stepMsHead] = stepMs
+        stepMsHead = (stepMsHead + 1) % STEP_SAMPLES
+        stepsPerFrame++
         // Straight after the step, so that what the tuning panel shows is where the held
         // joint ENDED UP this frame. See measureJitter.
         measureJitter(rag, watched)
@@ -1612,8 +1623,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** The finger the panel owns, or -1. It is not a bone, a prop, a pan or a pinch. */
     private var tunePointer = -1
 
-    /** True while that finger is on the slider rather than on the tab or the 回 1.0 press. */
-    private var tuneSliding = false
+    /**
+     * What that finger is dragging: TUNE_DRAG_*, or none while it is on one of the two
+     * switches. A mode rather than one flag per slider, because there is exactly one finger
+     * here and what it is on decides what its movement means -- see tuneDown and the move
+     * case, which read the same flag.
+     */
+    private var tuneDrag = TUNE_DRAG_NONE
 
     /** Which bone the readout is about, and the rotation the frame before left it at. */
     private var jitterBone: String? = null
@@ -1653,6 +1669,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Which rows are relaying, i.e. at or above PHASE_CULPRIT. See summariseJitter. */
     private val phaseHot = BooleanArray(PHASE_COUNT)
+
+    /**
+     * What the physics was actually handed, and how many times it was stepped for one frame.
+     *
+     * The ragdoll cannot know either: it is given whatever this view's frame took. That is
+     * the point of printing them -- tools/ragdoll.py is stepped at a fixed 1/60 and this is
+     * stepped at the frame's own delta, and a reading taken on the phone only compares with
+     * a reading taken in Python if the difference is on the screen. MAX_IK_RATE is a RATE,
+     * so the budget one frame gets is proportional to this number: a 120 Hz phone allows
+     * half of what a 60 Hz one does, and a hitched frame allows three times as much, which
+     * is why the peak is printed beside it rather than the current value alone.
+     *
+     * The count is one today and is printed rather than assumed: this view has no fixed-step
+     * accumulator, [Ragdoll.step] is called once with the frame's own delta, and a substep
+     * loop added later would change what every number on this panel means.
+     */
+    private var stepMs = 0f
+    private val stepMsRing = FloatArray(STEP_SAMPLES)
+    private var stepMsHead = 0
+    private var stepsPerFrame = 0
 
     /**
      * Read the held bone's rotation once a frame, so the panel can say how much it shakes.
@@ -1800,28 +1836,38 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /**
-     * The panel's corner of the screen: under the pet chooser, which is the one strip of this
-     * view that something else is always drawn over, and above the pet, which stands on the
-     * floor at the bottom. What is behind it is sky, and it is drawn last of everything.
+     * Where the tab and the panel sit together: under the pet chooser, which is the one strip
+     * of this view that something else is always drawn over, and above the pet, which stands
+     * on the floor at the bottom. What is behind it is sky, and it is drawn last of
+     * everything.
+     *
+     * Slid up when the panel is taller than the room below that strip, which a phone on its
+     * side is: the panel has grown a phase table, a timing row and a second slider, and the
+     * 6dp of sky left over is not worth hanging the bottom controls off the screen for. Tab
+     * and box move together -- [tunePanel] hangs off [tuneTab] -- so what is read and what is
+     * touched stay on the screen as one thing, and a phone held upright is untouched: the
+     * panel fits and the tab stays exactly where it has always been.
      */
+    private fun tuneTop(): Float =
+        min(46f * density, max(6f * density, height - (TUNE_PANEL_H + 36f) * density))
+
     private fun tuneTab(): RectF {
         val right = width - 6f * density
-        val top = 46f * density
+        val top = tuneTop()
         return RectF(right - 74f * density, top, right, top + 24f * density)
     }
 
     /**
      * The panel's box, and with it where everything in it sits, in dp below its top: the
-     * title at 20, the two headline numbers at 48 and 76, the phase table's header at 96
-     * with a row every 20 after it, the gain on the same 28 rhythm at 204, the slider's
-     * centre 18 below that at 222, and 回 1.0 from 30 below the slider to 12 above the
-     * box's bottom edge.
+     * title at 20, the two headline numbers at 48 and 76, the phase table's header at 92
+     * with a row every 20 after it, the timing row at 188, the gain on the same 28 rhythm
+     * at 212 (slider centre 18 below it, ends named 22 below that), 回 1.0 from 30 below the
+     * slider to 12 above the box's bottom edge, then the rate limit: its row at 316 with the
+     * switch that turns it off, its slider at 342, and its ends named at 364.
      *
      * Laid out by hand because it is drawn by hand, and one place to read the rhythm from is
-     * the next best thing to not having the numbers at all: the four offsets below are this
-     * list, and anything that changes the table's height moves all four together. 290dp is
-     * what the table costs, and it is also about the most this can be: a phone on its side
-     * leaves the view some 360dp, and the panel starts at 76.
+     * the next best thing to not having the numbers at all: every offset below is this list,
+     * and a block that grows moves the ones under it with it.
      */
     private fun tunePanel(): RectF {
         val right = width - 6f * density
@@ -1830,13 +1876,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // this view is what is left of the window, which on a small phone is not much. The
         // rows and the slider are laid out from the box, so they follow it in.
         val left = max(6f * density, right - 244f * density)
-        return RectF(left, top, right, top + 290f * density)
+        return RectF(left, top, right, top + TUNE_PANEL_H * density)
     }
 
-    /** The slider's hit area: taller than the track it draws, because a finger is not 6 px. */
+    /** The gain slider's hit area: taller than the track it draws, because a finger is not 6 px. */
     private fun tuneSlider(): RectF {
         val box = tunePanel()
-        val cy = box.top + 222f * density
+        val cy = box.top + 230f * density
         return RectF(
             box.left + 14f * density, cy - 16f * density,
             box.right - 14f * density, cy + 16f * density,
@@ -1846,28 +1892,62 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun tuneReset(): RectF {
         val box = tunePanel()
         return RectF(
-            box.left + 12f * density, box.top + 252f * density,
-            box.left + 100f * density, box.top + 278f * density,
+            box.left + 12f * density, box.top + 260f * density,
+            box.left + 100f * density, box.top + 286f * density,
+        )
+    }
+
+    /** The rate limit's slider, the same shape as the gain's, 112dp further down the panel. */
+    private fun tuneRateSlider(): RectF {
+        val box = tunePanel()
+        val cy = box.top + 342f * density
+        return RectF(
+            box.left + 14f * density, cy - 16f * density,
+            box.right - 14f * density, cy + 16f * density,
         )
     }
 
     /**
-     * Gain to slider position and back, logarithmically.
-     *
-     * The useful range of this number is not spread evenly: 1.0 is where it has always been
-     * and 0.1 is where the buzz measurably goes away, and a LINEAR track from 0.02 to 1.0
-     * puts 0.1 in its first 8%, which is not somewhere a finger can be put twice. Log puts
-     * 0.1 at 41% of the way along and still ends exactly on 1.0.
+     * 关掉限速, on the rate's own row and clear of both sliders: 5dp above the rate slider's
+     * hit area and 9dp below 回 1.0's. A press here is the whole regression test -- see
+     * toggleRateLimit -- so it is a target a finger can find without looking.
      */
-    private fun gainToSlider(gain: Float): Float {
-        val v = gain.coerceIn(TUNE_GAIN_MIN, TUNE_GAIN_MAX)
-        return (ln(v / TUNE_GAIN_MIN) / ln(TUNE_GAIN_MAX / TUNE_GAIN_MIN)).coerceIn(0f, 1f)
+    private fun tuneRateOff(): RectF {
+        val box = tunePanel()
+        return RectF(
+            box.right - tunePad - 76f * density, box.top + 295f * density,
+            box.right - tunePad, box.top + 321f * density,
+        )
     }
 
-    private fun sliderToGain(t: Float): Float {
-        val span = TUNE_GAIN_MAX / TUNE_GAIN_MIN
-        return TUNE_GAIN_MIN * span.pow(t.coerceIn(0f, 1f))
+    /**
+     * Value to track position and back, logarithmically.
+     *
+     * The useful range of these numbers is not spread evenly over a linear track. For the
+     * gain: 1.0 is where it has always been and 0.1 is where the buzz measurably goes away,
+     * and a LINEAR track from 0.02 to 1.0 puts 0.1 in its first 8%, which is not somewhere a
+     * finger can be put twice, while log puts it at 41% and still ends exactly on 1.0. For
+     * the rate: 9.0 is the default and anything worth trying is a multiple of it, so the
+     * same argument holds twice as hard -- 9.0 to 1000 linearly would put everything above
+     * 100 in the last 9% of the track.
+     */
+    private fun logTrack(value: Float, lo: Float, hi: Float): Float {
+        val v = value.coerceIn(lo, hi)
+        return (ln(v / lo) / ln(hi / lo)).coerceIn(0f, 1f)
     }
+
+    private fun logValue(t: Float, lo: Float, hi: Float): Float {
+        val span = hi / lo
+        return lo * span.pow(t.coerceIn(0f, 1f))
+    }
+
+    private fun gainToSlider(gain: Float): Float = logTrack(gain, TUNE_GAIN_MIN, TUNE_GAIN_MAX)
+
+    private fun sliderToGain(t: Float): Float = logValue(t, TUNE_GAIN_MIN, TUNE_GAIN_MAX)
+
+    private fun rateToSlider(rate: Float): Float = logTrack(rate, TUNE_RATE_MIN, TUNE_RATE_MAX)
+
+    private fun sliderToRate(t: Float): Float = logValue(t, TUNE_RATE_MIN, TUNE_RATE_MAX)
 
     /** Written straight through: there is one of these, and the solver reads it next frame. */
     private fun setTuneFromSlider(x: Float) {
@@ -1876,6 +1956,46 @@ class PhysicsSandboxView @JvmOverloads constructor(
         Ragdoll.PIN_JOINT_GAIN = sliderToGain((x - slider.left) / slider.width())
         invalidate()
     }
+
+    /** The same, for the other rate number: MAX_IK_RATE is what the slider writes. */
+    private fun setRateFromSlider(x: Float) {
+        val slider = tuneRateSlider()
+        if (slider.width() <= 0f) return
+        Ragdoll.MAX_IK_RATE = sliderToRate((x - slider.left) / slider.width())
+        invalidate()
+    }
+
+    /**
+     * What "there is no limit" means here: a number MAX_IK_RATE can never reach on its own.
+     *
+     * Above the slider's top by construction, so the switch is the only thing that can put
+     * the value there -- which is what makes [rateLimitOff] an answer about the switch rather
+     * than a guess about a number. Off is a real removal and not a bigger cap on purpose:
+     * 1e6 rad/s is 5.7 degrees per NANOsecond, so no joint in a frame of any length can ever
+     * spend that budget, and the aim goes back to being applied in full, which is what it was
+     * before the cap existed.
+     */
+    private fun toggleRateLimit() {
+        Ragdoll.MAX_IK_RATE = if (rateLimitOff()) TUNE_RATE_DEFAULT else TUNE_RATE_OFF
+        invalidate()
+    }
+
+    private fun rateLimitOff(): Boolean = Ragdoll.MAX_IK_RATE > TUNE_RATE_MAX
+
+    /**
+     * "关" rather than a number when it is off: the value is 1000000 and printing that in a
+     * column built for "9.0" answers no question anybody asked.
+     */
+    private fun rateLimitText(): String =
+        if (rateLimitOff()) context.getString(R.string.sandbox_tune_rate_none)
+        else "%.1f".format(Ragdoll.MAX_IK_RATE)
+
+    /** The switch says what pressing it will do, like 回 1.0 does. */
+    private fun rateLimitSwitchText(): String =
+        context.getString(
+            if (rateLimitOff()) R.string.sandbox_tune_rate_default
+            else R.string.sandbox_tune_rate_off
+        )
 
     private fun rateText(): String =
         if (jitterBone == null) "--" else "%.0f%%".format(jitterRate)
@@ -1894,12 +2014,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun phaseRateText(rate: Float): String =
         if (jitterBone == null) "--" else "%.0f%%".format(rate)
 
-    /** One line of the panel: what the number is on the left, the number itself on the right. */
-    private fun tuneRow(canvas: Canvas, box: RectF, y: Float, label: String, value: String) {
+    /**
+     * One line of the panel: what the number is on the left, the number itself on the right.
+     *
+     * The right edge is a parameter because the rate's row ends in a switch rather than at
+     * the panel's edge: its number is right-aligned against the switch, and a row that went
+     * to the edge anyway would print the two on top of each other.
+     */
+    private fun tuneRow(
+        canvas: Canvas, box: RectF, y: Float, label: String, value: String,
+        right: Float = box.right - tunePad,
+    ) {
         tuneText.color = 0x99FFFFFF.toInt()
         canvas.drawText(label, box.left + tunePad, y, tuneText)
         tuneValue.textAlign = Paint.Align.RIGHT
-        canvas.drawText(value, box.right - tunePad, y, tuneValue)
+        canvas.drawText(value, right, y, tuneValue)
         tuneValue.textAlign = Paint.Align.LEFT
     }
 
@@ -1991,53 +2120,48 @@ class PhysicsSandboxView @JvmOverloads constructor(
         tuneText.color = 0x66FFFFFF
         canvas.drawText(
             context.getString(R.string.sandbox_tune_phases),
-            box.left + tunePad, box.top + 96f * density, tuneText,
+            box.left + tunePad, box.top + 92f * density, tuneText,
         )
         tuneText.textAlign = Paint.Align.RIGHT
         canvas.drawText(
             context.getString(R.string.sandbox_tune_phase_now),
-            colValue, box.top + 96f * density, tuneText,
+            colValue, box.top + 92f * density, tuneText,
         )
         canvas.drawText(
             context.getString(R.string.sandbox_tune_rate),
-            colRate, box.top + 96f * density, tuneText,
+            colRate, box.top + 92f * density, tuneText,
         )
         tuneText.textAlign = Paint.Align.LEFT
         for (p in 0 until PHASE_COUNT) {
             tunePhaseRow(
-                canvas, box, box.top + (116f + 20f * p) * density,
+                canvas, box, box.top + (112f + 20f * p) * density,
                 context.getString(phaseLabel[p]), phaseNow[p], phaseRate[p],
                 phaseHot[p],
             )
         }
 
-        tuneRow(
-            canvas, box, box.top + 204f * density,
-            context.getString(R.string.sandbox_tune_gain), gainText(),
+        // What the physics is being fed, which is the first difference between this panel and
+        // the reference the same numbers were first read in: tools/ragdoll.py is stepped at
+        // exactly 1/60, this is stepped at whatever the frame took. MAX_IK_RATE is a RATE, so
+        // the budget one frame gets is that rate times this number -- a 120 Hz phone halves
+        // it, a hitched frame multiplies it, and the peak is printed beside the current value
+        // because that one frame is where the relay gets its biggest kick.
+        var stepPeak = 0f
+        for (v in stepMsRing) stepPeak = max(stepPeak, v)
+        tuneText.color = 0x66FFFFFF
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_timing, stepMs, stepPeak, stepsPerFrame),
+            box.left + tunePad, box.top + 188f * density, tuneText,
         )
 
-        // The slider, with both ends named: 0.02 to 1.0 is not a range anybody guesses, and
-        // where a value sits between them is the whole question this panel answers.
-        val slider = tuneSlider()
-        val cy = slider.centerY()
-        val knob = slider.left + slider.width() * gainToSlider(Ragdoll.PIN_JOINT_GAIN)
-        tunePaint.color = 0x3DFFFFFF
-        canvas.drawRoundRect(
-            RectF(slider.left, cy - 3f * density, slider.right, cy + 3f * density),
-            3f * density, 3f * density, tunePaint,
+        tuneRow(
+            canvas, box, box.top + 212f * density,
+            context.getString(R.string.sandbox_tune_gain), gainText(),
         )
-        tunePaint.color = 0xFF8FA8FF.toInt()
-        canvas.drawRoundRect(
-            RectF(slider.left, cy - 3f * density, knob, cy + 3f * density),
-            3f * density, 3f * density, tunePaint,
+        tuneSliderDraw(
+            canvas, tuneSlider(), gainToSlider(Ragdoll.PIN_JOINT_GAIN),
+            TUNE_GAIN_MIN.toString(), TUNE_GAIN_MAX.toString(),
         )
-        tunePaint.color = 0xFFF4F2FB.toInt()
-        canvas.drawCircle(knob, cy, 7f * density, tunePaint)
-        tuneText.color = 0x66FFFFFF
-        canvas.drawText(TUNE_GAIN_MIN.toString(), slider.left, cy + 22f * density, tuneText)
-        tuneText.textAlign = Paint.Align.RIGHT
-        canvas.drawText(TUNE_GAIN_MAX.toString(), slider.right, cy + 22f * density, tuneText)
-        tuneText.textAlign = Paint.Align.LEFT
 
         // 回 1.0 on the left, and what the two numbers are about on the right -- the bone and
         // how many frame pairs are behind them, which is how you know the window has filled.
@@ -2057,6 +2181,70 @@ class PhysicsSandboxView @JvmOverloads constructor(
             box.right - tunePad, reset.centerY() + 4f * density, tuneText,
         )
         tuneText.textAlign = Paint.Align.LEFT
+
+        // The rate limit, and the switch that takes it away.
+        //
+        // The buzz arrived in the commit whose whole content was this cap (8440471, first
+        // shipped in v1.0.1), and that commit's own measurement -- 13.2 -> 4.6 degrees -- is
+        // the shape of the thing: smaller, not gone, and the panel's mean has read about 5.5
+        // ever since. So the cap is not a suspicion, it is the suspect, and the way to price
+        // it is to take it away while the pet is being dragged. 关掉限速 writes MAX_IK_RATE
+        // above anything the solver can spend, and the two numbers at the top of this panel
+        // then answer whether the relay was the cap or something underneath it. The slider
+        // beside it is for the step after that: a cap high enough not to relay is the cure
+        // being looked for, and finding it should not need a rebuild either. The timing row
+        // above is the third reading of the same experiment -- the cap is a RATE, so what it
+        // allows one frame depends on the dt that row prints.
+        val off = tuneRateOff()
+        val unlimited = rateLimitOff()
+        tuneRow(
+            canvas, box, box.top + 316f * density,
+            context.getString(R.string.sandbox_tune_rate_limit), rateLimitText(),
+            off.left - 10f * density,
+        )
+        tunePaint.color = if (unlimited) 0x33FF8A8A.toInt() else 0x26FFFFFF
+        canvas.drawRoundRect(off, off.height() / 2f, off.height() / 2f, tunePaint)
+        tuneText.color = if (unlimited) 0xFFFF8A8A.toInt() else 0xFF8FA8FF.toInt()
+        tuneText.textAlign = Paint.Align.CENTER
+        canvas.drawText(
+            rateLimitSwitchText(), off.centerX(), off.centerY() + 4f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
+        tuneSliderDraw(
+            canvas, tuneRateSlider(), rateToSlider(Ragdoll.MAX_IK_RATE),
+            TUNE_RATE_MIN.toString(), TUNE_RATE_MAX.toString(),
+        )
+    }
+
+    /**
+     * One slider: the track, the part of it behind the knob, the knob, and both ends named.
+     *
+     * A function rather than two copies because the two sliders have to LOOK like one kind of
+     * control. A rate slider drawn a shade differently would read as a different sort of
+     * thing, and where a value sits between the ends is the whole question this panel asks.
+     */
+    private fun tuneSliderDraw(
+        canvas: Canvas, slider: RectF, t: Float, minLabel: String, maxLabel: String,
+    ) {
+        val cy = slider.centerY()
+        val knob = slider.left + slider.width() * t
+        tunePaint.color = 0x3DFFFFFF
+        canvas.drawRoundRect(
+            RectF(slider.left, cy - 3f * density, slider.right, cy + 3f * density),
+            3f * density, 3f * density, tunePaint,
+        )
+        tunePaint.color = 0xFF8FA8FF.toInt()
+        canvas.drawRoundRect(
+            RectF(slider.left, cy - 3f * density, knob, cy + 3f * density),
+            3f * density, 3f * density, tunePaint,
+        )
+        tunePaint.color = 0xFFF4F2FB.toInt()
+        canvas.drawCircle(knob, cy, 7f * density, tunePaint)
+        tuneText.color = 0x66FFFFFF
+        canvas.drawText(minLabel, slider.left, cy + 22f * density, tuneText)
+        tuneText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(maxLabel, slider.right, cy + 22f * density, tuneText)
+        tuneText.textAlign = Paint.Align.LEFT
     }
 
     /**
@@ -2071,21 +2259,29 @@ class PhysicsSandboxView @JvmOverloads constructor(
         if (tuneTab().contains(x, y)) {
             tuning = !tuning
             tunePointer = id
-            tuneSliding = false
+            tuneDrag = TUNE_DRAG_NONE
             invalidate()
             return true
         }
         if (!tuning || !tunePanel().contains(x, y)) return false
         tunePointer = id
-        tuneSliding = tuneSlider().contains(x, y)
+        tuneDrag = TUNE_DRAG_NONE
         when {
-            tuneSliding -> setTuneFromSlider(x)
-            // On the press rather than on the lift: it is one number, and the readout it
-            // moves is the thing the finger is already watching.
+            tuneSlider().contains(x, y) -> {
+                tuneDrag = TUNE_DRAG_GAIN
+                setTuneFromSlider(x)
+            }
+            tuneRateSlider().contains(x, y) -> {
+                tuneDrag = TUNE_DRAG_RATE
+                setRateFromSlider(x)
+            }
+            // On the press rather than on the lift, both of them: they are one number each,
+            // and the readout they move is the thing the finger is already watching.
             tuneReset().contains(x, y) -> {
                 Ragdoll.PIN_JOINT_GAIN = TUNE_GAIN_DEFAULT
                 invalidate()
             }
+            tuneRateOff().contains(x, y) -> toggleRateLimit()
         }
         return true
     }
@@ -2094,7 +2290,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun tuneUp(id: Int) {
         if (id != tunePointer) return
         tunePointer = -1
-        tuneSliding = false
+        tuneDrag = TUNE_DRAG_NONE
     }
 
     // -- input --------------------------------------------------------------
@@ -2154,7 +2350,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     // early: a second finger has to be able to keep dragging the pet while
                     // the first one holds the slider. That is what tuning looks like.
                     if (id == tunePointer) {
-                        if (tuneSliding) setTuneFromSlider(event.getX(i))
+                        // Whichever slider that finger took hold of, and nothing if it landed
+                        // on one of the two switches. See tuneDown.
+                        when (tuneDrag) {
+                            TUNE_DRAG_GAIN -> setTuneFromSlider(event.getX(i))
+                            TUNE_DRAG_RATE -> setRateFromSlider(event.getX(i))
+                        }
                         grabbing = true
                         continue
                     }
@@ -2382,6 +2583,38 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val TUNE_GAIN_MIN = 0.02f
         private const val TUNE_GAIN_MAX = 1.0f
         private const val TUNE_GAIN_DEFAULT = 1.0f
+
+        /**
+         * The rate slider's ends, where the switch puts the value, and what it restores.
+         *
+         * The bottom is the declaration's own default, and the top is where a cap stops being
+         * a plausible cure and starts being "off, but with a number": a joint may turn at most
+         * pi radians toward the finger in a frame, so 1000 rad/s already outruns the aim at
+         * 60 Hz. MAX_IK_RATE is a `var` in Ragdoll's companion -- the same one the mirror
+         * check reads as 9.0f against tools/ragdoll.py -- and nothing here writes it until a
+         * finger does.
+         */
+        private const val TUNE_RATE_MIN = 9.0f
+        private const val TUNE_RATE_MAX = 1000.0f
+        private const val TUNE_RATE_DEFAULT = 9.0f
+        private const val TUNE_RATE_OFF = 1.0e6f
+
+        /** How tall the panel is, so that [tuneTop] can tell whether it fits. See tunePanel. */
+        private const val TUNE_PANEL_H = 376f
+
+        /** What the panel's finger is on: the gain slider, the rate slider, or a switch. */
+        private const val TUNE_DRAG_NONE = 0
+        private const val TUNE_DRAG_GAIN = 1
+        private const val TUNE_DRAG_RATE = 2
+
+        /**
+         * How many frames of step time the peak beside the current value is taken over.
+         *
+         * One second at 60 Hz: long enough that a single hitched frame is still in it when
+         * the eye arrives, short enough that a hitch a minute ago is not presented as the
+         * state of the bench.
+         */
+        private const val STEP_SAMPLES = 64
 
         /**
          * The four things one step does to a joint, in the order the table prints them and
