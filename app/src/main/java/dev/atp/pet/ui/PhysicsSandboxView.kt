@@ -233,7 +233,23 @@ class PhysicsSandboxView @JvmOverloads constructor(
         color = 0xFFF4F2FB.toInt()
         typeface = Typeface.MONOSPACE
     }
+
+    /** The phase rows' numbers: smaller than the headline pair, and still monospaced. */
+    private val tunePhase = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 15f * density
+        color = 0xFFF4F2FB.toInt()
+        typeface = Typeface.MONOSPACE
+    }
     private val tunePad = 12f * density
+
+    /**
+     * The strip at the end of a phase row that the ← 凶手 marker is drawn in.
+     *
+     * Kept clear on every row, marked or not, so the rate column can be right-aligned in
+     * one place: a column that jumps sideways when the culprit moves is a column nobody can
+     * compare down.
+     */
+    private val culpritStrip = 42f * density
 
     var onInfo: ((String) -> Unit)? = null
 
@@ -954,10 +970,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }.toMutableList()
         pins.addAll(ropePins(sk))
+        // The bone the tuning panel is about, named BEFORE the step rather than after it:
+        // the four phase boundaries only exist inside the step, so the bone has to be handed
+        // in first and the pieces read back out once it has run. The same name goes to
+        // measureJitter below, which is what lets the split and the whole-frame turn be two
+        // readings of one joint instead of two readings of two. See Ragdoll.probeBone.
+        val watched = heldBones.values.firstOrNull()
+        rag.probeBone = watched
         rag.step(dt, pins)
         // Straight after the step, so that what the tuning panel shows is where the held
         // joint ENDED UP this frame. See measureJitter.
-        measureJitter()
+        measureJitter(rag, watched)
 
         world?.let { w ->
             val hits = w.step(
@@ -1609,6 +1632,29 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var jitterPairs = 0
 
     /**
+     * The same window cut by phase: one ring per phase, the piece this frame's step handed
+     * back, and the rate over the window.
+     *
+     * Everything here is in PHASE_* order, which is the order Ragdoll.PROBE_* names, which
+     * is the order the rows are drawn in and the order phaseLabel names them. Three lists
+     * that have to agree, which is why the mapping from Ragdoll's four numbers into these
+     * four slots is written out one line per phase rather than looped over: a loop cannot
+     * be read to see whether it is right.
+     */
+    private val phaseTurn = Array(PHASE_COUNT) { FloatArray(JITTER_SAMPLES) }
+    private val phaseNow = FloatArray(PHASE_COUNT)
+    private val phaseRate = FloatArray(PHASE_COUNT)
+    private val phaseLabel = intArrayOf(
+        R.string.sandbox_tune_phase_integrator,
+        R.string.sandbox_tune_phase_ground,
+        R.string.sandbox_tune_phase_pins,
+        R.string.sandbox_tune_phase_carry,
+    )
+
+    /** Which rows are relaying, i.e. at or above PHASE_CULPRIT. See summariseJitter. */
+    private val phaseHot = BooleanArray(PHASE_COUNT)
+
+    /**
      * Read the held bone's rotation once a frame, so the panel can say how much it shakes.
      *
      * What is compared is `bone.rotation` at the end of one frame against the end of the
@@ -1620,10 +1666,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * joint above it, which is why a chain of small flips reads as one big shake at the end.
      *
      * Which bone: the one under the finger. With two fingers on two limbs the reading is
-     * about one of them, because an average of two joints is a number about neither.
+     * about one of them, because an average of two joints is a number about neither. The
+     * name is handed in rather than looked up here, because it is also the name the probe
+     * was armed with: the split and the whole turn below are two readings of one joint, and
+     * the four phases adding up to the turn is the only thing that makes them comparable.
      */
-    private fun measureJitter() {
-        val bone = heldBones.values.firstOrNull()?.let { skeleton?.find(it) }
+    private fun measureJitter(rag: Ragdoll, name: String?) {
+        val bone = name?.let { skeleton?.find(it) }
         if (bone == null) {
             // Nothing in the hand. The window is dropped rather than left standing: a stale
             // two seconds would sit there looking like a reading of the next drag.
@@ -1645,6 +1694,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val turn = bone.rotation - jitterPrev
         jitterPrev = bone.rotation
         jitterTurn[jitterHead] = turn
+        // The same frame, cut up. One signed piece per phase, taken from the step that just
+        // ran, and written at the same ring index as the whole turn so that one timestamp
+        // and one window rule serve all five numbers.
+        phaseNow[PHASE_INTEGRATOR] = rag.probeTurn[Ragdoll.PROBE_INTEGRATOR]
+        phaseNow[PHASE_GROUND] = rag.probeTurn[Ragdoll.PROBE_GROUND]
+        phaseNow[PHASE_PINS] = rag.probeTurn[Ragdoll.PROBE_PINS]
+        phaseNow[PHASE_CARRY] = rag.probeTurn[Ragdoll.PROBE_CARRY]
+        for (p in 0 until PHASE_COUNT) phaseTurn[p][jitterHead] = phaseNow[p]
         jitterAt[jitterHead] = clock
         jitterHead = (jitterHead + 1) % JITTER_SAMPLES
         if (jitterCount < JITTER_SAMPLES) jitterCount++
@@ -1659,23 +1716,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
         jitterRate = 0f
         jitterAmp = 0f
         jitterPairs = 0
+        for (p in 0 until PHASE_COUNT) {
+            phaseNow[p] = 0f
+            phaseRate[p] = 0f
+            phaseHot[p] = false
+        }
     }
 
     /**
-     * The two numbers, over the samples still inside the window.
+     * The numbers, over the samples still inside the window.
      *
-     * The rate counts only pairs where BOTH frames moved: a joint that is exactly still has
-     * no direction to reverse, and letting those frames vote would report a slow smooth drag
-     * as a shaking one. The mean includes every frame, still ones and all, because that is
-     * what "how far it moves per frame" has to mean to be comparable with the Python.
+     * The mean includes every frame, still ones and all, because that is what "how far it
+     * moves per frame" has to mean to be comparable with the Python. The five sign change
+     * rates -- the whole frame's and one per phase -- are one rule written once; see
+     * signChanges. The phase rates are the new question: which of the four things a step
+     * does to a joint is the one reversing.
      */
     private fun summariseJitter() {
         val first = (jitterHead - jitterCount + JITTER_SAMPLES) % JITTER_SAMPLES
         var sum = 0f
         var used = 0
-        var pairs = 0
-        var flips = 0
-        var last = 0
         for (i in 0 until jitterCount) {
             val k = (first + i) % JITTER_SAMPLES
             // The clock is reset by a restart of the bench, and a sample from before that is
@@ -1683,9 +1743,51 @@ class PhysicsSandboxView @JvmOverloads constructor(
             // trust that the only thing which clears a grab is the only thing that zeroes it.
             val age = clock - jitterAt[k]
             if (age < 0f || age > JITTER_WINDOW) continue
-            val turn = jitterTurn[k]
             used++
-            sum += abs(turn)
+            sum += abs(jitterTurn[k])
+        }
+        jitterAmp = if (used == 0) 0f else sum / used
+        val total = signChanges(jitterTurn, first)
+        jitterRate = total.rate
+        jitterPairs = total.pairs
+        for (p in 0 until PHASE_COUNT) {
+            phaseRate[p] = signChanges(phaseTurn[p], first).rate
+            // Every row that is reversing on more of the window's moving frames than it is
+            // not, rather than only the worst of them: measured on the reference, a drag puts
+            // TWO rows there at once -- the pin and the integrator, which carries the pin's
+            // own step on as velocity the frame after (solvePin writes the angle and Verlet
+            // reads the difference as speed) -- and marking one of the two would say the
+            // other is fine. What the marker means is exactly what its threshold says.
+            phaseHot[p] = phaseRate[p] >= PHASE_CULPRIT
+        }
+    }
+
+    /** A sign change rate, and the number of frame pairs it was taken over. */
+    private class Flips(val rate: Float, val pairs: Int)
+
+    /**
+     * The panel's one piece of arithmetic: how many of the window's frame pairs reversed,
+     * out of the pairs there were to reverse.
+     *
+     * Only pairs where BOTH frames moved count. A joint that is exactly still has no
+     * direction to reverse, and letting those frames vote would report a slow smooth drag as
+     * a shaking one. The share rather than the count, because it has to mean the same thing
+     * in a window that has just filled as in one that has been running for a minute.
+     *
+     * This is the whole of the rate, for the whole frame and for every phase: five numbers
+     * taken five times over the same window, and a second copy of the rule would be a second
+     * chance for the panel to contradict itself -- a phase reading 100% while the total
+     * reads 0.
+     */
+    private fun signChanges(ring: FloatArray, first: Int): Flips {
+        var pairs = 0
+        var flips = 0
+        var last = 0
+        for (i in 0 until jitterCount) {
+            val k = (first + i) % JITTER_SAMPLES
+            val age = clock - jitterAt[k]
+            if (age < 0f || age > JITTER_WINDOW) continue
+            val turn = ring[k]
             val sign = if (turn > 0f) 1 else if (turn < 0f) -1 else 0
             if (sign == 0) continue
             if (last != 0) {
@@ -1694,9 +1796,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
             last = sign
         }
-        jitterAmp = if (used == 0) 0f else sum / used
-        jitterPairs = pairs
-        jitterRate = if (pairs == 0) 0f else 100f * flips / pairs
+        return Flips(if (pairs == 0) 0f else 100f * flips / pairs, pairs)
     }
 
     /**
@@ -1710,6 +1810,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
         return RectF(right - 74f * density, top, right, top + 24f * density)
     }
 
+    /**
+     * The panel's box, and with it where everything in it sits, in dp below its top: the
+     * title at 20, the two headline numbers at 48 and 76, the phase table's header at 96
+     * with a row every 20 after it, the gain on the same 28 rhythm at 204, the slider's
+     * centre 18 below that at 222, and 回 1.0 from 30 below the slider to 12 above the
+     * box's bottom edge.
+     *
+     * Laid out by hand because it is drawn by hand, and one place to read the rhythm from is
+     * the next best thing to not having the numbers at all: the four offsets below are this
+     * list, and anything that changes the table's height moves all four together. 290dp is
+     * what the table costs, and it is also about the most this can be: a phone on its side
+     * leaves the view some 360dp, and the panel starts at 76.
+     */
     private fun tunePanel(): RectF {
         val right = width - 6f * density
         val top = tuneTab().bottom + 6f * density
@@ -1717,13 +1830,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // this view is what is left of the window, which on a small phone is not much. The
         // rows and the slider are laid out from the box, so they follow it in.
         val left = max(6f * density, right - 244f * density)
-        return RectF(left, top, right, top + 190f * density)
+        return RectF(left, top, right, top + 290f * density)
     }
 
     /** The slider's hit area: taller than the track it draws, because a finger is not 6 px. */
     private fun tuneSlider(): RectF {
         val box = tunePanel()
-        val cy = box.top + 122f * density
+        val cy = box.top + 222f * density
         return RectF(
             box.left + 14f * density, cy - 16f * density,
             box.right - 14f * density, cy + 16f * density,
@@ -1733,8 +1846,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun tuneReset(): RectF {
         val box = tunePanel()
         return RectF(
-            box.left + 12f * density, box.top + 152f * density,
-            box.left + 100f * density, box.top + 178f * density,
+            box.left + 12f * density, box.top + 252f * density,
+            box.left + 100f * density, box.top + 278f * density,
         )
     }
 
@@ -1773,6 +1886,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     private fun gainText(): String = "%.2f".format(Ragdoll.PIN_JOINT_GAIN)
 
+    /** One phase's contribution this frame, signed, in degrees like every other number here. */
+    private fun phaseText(now: Float): String =
+        if (jitterBone == null) "--" else "%+.2f°".format(Math.toDegrees(now.toDouble()))
+
+    /** The same phase's sign change rate over the window, a percentage like the header's. */
+    private fun phaseRateText(rate: Float): String =
+        if (jitterBone == null) "--" else "%.0f%%".format(rate)
+
     /** One line of the panel: what the number is on the left, the number itself on the right. */
     private fun tuneRow(canvas: Canvas, box: RectF, y: Float, label: String, value: String) {
         tuneText.color = 0x99FFFFFF.toInt()
@@ -1780,6 +1901,45 @@ class PhysicsSandboxView @JvmOverloads constructor(
         tuneValue.textAlign = Paint.Align.RIGHT
         canvas.drawText(value, box.right - tunePad, y, tuneValue)
         tuneValue.textAlign = Paint.Align.LEFT
+    }
+
+    /**
+     * One phase's line: what it did to the held joint this frame, signed, and the share of
+     * the window's comparable pairs it reversed.
+     *
+     * The sign is the whole point of the table. A phase reading +5.53 on one frame and
+     * -5.53 on the next is the one relaying; an absolute value here would make the culprit
+     * look exactly like a smooth drag of the same size, which is the confusion this panel
+     * exists to end.
+     */
+    private fun tunePhaseRow(
+        canvas: Canvas,
+        box: RectF,
+        y: Float,
+        label: String,
+        now: Float,
+        rate: Float,
+        guilty: Boolean,
+    ) {
+        val color = if (guilty) 0xFFFF8A8A.toInt() else 0x99FFFFFF.toInt()
+        tuneText.color = color
+        canvas.drawText(label, box.left + tunePad, y, tuneText)
+        tunePhase.textAlign = Paint.Align.RIGHT
+        tunePhase.color = 0xFFF4F2FB.toInt()
+        canvas.drawText(phaseText(now), box.left + box.width() * PHASE_VALUE_COLUMN, y, tunePhase)
+        tunePhase.color = color
+        canvas.drawText(phaseRateText(rate), box.right - tunePad - culpritStrip, y, tunePhase)
+        tunePhase.textAlign = Paint.Align.LEFT
+        if (!guilty) return
+        // The marker gets its own strip at the end of the row rather than riding in the rate
+        // column, so that no number moves sideways on the frame the culprit changes.
+        tuneText.color = color
+        tuneText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_culprit),
+            box.right - tunePad, y, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
     }
 
     private fun drawTune(canvas: Canvas) {
@@ -1820,8 +1980,39 @@ class PhysicsSandboxView @JvmOverloads constructor(
             canvas, box, box.top + 76f * density,
             context.getString(R.string.sandbox_tune_amp), ampText(),
         )
+
+        // The table under the two numbers it explains: which of the four things a step does
+        // to the held joint is the one going back and forth. The headline rate says how bad
+        // it is and cannot say who, which is the question a gain is tuned against -- and who
+        // is not guessable from out here, because three of the four phases are private
+        // methods of the ragdoll and the fourth is inline in its step.
+        val colValue = box.left + box.width() * PHASE_VALUE_COLUMN
+        val colRate = box.right - tunePad - culpritStrip
+        tuneText.color = 0x66FFFFFF
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_phases),
+            box.left + tunePad, box.top + 96f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_phase_now),
+            colValue, box.top + 96f * density, tuneText,
+        )
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_rate),
+            colRate, box.top + 96f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
+        for (p in 0 until PHASE_COUNT) {
+            tunePhaseRow(
+                canvas, box, box.top + (116f + 20f * p) * density,
+                context.getString(phaseLabel[p]), phaseNow[p], phaseRate[p],
+                phaseHot[p],
+            )
+        }
+
         tuneRow(
-            canvas, box, box.top + 104f * density,
+            canvas, box, box.top + 204f * density,
             context.getString(R.string.sandbox_tune_gain), gainText(),
         )
 
@@ -2191,5 +2382,36 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val TUNE_GAIN_MIN = 0.02f
         private const val TUNE_GAIN_MAX = 1.0f
         private const val TUNE_GAIN_DEFAULT = 1.0f
+
+        /**
+         * The four things one step does to a joint, in the order the table prints them and
+         * the order phaseTurn, phaseNow, phaseRate and phaseLabel are indexed in.
+         *
+         * Ragdoll.PROBE_* is the same four on the physics side, and measureJitter copies
+         * them across one line per phase. These are private and separate on purpose: the
+         * numbers have to be written out twice somewhere, and a second set here is what
+         * makes a reordering in Ragdoll show up as a wrong number rather than as a silent
+         * rename in a file nobody reread.
+         */
+        private const val PHASE_INTEGRATOR = 0
+        private const val PHASE_GROUND = 1
+        private const val PHASE_PINS = 2
+        private const val PHASE_CARRY = 3
+        private const val PHASE_COUNT = 4
+
+        /** Where a phase row's signed number is right-aligned, as a share of the panel's width. */
+        private const val PHASE_VALUE_COLUMN = 0.60f
+
+        /**
+         * The rate a phase has to reach before the panel marks it. Half: from there it
+         * reverses on more of the window's moving frames than it does not, which is the
+         * relay. Below it the row is a joint that is simply not moving smoothly yet.
+         *
+         * Every row over the line is marked rather than only the highest, and the reference
+         * says why: a drag puts the pin and the integrator BOTH at 90-100% -- the pin's step
+         * is carried on as velocity by the frame after it -- so a single "worst" marker
+         * would point at one of them and quietly call the other innocent.
+         */
+        private const val PHASE_CULPRIT = 50f
     }
 }

@@ -311,9 +311,69 @@ class Ragdoll(
         return hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t))
     }
 
+    // -- the phase probe, for the bench's tuning panel -----------------------
+
+    /**
+     * Which bone a caller wants [step] split by phase, or null for nobody.
+     *
+     * The bench's tuning panel reads the held joint once a frame, but the four things that
+     * move it in between are not reachable from out there: the integrator is inline in
+     * [step], and ground, holdPins and carryFloor are private. So the panel names the bone
+     * here, [step] cuts its own frame at the four phase boundaries around that bone, and
+     * [probeTurn] carries the signed pieces back out. Naming the bone is what keeps this
+     * honest -- the split is of the SAME joint the panel's own whole-frame number is about,
+     * so the four pieces can be checked against it instead of being taken on trust.
+     *
+     * Nothing here feeds back into the simulation: reads and subtractions only. The rest of
+     * the app leaves it null, which costs one map lookup per step.
+     */
+    var probeBone: String? = null
+
+    /**
+     * Signed radians each phase of the last [step] gave [probeBone], indexed by PROBE_*.
+     *
+     * Signed, not absolute, because the question this answers is which phase is going back
+     * and forth: a joint that takes +5 degrees and then -5 has moved ten and gone nowhere,
+     * and only the sign says so. The four add up to that bone's whole turn of the frame by
+     * construction -- they ARE the frame, cut where the phases run -- which is what lets
+     * the panel print them under its whole-frame readout and have the two agree.
+     *
+     * The measure is the bone's own local rotation, which is the angle the integrator, the
+     * pin solver and turnOut all write. A phase that moves only the ROOT (the carry floor's
+     * lift, the pin solver's leftover translation) therefore reads zero here: it moved the
+     * body, not this joint's angle. That is a real answer and not a gap -- it is what says
+     * the floor and the carry are not what a dragged bone is shaking from.
+     */
+    val probeTurn = FloatArray(PROBE_PHASES)
+
+    /**
+     * Cut the probe's frame here: what [probe] turned since the previous cut is what the
+     * phase that just ran did to it, and the rotation returned is where the next cut
+     * measures from.
+     *
+     * Only [step] calls this, and only immediately after each phase has run -- the cut is
+     * the boundary. A null probe writes zero rather than leaving the last frame's numbers
+     * behind, so [probeTurn] is always one frame's split and never a mixture of two.
+     */
+    private fun probeCut(probe: Bone?, phase: Int, from: Float): Float {
+        if (probe == null) {
+            probeTurn[phase] = 0f
+            return from
+        }
+        val at = probe.rotation
+        probeTurn[phase] = at - from
+        return at
+    }
+
     // -- the step -----------------------------------------------------------
 
     fun step(dt: Float, pins: List<Pin> = emptyList()) {
+        // Sampled before anything moves, and before the first applyAngles: the four cuts
+        // below then telescope to exactly the turn this frame leaves the bone with, which is
+        // the number the panel's whole-frame readout takes as its own. See probeCut.
+        val probe = probeBone?.let { byName[it] }
+        var probeAt = probe?.rotation ?: 0f
+
         pinned = pins.isNotEmpty()
         pinTargets = pins.map { it.target }
         applyAngles()
@@ -430,12 +490,21 @@ class Ragdoll(
         rootPos = rootPos + rootVel * dt
 
         applyAngles()
+        probeAt = probeCut(probe, PROBE_INTEGRATOR, probeAt)
         ground(dt)
         applyAngles()
+        probeAt = probeCut(probe, PROBE_GROUND, probeAt)
 
+        // The last two phases only run when something is being held. Zeroed first, then
+        // overwritten by the cuts below if they do run: a stale number from the last frame
+        // that had pins is a contribution this frame never made.
+        probeTurn[PROBE_PINS] = 0f
+        probeTurn[PROBE_CARRY] = 0f
         if (pins.isNotEmpty()) {
             holdPins(dt, pins)
+            probeAt = probeCut(probe, PROBE_PINS, probeAt)
             carryFloor(dt)
+            probeAt = probeCut(probe, PROBE_CARRY, probeAt)
             applyAngles()
         }
     }
@@ -1044,5 +1113,25 @@ class Ragdoll(
 
         /** How strongly a resting limp joint amplifies its own deviation, in 1/s^2. */
         const val COLLAPSE_GAIN = 10f
+
+        /**
+         * The four phases of one step, in the order [step] runs them, for [probeTurn].
+         *
+         * INDICES, not physics -- the only numbers here that are. They are app-side because
+         * the reference has no panel to hand a split to: tools/ragdoll.py was cut the same
+         * way when the buzz was diagnosed, but in a scratch script, so mirror_check will
+         * list these five under "only in Ragdoll.kt" and that is the whole of the reason.
+         *
+         * The split is only as good as this order matching the calls in [step]; the panel
+         * prints the four under names that say which is which, and the four add up to the
+         * frame's whole turn only while the cuts sit in the right places.
+         */
+        const val PROBE_INTEGRATOR = 0
+        const val PROBE_GROUND = 1
+        const val PROBE_PINS = 2
+        const val PROBE_CARRY = 3
+
+        /** How many phases there are. See [probeTurn]. */
+        private const val PROBE_PHASES = 4
     }
 }

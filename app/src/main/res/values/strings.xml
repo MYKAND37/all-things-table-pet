@@ -185,6 +185,14 @@
     <string name="sandbox_tune_reset">回 1.0</string>
     <string name="sandbox_tune_idle">拖住一根骨头才有读数</string>
     <string name="sandbox_tune_bone">量的 %1$s · %2$d 帧</string>
+    <!-- 按阶段拆开：四行分别是积分器 / 地面 / IK / carryFloor 对被拖骨头这一帧的贡献。 -->
+    <string name="sandbox_tune_phases">按阶段拆开</string>
+    <string name="sandbox_tune_phase_now">本帧</string>
+    <string name="sandbox_tune_phase_integrator">积分器</string>
+    <string name="sandbox_tune_phase_ground">地面</string>
+    <string name="sandbox_tune_phase_pins">IK</string>
+    <string name="sandbox_tune_phase_carry">carry</string>
+    <string name="sandbox_tune_culprit">← 凶手</string>
 
     <!-- 逻辑管理 -->
     <string name="logic_stats">数值</string>
