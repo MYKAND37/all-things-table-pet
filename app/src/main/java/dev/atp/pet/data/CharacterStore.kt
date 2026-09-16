@@ -301,14 +301,18 @@ class CharacterStore(private val context: Context) {
                     o.put("limits", JSONArray(listOf(-180.0, 180.0)))
                     o.put("collider", JSONObject().put("type", "capsule").put("radius", 0.0))
                 }
-                // What the joint is allowed to do, and what it collides as. Written every
-                // time rather than only for a new bone, because these are the fields the
-                // attribute editor changes — and they are the two that actually reach the
-                // solver and the world.
+                // What the joint is allowed to do, what it collides as, and whether the world
+                // and a finger can feel it at all. Written every time rather than only for a
+                // new bone, because these are the fields the attribute editor changes — and
+                // they are the ones that actually reach the solver and the world. A flag left
+                // out here is a switch that silently flips back the next time the rig is saved,
+                // which is exactly the shape of the bug tools/store_check.py exists for.
                 o.put("limits", JSONArray(listOf(b.minAngle.toDouble(), b.maxAngle.toDouble())))
                 o.put("collider", JSONObject()
                     .put("type", b.colliderType)
                     .put("radius", b.colliderRadius.toDouble()))
+                o.put("collides", b.collides)
+                o.put("grabbable", b.grabbable)
                 arr.put(o)
             }
             root.put("bones", arr)

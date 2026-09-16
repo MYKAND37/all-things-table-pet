@@ -59,6 +59,10 @@ class Ragdoll(
     private val subtrees = HashMap<String, List<Bone>>()
     private val colliderType = HashMap<String, String>()
     private val colliderRadius = HashMap<String, Float>()
+
+    /** The two per-part switches, by bone. See BoneSpec.collides and .grabbable. */
+    private val solid = HashMap<String, Boolean>()
+    private val grabbable = HashMap<String, Boolean>()
     private val mass = HashMap<String, Float>()
     private val target = HashMap<String, Float>()
 
@@ -121,6 +125,13 @@ class Ragdoll(
             if (!byName.containsKey(s.name)) continue
             colliderType[s.name] = s.colliderType
             colliderRadius[s.name] = if (s.colliderRadius > 0f) s.colliderRadius else defaultRadius
+            // The two per-part switches. A bone that does not collide keeps its geometry and
+            // its mass -- it is still part of the figure and still swings -- and only the
+            // WORLD stops being able to feel it: the floor ignores it, and the sandbox hands
+            // the props and the liquid a radius of zero for it. A bone a finger cannot take
+            // hold of is the other switch: grabAt still finds it, and the sandbox asks.
+            solid[s.name] = s.collides
+            grabbable[s.name] = s.grabbable
         }
         for (b in bones) {
             val r = colliderRadius[b.name] ?: defaultRadius
@@ -175,6 +186,12 @@ class Ragdoll(
 
     /** How thick a bone is. Anything outside that collides with the figure asks here. */
     fun colliderRadius(bone: Bone): Float = colliderRadius[bone.name] ?: defaultRadius
+
+    /** Does the world feel this part? See BoneSpec.collides. */
+    fun isSolid(name: String): Boolean = solid[name] != false
+
+    /** May a finger take hold of this part? See BoneSpec.grabbable. */
+    fun canGrab(name: String): Boolean = grabbable[name] != false
 
     /** Lowest point of a bone's collider, in canvas space. */
     fun colliderLow(b: Bone): Float {
@@ -426,7 +443,12 @@ class Ragdoll(
     private fun carryFloor(dt: Float) {
         if (!hanging()) return
         var deepest = 0f
-        for (b in bones) deepest = max(deepest, colliderLow(b) - floor)
+        for (b in bones) {
+            // A part that does not collide hangs straight through the line, and the floor
+            // must not lift the whole figure because of a ribbon somebody switched off.
+            if (!isSolid(b.name)) continue
+            deepest = max(deepest, colliderLow(b) - floor)
+        }
         if (deepest > CARRY_SINK) lift(deepest - CARRY_SINK, dt)
     }
 
@@ -452,6 +474,7 @@ class Ragdoll(
             var deepest = 0f
             var target: Bone? = null
             for (b in bones) {
+                if (!isSolid(b.name)) continue
                 val pen = colliderLow(b) - floor
                 if (pen > deepest) {
                     deepest = pen
@@ -468,7 +491,10 @@ class Ragdoll(
         if (!settled) {
             // Ran out of passes with something still under the floor: the root carries it.
             var worst = 0f
-            for (b in bones) worst = max(worst, colliderLow(b) - floor)
+            for (b in bones) {
+                if (!isSolid(b.name)) continue
+                worst = max(worst, colliderLow(b) - floor)
+            }
             if (worst > 0.05f) lift(worst, dt)
         }
 

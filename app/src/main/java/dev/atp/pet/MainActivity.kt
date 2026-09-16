@@ -1779,6 +1779,8 @@ class MainActivity : AppCompatActivity() {
         var maxAngle = bone.maxAngle
         var type = bone.colliderType
         var radius = bone.colliderRadius
+        var collides = bone.collides
+        var grabbable = bone.grabbable
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1837,6 +1839,31 @@ class MainActivity : AppCompatActivity() {
         box.addView(radiusInput)
         box.addView(label(getString(R.string.rig_collider_hint), 10f, MUTED, top = 6))
 
+        // The two switches. They are what turns a part into scenery: a ribbon that should not
+        // shove the table, or a part that exists only so a rule can name it.
+        box.addView(label(getString(R.string.rig_part_switches), 11f, MUTED, top = 14, bottom = 6))
+        val switchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val collideChip = label(getString(R.string.rig_part_collides), 12f, INK)
+        val grabChip = label(getString(R.string.rig_part_grabbable), 12f, INK)
+        for (chip in listOf(collideChip, grabChip)) {
+            chip.setPadding(dp(10), dp(8), dp(10), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(6) }
+            switchRow.addView(chip)
+        }
+        collideChip.setOnClickListener {
+            collides = !collides
+            paintChips(listOf(collideChip), listOf(true), { collides })
+        }
+        grabChip.setOnClickListener {
+            grabbable = !grabbable
+            paintChips(listOf(grabChip), listOf(true), { grabbable })
+        }
+        box.addView(switchRow)
+        box.addView(label(getString(R.string.rig_part_switches_hint), 10f, MUTED, top = 6))
+
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.rig_attributes) + " · " + bone.name)
             .setView(box)
@@ -1852,6 +1879,8 @@ class MainActivity : AppCompatActivity() {
                 bone.colliderType = if (type == "circle") "circle" else "capsule"
                 bone.colliderRadius =
                     radiusInput.text.toString().trim().toFloatOrNull()?.coerceIn(0f, 400f) ?: 0f
+                bone.collides = collides
+                bone.grabbable = grabbable
                 saveBones()
                 Toast.makeText(this, R.string.rig_attributes_saved, Toast.LENGTH_SHORT).show()
             }
@@ -1859,6 +1888,8 @@ class MainActivity : AppCompatActivity() {
             .create()
         dialog.show()
         paintChips(typeViews, listOf("capsule", "circle"), { type })
+        paintChips(listOf(collideChip), listOf(true), { collides })
+        paintChips(listOf(grabChip), listOf(true), { grabbable })
     }
 
     /**

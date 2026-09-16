@@ -177,12 +177,17 @@ class Ragdoll:
         # height, so a package that says nothing still behaves sensibly.
         default_r = float(spec["headHeight"]) * 0.18
         self.collider = {}
+        #: The per-part switch: a bone the world cannot feel. See BoneSpec.collides.
+        self.solid = {}
         for b in spec["bones"]:
             c = b.get("collider") or {}
             self.collider[b["name"]] = (
                 c.get("type", "capsule"),
                 float(c.get("radius", default_r)),
             )
+            #: Does the world feel this part? See BoneSpec.collides. Absent means yes, so a
+            #: rig written before the switch existed behaves exactly as it always did.
+            self.solid[b["name"]] = b.get("collides", True)
 
         # Mass from collider area: fat limbs are heavy, which is what makes a
         # belly-down character settle the way you expect.
@@ -779,6 +784,10 @@ class Ragdoll:
         for _ in range(GROUND_PASSES):
             deepest, target = 0.0, None
             for b in self.order:
+                # A part somebody switched out of the world hangs straight through the line,
+                # and the floor must not lift the whole figure because of it.
+                if not self.solid.get(b.name, True):
+                    continue
                 pen = self.collider_low(b) - self.floor
                 if pen > deepest:
                     deepest, target = pen, b
@@ -790,7 +799,8 @@ class Ragdoll:
 
         if not settled:
             # Ran out of passes with something still under the floor: the root carries it.
-            worst = max(self.collider_low(b) - self.floor for b in self.order)
+            worst = max((self.collider_low(b) - self.floor)
+                        for b in self.order if self.solid.get(b.name, True))
             if worst > 0.05:
                 self._lift(worst, dt)
 
@@ -896,6 +906,8 @@ class Ragdoll:
             return
         deepest = 0.0
         for b in self.order:
+            if not self.solid.get(b.name, True):
+                continue
             deepest = max(deepest, self.collider_low(b) - self.floor)
         if deepest > CARRY_SINK:
             self._lift(deepest - CARRY_SINK, dt)
@@ -1093,6 +1105,32 @@ def run(spec_path):
     span = max(rag.collider_low(b) for b in order) - min(b.wpos[1] for b in order)
     ok &= _report("it stays upright", "%.0f px of %.0f" % (span, 1690.0), span > 1690.0 * 0.7)
     ok &= _report("and does not drift into a pose", "%.3f rad" % drift, drift < 0.45)
+
+    print("")
+    print("=== 4b. a part switched out of the world goes through the floor ===")
+    # The per-part switch (BoneSpec.collides). Off means the FLOOR does not see it -- the bone
+    # is still part of the figure, still has its mass, still swings -- and the floor has to
+    # keep resolving the parts that are still solid rather than lifting the whole figure to
+    # get a switched-off ribbon out of the ground.
+    switched = json.loads(json.dumps(spec))
+    for b in switched["bones"]:
+        if b["name"] == "foot_R":
+            b["collides"] = False
+    by2, order2 = bake(switched["bones"])
+    rag = Ragdoll(switched, by2, order2, stiffness=0.0)
+    for _ in range(240):
+        rag.step(1.0 / 60.0)
+    foot_deep = rag.collider_low(by2["foot_R"]) - rag.floor
+    solid_deep = max(rag.collider_low(b) - rag.floor for b in order2
+                     if rag.solid.get(b.name, True))
+    ok &= _report("the switched-off foot is under the floor line",
+                  "%+.0f px" % foot_deep, foot_deep > 20.0)
+    ok &= _report("and the parts that are still solid are on it",
+                  "%+.0f px" % solid_deep, abs(solid_deep) < 0.06 * rag.standing_span)
+    through = [b.name for b in order2
+               if rag.solid.get(b.name, True) and rag.collider_low(b) - rag.floor > 20.0]
+    ok &= _report("nothing but the switched-off part is through the floor",
+                  "through: " + str(through), through == [])
 
     print("")
     print("=== 5. numbers stay finite over a long run ===")

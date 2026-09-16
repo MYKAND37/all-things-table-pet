@@ -858,7 +858,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 dt,
                 s.gravity * settings.gravityScale,
                 sk,
-                { bone -> rag.colliderRadius(bone) },
+                // A part with collides = false is invisible to the props: same bone, same
+                // mass, same swing, radius zero. See BoneSpec.collides.
+                { bone -> if (rag.isSolid(bone.name)) rag.colliderRadius(bone) else 0f },
                 { bone, dir, strength -> rag.impulse(bone, dir, strength) },
             )
             for (h in hits) {
@@ -902,7 +904,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // is a performance one first and an aesthetic one second, and liquid is the expensive
         // half of the two.
         if (settings.liquid) {
-            fluid?.step(dt, s.gravity * settings.gravityScale, sk) { rag.colliderRadius(it) }
+            fluid?.step(dt, s.gravity * settings.gravityScale, sk) {
+            if (rag.isSolid(it.name)) rag.colliderRadius(it) else 0f
+        }
         }
         attachRopes()
     }
@@ -1588,7 +1592,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
             prop.beginDrag()
             return true
         }
+        // A part with grabbable = false is still there, still solid, still part of the
+        // figure -- a finger simply goes through it, the way it goes through a prop it is
+        // not allowed to pick up.
         val grip = rag.grabAt(p) ?: return false
+        if (!rag.canGrab(grip.bone.name)) return false
         val bone = grip.bone
         heldBones[id] = bone.name
         heldOffsets[id] = grip.offset

@@ -65,9 +65,11 @@ def rename_files(names, renames):
 
 def save_rig(root, bones, order, renames=None):
     """
-    bones: [{"name", "parent", "head", "tail", "limits", "collider"}], parents first.
-    Everything the file said about a bone that is still there is kept, except the four
-    fields the editor owns.
+    bones: [{"name", "parent", "head", "tail", "limits", "collider", "collides", "grabbable"}],
+    parents first. Everything the file said about a bone that is still there is kept, except
+    the fields the editor owns -- and the editor owns the two switches as well, which is why
+    they are written every time: a flag that is not written is a switch that flips itself back
+    the next time somebody saves the rig.
     """
     old = root.get("bones", [])
     kept = {b["name"]: b for b in old}
@@ -85,6 +87,10 @@ def save_rig(root, bones, order, renames=None):
             o.setdefault("collider", {"type": "capsule", "radius": 0.0})
         o["limits"] = [b["limits"][0], b["limits"][1]]
         o["collider"] = {"type": b["collider"]["type"], "radius": b["collider"]["radius"]}
+        # Absent means yes, the same way the app reads it: a rig saved by an older version has
+        # no opinion about these, and the default is the behaviour it already had.
+        o["collides"] = b.get("collides", True)
+        o["grabbable"] = b.get("grabbable", True)
         arr.append(o)
     root["bones"] = arr
     # Layers are carried over WHOLE and only renumbered. One layer per bone was the bug: a bone
@@ -151,8 +157,16 @@ def save_depth(root, back_to_front, swaps):
 
 
 def bones_of(root):
+    """
+    The bones as the rig editor holds them.
+
+    Everything the editor owns has to be carried through here, or the second save of a file
+    quietly resets it: this is where a mirror can be wrong in exactly the way the app was
+    wrong once. The two switches ride along for that reason.
+    """
     return [{"name": b["name"], "parent": b.get("parent"), "head": b["head"], "tail": b["tail"],
-             "limits": b.get("limits", [-180, 180]), "collider": b.get("collider", {})}
+             "limits": b.get("limits", [-180, 180]), "collider": b.get("collider", {}),
+             "collides": b.get("collides", True), "grabbable": b.get("grabbable", True)}
             for b in root["bones"]]
 
 
@@ -176,6 +190,10 @@ def main():
            all(before[n][1] == after[n][1] for n in names))
     report("bones that say nothing extra keep saying nothing",
            all(before[n][2:] == after[n][2:] for n in names))
+    report("a bone that said nothing about the switches now says yes to both",
+           all(saved_bone.get("collides") is True and saved_bone.get("grabbable") is True
+               for saved_bone in saved["bones"]),
+           "absent means yes, the same way the app reads it")
 
     print("\nthe attribute editor changes exactly two things")
     edited = bones_of(load())
@@ -183,10 +201,23 @@ def main():
         if b["name"] == "shin_L":
             b["limits"] = [-25.0, 40.0]
             b["collider"] = {"type": "circle", "radius": 33.0}
+            b["collides"] = False
+            b["grabbable"] = False
     out = save_rig(load(), edited, names)
     shin = [b for b in out["bones"] if b["name"] == "shin_L"][0]
     report("the new limits are written", shin["limits"] == [-25.0, 40.0], str(shin["limits"]))
     report("the new collider is written", shin["collider"] == {"type": "circle", "radius": 33.0})
+    report("a part switched out of the world stays switched out",
+           shin.get("collides") is False and shin.get("grabbable") is False,
+           str((shin.get("collides"), shin.get("grabbable"))))
+    # And the other way round: a bone switched OFF and then saved again must not quietly come
+    # back on. This is the whole reason the flags are written every time rather than only for
+    # a new bone -- the same shape as the state-tag bug this file was written for.
+    twice = save_rig(out, bones_of(out), names)
+    shin2 = [b for b in twice["bones"] if b["name"] == "shin_L"][0]
+    report("and switching it off survives a second save",
+           shin2.get("collides") is False and shin2.get("grabbable") is False,
+           str((shin2.get("collides"), shin2.get("grabbable"))))
     others = [b for b in out["bones"] if b["name"] != "shin_L"]
     report("and nothing else moved",
            all(b.get("limits") == [(-180.0 if b["name"] == "root" else 180.0) * 0 + b.get("limits")[0],

@@ -222,6 +222,10 @@
     <string name="rig_collider_circle">中点的圆</string>
     <string name="rig_collider_radius">半径（像素，空着就按身高自动算）</string>
     <string name="rig_collider_hint">碰撞体是地板、道具和液体看见的形状。质量是按它的面积算出来的，所以粗的肢体就是重的肢体。</string>
+    <string name="rig_part_switches">这一个部位的两个开关</string>
+    <string name="rig_part_collides">参与碰撞</string>
+    <string name="rig_part_grabbable">能被拖动</string>
+    <string name="rig_part_switches_hint">关掉「参与碰撞」：地板、道具和液体都感觉不到它（它照样跟着动、照样有重量）。关掉「能被拖动」：手指穿过去，抓不住它。两个都默认开着。</string>
     <string name="part_files_title">部位文件夹</string>
     <string name="part_files_hint">一个部位的所有图都放在这里：默认那张，和每个状态各一张。</string>
     <string name="part_files_always">总是画</string>

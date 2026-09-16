@@ -33,6 +33,17 @@ data class BoneSpec(
     var colliderType: String,
     /** Radius in canvas pixels; zero means "derive a default from the head height". */
     var colliderRadius: Float,
+    /**
+     * Whether the world can feel this part, and whether a finger can take hold of it.
+     *
+     * Two switches rather than one because they answer different questions. A hair ribbon that
+     * should not shove the table around is collides = false and still perfectly grabbable; a
+     * bone that exists so a rule can name it -- what 让手流汗 hangs off -- is grabbable = false
+     * and still there as far as the floor is concerned. Both default to true, so a file written
+     * before they existed behaves exactly as it always did.
+     */
+    var collides: Boolean = true,
+    var grabbable: Boolean = true,
 )
 
 /** A limb the user can drag by its end, solved as a two-segment chain. */
@@ -291,6 +302,10 @@ class CharacterSpec(
                     gravity = num(phys, "gravity", 0f),
                     colliderType = col?.optString("type", "capsule") ?: "capsule",
                     colliderRadius = num(col, "radius", 0f),
+                    // Absent means yes: every file written before these existed has bones that
+                    // collide and can be picked up, and that is what they have to keep.
+                    collides = b.optBoolean("collides", true),
+                    grabbable = b.optBoolean("grabbable", true),
                 )
             }.toMutableList()
 
