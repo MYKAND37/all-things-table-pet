@@ -885,6 +885,24 @@ class MainActivity : AppCompatActivity() {
         )
         partFilesList.addView(header)
 
+        // The rules this part has of its own. Same screen as the character's rules, different
+        // subject: it only hears what happens to THIS part (or to the whole figure), which is
+        // what makes 让手流汗 a rule about the hand rather than a rule that keeps asking.
+        if (bone != null) {
+            val rules = label(getString(R.string.part_own_rules, boneLabel(bone).ifEmpty { bone }), 12f, INK)
+            rules.setPadding(dp(12), dp(9), dp(12), dp(9))
+            rules.background = getDrawable(R.drawable.menu_item_selected)
+            rules.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(8) }
+            rules.setOnClickListener {
+                openLogic(Subjects.part(bone))
+                show(Pane.PET_LOGIC)
+            }
+            partFilesList.addView(rules)
+        }
+
         if (boneLabel(bone).isNotEmpty()) {
             partFilesList.addView(label(boneLabel(bone), 11f, MUTED, top = 6, bottom = 8))
         }
@@ -2554,6 +2572,13 @@ class MainActivity : AppCompatActivity() {
         val liquids = summoned?.let { store.loadLogic(it.id).liquids } ?: emptyList()
         for (liquid in liquids) {
             out.add(Subjects.liquid(liquid.id) to getString(R.string.logic_subject_liquid, liquid.name))
+        }
+        // And every part of the character. 让手流汗 is a rule that lives on the hand: it is
+        // written here, next to the character's own rules, and it only hears what happens to
+        // that hand (or to the whole figure). See Subjects.hears.
+        val bones = summoned?.let { boneNames(it) } ?: emptyList()
+        for (bone in bones) {
+            out.add(Subjects.part(bone) to getString(R.string.logic_subject_part, boneLabel(bone)))
         }
         return out
     }

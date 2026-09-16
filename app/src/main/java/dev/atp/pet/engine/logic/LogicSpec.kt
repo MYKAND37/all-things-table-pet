@@ -1,5 +1,6 @@
 package dev.atp.pet.engine.logic
 
+import dev.atp.pet.engine.event.GameEvent
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.fluid.parseColour
@@ -64,13 +65,26 @@ object Subjects {
     const val PROP_PREFIX = "prop:"
     const val LIQUID_PREFIX = "liquid:"
 
+    /**
+     * A PART of the character: one bone, with rules of its own.
+     *
+     * This is what makes 让手流汗 a rule that lives ON the hand rather than a rule on the pet
+     * that keeps asking whether the part is a hand. The bone is named exactly as the rig names
+     * it, so `part:hand_L` is a subject and `hand_L` is still the bone.
+     */
+    const val PART_PREFIX = "part:"
+
     fun prop(id: String): String = PROP_PREFIX + id
 
     fun liquid(id: String): String = LIQUID_PREFIX + id
 
+    fun part(bone: String): String = PART_PREFIX + bone
+
     fun isProp(subject: String): Boolean = subject.startsWith(PROP_PREFIX)
 
     fun isLiquid(subject: String): Boolean = subject.startsWith(LIQUID_PREFIX)
+
+    fun isPart(subject: String): Boolean = subject.startsWith(PART_PREFIX)
 
     /** The prop or liquid id inside a subject, or "" for the character. */
     fun objectId(subject: String): String =
@@ -80,6 +94,41 @@ object Subjects {
     fun propId(subject: String): String = if (isProp(subject)) objectId(subject) else ""
 
     fun liquidId(subject: String): String = if (isLiquid(subject)) objectId(subject) else ""
+
+    /** Which bone this subject is, or "" if it is not a part. */
+    fun partId(subject: String): String =
+        if (isPart(subject)) subject.substringAfter(':') else ""
+
+    /**
+     * Does this subject's engine hear this event?
+     *
+     * Three rules, and they are different on purpose:
+     *
+     *  * the character hears EVERYTHING — it is the whole body, and half the rules in the
+     *    shipped file are about the figure as a whole;
+     *  * a part hears what happened to that part, and what happened to the whole body: a hand
+     *    is part of a thrown pet, so 被甩出去 has to reach it;
+     *  * a prop hears what happened to IT — the event names its id — and nothing else.
+     *
+     * The split that makes this decidable: the events that come down the character's own
+     * [path][PET] are events ABOUT THE FIGURE (it was thrown, it landed, it was clicked, a prop
+     * hit its hand). An event about a prop — that it landed, that it hit something — is
+     * delivered to that prop BY NAME and never goes this way, which is why a part cannot
+     * mistake another thing's landing for its own.
+     *
+     * Mirrored in tools/logic_check.py, which also reads the three prefixes back out of this
+     * file to make sure the two agree about a file format.
+     */
+    fun hears(subject: String, event: GameEvent): Boolean = when {
+        subject == PET -> true
+        isPart(subject) -> {
+            val bone = partId(subject)
+            // Empty means "anywhere" — the same reading a rule gives it, via GameEvent.touches.
+            event.part.isEmpty() || event.touches(bone)
+        }
+        isProp(subject) -> event.prop.isNotEmpty() && event.prop == propId(subject)
+        else -> false
+    }
 }
 
 /**

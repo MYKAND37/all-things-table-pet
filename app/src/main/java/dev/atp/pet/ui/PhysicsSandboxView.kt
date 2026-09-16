@@ -492,6 +492,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val actions = e.handle(event.copy(at = clock))
         perform(actions, event)
         drainSignals()
+        // ...and every PART that should hear it.
+        //
+        // A part's rules are about that part -- 让手流汗 lives on the hand -- and about the
+        // whole figure, which the hand is part of: 被甩出去 has to reach it too. See
+        // Subjects.hears for the rule, and note that props and liquids keep the explicit
+        // delivery they always had: this loop is only about parts, so nothing that was
+        // already listening hears anything twice.
+        for (subject in objectEngines.keys.toList()) {
+            if (!Subjects.isPart(subject)) continue
+            if (!Subjects.hears(subject, event)) continue
+            fireTo(subject, event)
+        }
     }
 
     /**
@@ -643,6 +655,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * up in the middle of the bench rather than at the origin.
      */
     private fun subjectPoint(subject: String): Vec2? {
+        if (Subjects.isPart(subject)) {
+            // The part's own place on the figure. This is what makes "让手流汗" work as one
+            // rule: the spray lands on the hand whether the rule fired on a tick, on being
+            // hit, or on anything else that did not name a bone.
+            return skeleton?.find(Subjects.partId(subject))?.worldPosition
+        }
         if (Subjects.isProp(subject)) {
             val id = Subjects.objectId(subject)
             return world?.live?.firstOrNull { it.spec.id == id }?.position
@@ -956,6 +974,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val present = LinkedHashSet<String>()
         if (w != null) for (prop in w.live) present.add(Subjects.prop(prop.spec.id))
         if (f != null) for (id in Liquids.present(f.drops)) present.add(Subjects.liquid(id))
+        // Every part of the character is a subject, and it exists exactly as long as the
+        // character does -- so a part is present whenever the bench is. The lookup below
+        // filters this down to the parts somebody has actually given rules to.
+        skeleton?.let { sk -> for (bone in sk.bones) present.add(Subjects.part(bone.name)) }
 
         // A subject that has just appeared gets its SPAWN, which is what a rule about "when
         // the candle appears" has been waiting for.

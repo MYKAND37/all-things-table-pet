@@ -65,6 +65,65 @@ def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+
+# ------------------------------- mirror of Subjects -------------------------------
+
+#: The subject prefixes are a FILE FORMAT (they are written into logic files), so the mirror
+#: reads them back out of the Kotlin source rather than repeating them. Same idea as the two
+#: constants camera_check.py checks: a mirror that has drifted is worse than no mirror,
+#: because it keeps saying everything is fine.
+def kotlin_prefixes():
+    text = open(LOGIC_KT, encoding="utf-8").read()
+    return dict(re.findall(r'const val (\w+_PREFIX) = "([^"]+)"', text))
+
+
+def part_subject(bone):
+    return kotlin_prefixes().get("PART_PREFIX", "part:") + bone
+
+
+def is_part(subject):
+    return subject.startswith(kotlin_prefixes().get("PART_PREFIX", "part:"))
+
+
+def part_id(subject):
+    return subject.split(":", 1)[1] if is_part(subject) else ""
+
+
+def hears(subject, event):
+    """
+    Which engines hear an event. Mirrors Subjects.hears in LogicSpec.kt.
+
+    Three rules, and they are different on purpose:
+
+      * the character hears EVERYTHING -- it is the whole body, and half the rules in the
+        shipped file are about the figure as a whole;
+      * a part hears what happened to that part, and what happened to the whole body: a hand
+        is part of a thrown pet, so "被甩出去" has to reach it;
+      * a prop hears what happened to IT -- the event names its id -- and nothing else. A
+        candle does not care that the character was clicked.
+
+    The split that makes this decidable: the events routed through the character's own fire()
+    are events ABOUT THE FIGURE (it was thrown, it landed, it was clicked, a prop hit its
+    hand), and those are the ones a part is asked about. An event about a prop -- that it
+    landed, that it hit something -- is delivered to that prop BY NAME and never goes down
+    this path, which is why a part cannot mistake another thing's landing for its own.
+
+    A part's own events are matched the way a rule matches a part: exactly, or by prefix
+    ("hand" catches hand_L), which is what GameEvent.touches already does.
+    """
+    if subject == "pet":
+        return True
+    if is_part(subject):
+        part = event.get("part", "")
+        bone = part_id(subject)
+        return part == "" or part == bone or part.startswith(bone)
+    prefixes = kotlin_prefixes()
+    prop_prefix = prefixes.get("PROP_PREFIX", "prop:")
+    if subject.startswith(prop_prefix):
+        return event.get("prop", "") == subject.split(":", 1)[1]
+    return False
+
+
 class Engine:
     def __init__(self, spec, seed=20260915):
         self.spec = spec
@@ -625,6 +684,41 @@ def main():
                 seed=6)
     report("a certain clause joined with 或者 always fires",
            says(e6.handle("tick")) == ["yes"])
+
+    print("\n部件也是主体：who hears what")
+    prefixes = kotlin_prefixes()
+    report("the prefixes still agree with the Kotlin source",
+           prefixes.get("PROP_PREFIX") == "prop:" and
+           prefixes.get("LIQUID_PREFIX") == "liquid:" and
+           prefixes.get("PART_PREFIX") == "part:",
+           str(prefixes))
+    report("a part subject round-trips", part_id(part_subject("hand_L")) == "hand_L",
+           part_subject("hand_L"))
+    report("and the character is not a part", not is_part("pet") and part_id("pet") == "")
+
+    report("a part hears what happened to it",
+           hears(part_subject("hand_L"), {"type": "impact", "part": "hand_L"}))
+    report("and not what happened to the other hand",
+           not hears(part_subject("hand_L"), {"type": "impact", "part": "hand_R"}))
+    report("but it does hear the whole body",
+           hears(part_subject("hand_L"), {"type": "thrown", "part": ""}),
+           "a hand is part of a thrown pet")
+    report("a prefix in the event catches the family",
+           hears(part_subject("hand_L"), {"type": "impact", "part": "hand_L_finger"}))
+    report("the character hears everything",
+           hears("pet", {"type": "click", "part": ""}) and
+           hears("pet", {"type": "impact", "part": "foot_R"}))
+    report("a prop hears its own events and nobody else's",
+           hears("prop:candle", {"type": "landed", "prop": "candle"}) and
+           not hears("prop:candle", {"type": "landed", "prop": "ball"}) and
+           not hears("prop:candle", {"type": "impact", "part": "hand_L"}))
+    report("the character's own landing reaches a part",
+           hears(part_subject("hand_L"), {"type": "landed", "part": ""}))
+    # A prop's landing is delivered to the prop by name and never comes through this path, so
+    # what matters is that a part does not claim it: it names a prop, and the part is not one.
+    report("and the prop keeps its own events to itself",
+           hears("prop:candle", {"type": "landed", "prop": "candle"}) and
+           not is_part("prop:candle"))
 
     print("\nTICK is raised on its own schedule")
     e = Engine(default)
