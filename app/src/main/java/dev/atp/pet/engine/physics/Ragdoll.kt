@@ -80,6 +80,15 @@ class Ragdoll(
     private val anglePrev = HashMap<String, Float>()
 
     /**
+     * How much of MAX_IK_RATE each joint has already spent THIS frame. See solvePin.
+     *
+     * The budget is per frame, not per iteration and not per round. It lives here rather than
+     * inside solvePin because the reset has to happen once per frame, outside the PIN_OUTER
+     * loop, and an iteration cannot know whether it is the first one.
+     */
+    private val ikSpent = HashMap<String, Float>()
+
+    /**
      * Whether the figure is being treated as hanging right now.
      *
      * Stateful on purpose: it is the hysteresis in [hanging], and a plain threshold there is
@@ -470,11 +479,21 @@ class Ragdoll(
             return
         }
         var settled = false
+        // One chance per bone per frame. Turning the SAME bone four times is what made the
+        // feet buzz: with the contact only ~68 px from the joint, the step that would clear
+        // the penetration is larger than MAX_TURN_STEP, so the pass rotates its full 20 deg
+        // and carries the contact past the joint -- dx changes sign, the next pass computes
+        // the same 20 deg the other way, and the two undo each other four times inside one
+        // frame. The net motion is nothing; the flicker is at four times the frame rate, which
+        // is the 振幅不大、频率大 the user reports, and it lands on whichever part is touching
+        // the floor -- the feet.
+        val turned = HashSet<String>()
         for (pass in 0 until GROUND_PASSES) {
             var deepest = 0f
             var target: Bone? = null
             for (b in bones) {
                 if (!isSolid(b.name)) continue
+                if (turned.contains(b.name)) continue
                 val pen = colliderLow(b) - floor
                 if (pen > deepest) {
                     deepest = pen
@@ -485,7 +504,7 @@ class Ragdoll(
                 settled = true
                 break
             }
-            if (!turnOut(target, deepest)) lift(deepest, dt)
+            if (turnOut(target, deepest)) turned.add(target.name) else lift(deepest, dt)
         }
 
         if (!settled) {
@@ -514,7 +533,14 @@ class Ragdoll(
         walls()
     }
 
-    /** Rotate a bone about its own joint until the part of it in the floor comes out. */
+    /**
+     * Rotate a bone about its own joint until the part of it in the floor comes out.
+     *
+     * Returns false when turning cannot help, and the root has to carry the figure instead.
+     * That is now also the answer for a rotation that makes things WORSE: the linear estimate
+     * pen/dx stops meaning anything once the step is big enough to swing the contact past the
+     * joint, and applying it anyway is how the pass ended up undoing itself every frame.
+     */
     private fun turnOut(bone: Bone, pen: Float): Boolean {
         val h = bone.worldPosition
         val contact = if (colliderType[bone.name] == "circle") {
@@ -533,10 +559,19 @@ class Ragdoll(
         if (after == before) return false
         bone.rotation = after
         angle[bone.name] = after
+        skeleton.update()
+        // Did that actually lift the part out, or did it swing the contact over the top and
+        // push it deeper? A correction that does not help is a correction that will be undone
+        // by the next pass, so it is not applied at all.
+        if (colliderLow(bone) - floor > pen - 0.05f) {
+            bone.rotation = before
+            angle[bone.name] = before
+            skeleton.update()
+            return false
+        }
         // Absorb it into the integrator history: a contact that is already resting must
         // not feed the correction back in as velocity and bounce.
         anglePrev[bone.name] = (anglePrev[bone.name] ?: 0f) + (after - before)
-        skeleton.update()
         return true
     }
 
@@ -596,6 +631,16 @@ class Ragdoll(
             }
         }
 
+        // One rate budget per joint per FRAME, shared by every iteration and every outer round.
+        //
+        // This reset is the whole point. The cap inside solvePin used to be applied to each
+        // iteration on its own, which quietly multiplied it by
+        // PIN_OUTER * PIN_IK_ITERATIONS = 18: a joint could turn 18x the intended rate in a
+        // single frame -- measured 46-77 deg/frame against a nominal 8.6. The reason it showed
+        // on the hands and feet and nowhere else is solvePin's early exit: a proximal joint
+        // reaches the finger on an early pass and breaks out, so it never spent the allowance
+        // it had, while the extremities are exactly the ones that keep iterating.
+        ikSpent.clear()
         for (round in 0 until PIN_OUTER) {
             for (pin in pins) {
                 byName[pin.bone]?.let { solvePin(it, pin.target, pin.offset, dt) }
@@ -662,13 +707,20 @@ class Ragdoll(
                 val wanted = atan2(target.y - py, target.x - px)
                 var turn = normalizeAngle(wanted - current)
                 if (b.parent == null) turn *= ROOT_PIN_GAIN
-                // A limit on how fast a joint may be swung toward the finger. See MAX_IK_RATE:
-                // an exact aim applied every frame to a body that is also being integrated is
-                // a fight, and the fight is the buzz.
-                val cap = MAX_IK_RATE * dt
+                // A limit on how far one FRAME may swing a joint toward the finger. See
+                // MAX_IK_RATE: an exact aim applied every frame to a body that is also being
+                // integrated is a fight, and the fight is the buzz.
+                //
+                // The budget is whatever is LEFT of this frame's allowance, so the iterations
+                // and the outer rounds share one cap instead of each getting their own. What is
+                // spent is the rotation actually APPLIED, not the one asked for: a joint pinned
+                // against its limit has not moved and must not be charged for it.
+                val cap = MAX_IK_RATE * dt - (ikSpent[b.name] ?: 0f)
+                if (cap <= 0f) continue
                 turn = turn.coerceIn(-cap, cap)
                 val turned = (b.rotation + turn).coerceIn(lowLimit(b), highLimit(b))
                 if (turned != b.rotation) {
+                    ikSpent[b.name] = (ikSpent[b.name] ?: 0f) + abs(turned - b.rotation)
                     b.rotation = turned
                     angle[b.name] = turned
                     skeleton.update()
