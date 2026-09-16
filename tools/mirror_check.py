@@ -65,8 +65,17 @@ def report(label, ok, detail=""):
 def kotlin_constants():
     text = open(KT, encoding="utf-8").read()
     # The f suffix is optional: an Int constant in Kotlin does not have one.
+    #
+    # `var` counts as well as `const val`, and PIN_JOINT_GAIN is why: the drag's two rate
+    # numbers are moved while the app runs (the bench's tuning panel), and a `const val`
+    # cannot be moved. What is read here is the DECLARED value, which is also the value the
+    # app starts on, so the declaration is still the right thing to compare -- but a pattern
+    # that only knew `const val` would have dropped both of them out of the comparison in
+    # silence, and silence is this check's whole failure mode: two implementations that both
+    # still run and no longer agree.
     return dict((m.group(1), float(m.group(2)))
-                for m in re.finditer(r"const val ([A-Z_]+)\s*=\s*([0-9.]+(?:[eE]-?[0-9]+)?)f?", text))
+                for m in re.finditer(
+                    r"(?:const val|var) ([A-Z_]+)\s*=\s*([0-9.]+(?:[eE]-?[0-9]+)?)f?", text))
 
 
 def python_constants():

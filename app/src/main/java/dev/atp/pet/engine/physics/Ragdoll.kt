@@ -705,7 +705,10 @@ class Ragdoll(
                 if (hypot(e.x - px, e.y - py) < 1e-6f) continue
                 val current = atan2(e.y - py, e.x - px)
                 val wanted = atan2(target.y - py, target.x - px)
-                var turn = normalizeAngle(wanted - current)
+                // Only a fraction of the way, if the gain says so: an aim that is taken in
+                // full every frame is the relay described on PIN_JOINT_GAIN, and the rate
+                // limit below then has to stop it every frame, which is the flip itself.
+                var turn = normalizeAngle(wanted - current) * PIN_JOINT_GAIN
                 if (b.parent == null) turn *= ROOT_PIN_GAIN
                 // A limit on how far one FRAME may swing a joint toward the finger. See
                 // MAX_IK_RATE: an exact aim applied every frame to a body that is also being
@@ -929,6 +932,29 @@ class Ragdoll(
         const val PIN_OUTER = 3
 
         /**
+         * How much of the aim at the finger one joint actually takes, per solve.
+         *
+         * 1.0 is "point this joint straight at the target" and it is where this has always
+         * been. It is also the top of the relay a drag turns into: an exact aim that
+         * MAX_IK_RATE cuts off every frame arrives short, next frame aims again and goes
+         * past, and the signed turn alternates at the cap itself -- measured on the held
+         * bone as +-8.5944 degrees, which is exactly MAX_IK_RATE at 60 Hz, changing sign on
+         * 63 of 179 frames. World angles add down a chain, so every joint in it is flipping
+         * and the far end accumulates all of them, which is why the buzz is worst at the
+         * fingertips. Turning this down to 0.1 took the same measurement to a 9.5% sign
+         * change rate and the mean step from 9.20 to 4.33 degrees, and the price is the
+         * limb lagging behind the finger -- a trade between a number that can be measured
+         * and a feel only the owner can judge.
+         *
+         * A `var`, unlike everything else here, so the bench's tuning panel can move it
+         * while a finger is on the pet: a value that needs a rebuild per try is a value
+         * nobody finds. Mirrors PIN_JOINT_GAIN in tools/ragdoll.py -- see
+         * tools/mirror_check.py, which reads this declaration as text and goes quiet about
+         * both files if it stops looking like a constant.
+         */
+        var PIN_JOINT_GAIN = 1.0f
+
+        /**
          * How much of its turn the ROOT takes, against every other joint in the chain.
          *
          * 0.15 is where both behaviours survive: below about 0.1 a pair of legs cannot be
@@ -953,8 +979,13 @@ class Ragdoll(
          * used to swing 60 degrees while a lying pet was dragged went to 11.6. Slower than
          * this and the floor starts winning arguments it should lose (the floor-hold cases in
          * tools/drag_check.py go red at 6).
+         *
+         * A `var` like PIN_JOINT_GAIN, and for the same reason: it is the other half of the
+         * same rate limit, and which of the two is the wrong number is not knowable without
+         * trying both on a real phone. Nothing in the app writes this one today -- the
+         * panel's slider is the gain.
          */
-        const val MAX_IK_RATE = 9.0f
+        var MAX_IK_RATE = 9.0f
 
         /**
          * How much of the finger's pull the ROOT takes, before the chain is solved at all.

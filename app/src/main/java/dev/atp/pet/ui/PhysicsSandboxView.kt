@@ -4,9 +4,11 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import dev.atp.pet.R
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
@@ -34,7 +36,9 @@ import dev.atp.pet.render.PartRenderer
 import dev.atp.pet.render.Particles
 import kotlin.math.abs
 import kotlin.math.hypot
+import kotlin.math.ln
 import kotlin.math.max
+import kotlin.math.pow
 import java.io.File
 
 /**
@@ -210,6 +214,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
         textSize = 9f * density
         color = 0xAA222233.toInt()
     }
+
+    /**
+     * The tuning panel's own paints. It sits over the artwork rather than over the HUD's pale
+     * corner, so it is dark with light writing, and the numbers are monospaced: a readout
+     * that is being read out loud must not shuffle sideways when a digit changes.
+     */
+    private val tunePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xD9171528.toInt()
+    }
+    private val tuneText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 10f * density
+        color = 0x99FFFFFF.toInt()
+    }
+    private val tuneValue = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 24f * density
+        color = 0xFFF4F2FB.toInt()
+        typeface = Typeface.MONOSPACE
+    }
+    private val tunePad = 12f * density
 
     var onInfo: ((String) -> Unit)? = null
 
@@ -931,6 +955,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }.toMutableList()
         pins.addAll(ropePins(sk))
         rag.step(dt, pins)
+        // Straight after the step, so that what the tuning panel shows is where the held
+        // joint ENDED UP this frame. See measureJitter.
+        measureJitter()
 
         world?.let { w ->
             val hits = w.step(
@@ -1224,6 +1251,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         canvas.restore()
 
         drawHud(canvas, rag)
+        // Over the top of everything else, including the event log: while the panel is open
+        // it is the thing being read, and it is drawn on top of the pet for the same reason
+        // it takes the finger first. See tuneDown.
+        drawTune(canvas)
         postInvalidateOnAnimation()
     }
 
@@ -1536,12 +1567,359 @@ class PhysicsSandboxView @JvmOverloads constructor(
         else -> 0xFF7C5CE0.toInt()
     }
 
+    // ── the IK tuning panel ─────────────────────────────────────────────────
+
+    /**
+     * A bench for the one number that cannot be settled by reading the code: PIN_JOINT_GAIN.
+     *
+     * The buzz a drag turns into is a relay between the exact aim and the per-frame rate
+     * limit, and the gain is what decides how hard the solver pushes into that limit.
+     * Measured in tools/ragdoll.py on the held bone: a sign change on 63 of 179 frames, every
+     * step pinned at the 8.5944 degrees the rate allows. Turning the gain down fixes those
+     * numbers and changes the feel -- the limb stops shaking and starts lagging the finger --
+     * and only a hand on a real phone can price that trade. So the number has to move while
+     * the pet is being dragged, and this panel prints the two things an eye cannot judge
+     * while dragging: how often the bone reverses, and how far it goes each frame.
+     *
+     * Drawn on the canvas rather than built from widgets, because this view has no children
+     * and because it is the only place that knows which bone the finger is holding.
+     */
+    private var tuning = false
+
+    /** The finger the panel owns, or -1. It is not a bone, a prop, a pan or a pinch. */
+    private var tunePointer = -1
+
+    /** True while that finger is on the slider rather than on the tab or the 回 1.0 press. */
+    private var tuneSliding = false
+
+    /** Which bone the readout is about, and the rotation the frame before left it at. */
+    private var jitterBone: String? = null
+    private var jitterPrev = 0f
+    private var jitterHasPrev = false
+
+    /** The window: one signed per-frame turn per frame, with the time it was taken. */
+    private val jitterTurn = FloatArray(JITTER_SAMPLES)
+    private val jitterAt = FloatArray(JITTER_SAMPLES)
+    private var jitterHead = 0
+    private var jitterCount = 0
+
+    /** What the panel prints: sign changes over comparable pairs, and the mean step in rad. */
+    private var jitterRate = 0f
+    private var jitterAmp = 0f
+    private var jitterPairs = 0
+
+    /**
+     * Read the held bone's rotation once a frame, so the panel can say how much it shakes.
+     *
+     * What is compared is `bone.rotation` at the end of one frame against the end of the
+     * last: the joint's own LOCAL angle, after the solver, the integrator and the ground have
+     * all had their say. The difference is therefore how far that joint actually turned, and
+     * not how far the IK asked it to turn -- the asking is what MAX_IK_RATE already caps, and
+     * the gap between asking and turning is the bug this panel exists to tune out. Note that
+     * it is a local angle: world angles are what the eye sees, and they are this plus every
+     * joint above it, which is why a chain of small flips reads as one big shake at the end.
+     *
+     * Which bone: the one under the finger. With two fingers on two limbs the reading is
+     * about one of them, because an average of two joints is a number about neither.
+     */
+    private fun measureJitter() {
+        val bone = heldBones.values.firstOrNull()?.let { skeleton?.find(it) }
+        if (bone == null) {
+            // Nothing in the hand. The window is dropped rather than left standing: a stale
+            // two seconds would sit there looking like a reading of the next drag.
+            forgetJitter()
+            return
+        }
+        if (jitterBone != bone.name) {
+            forgetJitter()
+            jitterBone = bone.name
+        }
+        if (!jitterHasPrev) {
+            // The first frame of a grab has no frame before it, and counting the jump from
+            // wherever the joint sat when the finger took hold would put that jump in the
+            // window as a step the size of the grab itself.
+            jitterHasPrev = true
+            jitterPrev = bone.rotation
+            return
+        }
+        val turn = bone.rotation - jitterPrev
+        jitterPrev = bone.rotation
+        jitterTurn[jitterHead] = turn
+        jitterAt[jitterHead] = clock
+        jitterHead = (jitterHead + 1) % JITTER_SAMPLES
+        if (jitterCount < JITTER_SAMPLES) jitterCount++
+        summariseJitter()
+    }
+
+    private fun forgetJitter() {
+        jitterBone = null
+        jitterHasPrev = false
+        jitterHead = 0
+        jitterCount = 0
+        jitterRate = 0f
+        jitterAmp = 0f
+        jitterPairs = 0
+    }
+
+    /**
+     * The two numbers, over the samples still inside the window.
+     *
+     * The rate counts only pairs where BOTH frames moved: a joint that is exactly still has
+     * no direction to reverse, and letting those frames vote would report a slow smooth drag
+     * as a shaking one. The mean includes every frame, still ones and all, because that is
+     * what "how far it moves per frame" has to mean to be comparable with the Python.
+     */
+    private fun summariseJitter() {
+        val first = (jitterHead - jitterCount + JITTER_SAMPLES) % JITTER_SAMPLES
+        var sum = 0f
+        var used = 0
+        var pairs = 0
+        var flips = 0
+        var last = 0
+        for (i in 0 until jitterCount) {
+            val k = (first + i) % JITTER_SAMPLES
+            // The clock is reset by a restart of the bench, and a sample from before that is
+            // older than it looks. Dropping it here as well means the window never has to
+            // trust that the only thing which clears a grab is the only thing that zeroes it.
+            val age = clock - jitterAt[k]
+            if (age < 0f || age > JITTER_WINDOW) continue
+            val turn = jitterTurn[k]
+            used++
+            sum += abs(turn)
+            val sign = if (turn > 0f) 1 else if (turn < 0f) -1 else 0
+            if (sign == 0) continue
+            if (last != 0) {
+                pairs++
+                if (sign != last) flips++
+            }
+            last = sign
+        }
+        jitterAmp = if (used == 0) 0f else sum / used
+        jitterPairs = pairs
+        jitterRate = if (pairs == 0) 0f else 100f * flips / pairs
+    }
+
+    /**
+     * The panel's corner of the screen: under the pet chooser, which is the one strip of this
+     * view that something else is always drawn over, and above the pet, which stands on the
+     * floor at the bottom. What is behind it is sky, and it is drawn last of everything.
+     */
+    private fun tuneTab(): RectF {
+        val right = width - 6f * density
+        val top = 46f * density
+        return RectF(right - 74f * density, top, right, top + 24f * density)
+    }
+
+    private fun tunePanel(): RectF {
+        val right = width - 6f * density
+        val top = tuneTab().bottom + 6f * density
+        // Narrower than its 244dp when it has to be: the rail on the left can be expanded and
+        // this view is what is left of the window, which on a small phone is not much. The
+        // rows and the slider are laid out from the box, so they follow it in.
+        val left = max(6f * density, right - 244f * density)
+        return RectF(left, top, right, top + 190f * density)
+    }
+
+    /** The slider's hit area: taller than the track it draws, because a finger is not 6 px. */
+    private fun tuneSlider(): RectF {
+        val box = tunePanel()
+        val cy = box.top + 122f * density
+        return RectF(
+            box.left + 14f * density, cy - 16f * density,
+            box.right - 14f * density, cy + 16f * density,
+        )
+    }
+
+    private fun tuneReset(): RectF {
+        val box = tunePanel()
+        return RectF(
+            box.left + 12f * density, box.top + 152f * density,
+            box.left + 100f * density, box.top + 178f * density,
+        )
+    }
+
+    /**
+     * Gain to slider position and back, logarithmically.
+     *
+     * The useful range of this number is not spread evenly: 1.0 is where it has always been
+     * and 0.1 is where the buzz measurably goes away, and a LINEAR track from 0.02 to 1.0
+     * puts 0.1 in its first 8%, which is not somewhere a finger can be put twice. Log puts
+     * 0.1 at 41% of the way along and still ends exactly on 1.0.
+     */
+    private fun gainToSlider(gain: Float): Float {
+        val v = gain.coerceIn(TUNE_GAIN_MIN, TUNE_GAIN_MAX)
+        return (ln(v / TUNE_GAIN_MIN) / ln(TUNE_GAIN_MAX / TUNE_GAIN_MIN)).coerceIn(0f, 1f)
+    }
+
+    private fun sliderToGain(t: Float): Float {
+        val span = TUNE_GAIN_MAX / TUNE_GAIN_MIN
+        return TUNE_GAIN_MIN * span.pow(t.coerceIn(0f, 1f))
+    }
+
+    /** Written straight through: there is one of these, and the solver reads it next frame. */
+    private fun setTuneFromSlider(x: Float) {
+        val slider = tuneSlider()
+        if (slider.width() <= 0f) return
+        Ragdoll.PIN_JOINT_GAIN = sliderToGain((x - slider.left) / slider.width())
+        invalidate()
+    }
+
+    private fun rateText(): String =
+        if (jitterBone == null) "--" else "%.0f%%".format(jitterRate)
+
+    /** Degrees, because that is the unit the diagnosis was done in: 8.5944, not 0.15. */
+    private fun ampText(): String =
+        if (jitterBone == null) "--" else "%.2f°".format(Math.toDegrees(jitterAmp.toDouble()))
+
+    private fun gainText(): String = "%.2f".format(Ragdoll.PIN_JOINT_GAIN)
+
+    /** One line of the panel: what the number is on the left, the number itself on the right. */
+    private fun tuneRow(canvas: Canvas, box: RectF, y: Float, label: String, value: String) {
+        tuneText.color = 0x99FFFFFF.toInt()
+        canvas.drawText(label, box.left + tunePad, y, tuneText)
+        tuneValue.textAlign = Paint.Align.RIGHT
+        canvas.drawText(value, box.right - tunePad, y, tuneValue)
+        tuneValue.textAlign = Paint.Align.LEFT
+    }
+
+    private fun drawTune(canvas: Canvas) {
+        if (width <= 0) return
+        val tab = tuneTab()
+        tunePaint.color = if (tuning) 0xF2171528.toInt() else 0xD9171528.toInt()
+        canvas.drawRoundRect(tab, tab.height() / 2f, tab.height() / 2f, tunePaint)
+        tuneText.color = 0xFFF4F2FB.toInt()
+        tuneText.textAlign = Paint.Align.CENTER
+        canvas.drawText(
+            context.getString(
+                if (tuning) R.string.sandbox_tune_close else R.string.sandbox_tune_tab
+            ),
+            tab.centerX(), tab.centerY() + 4f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
+        if (!tuning) return
+
+        val box = tunePanel()
+        tunePaint.color = 0xE6171528.toInt()
+        canvas.drawRoundRect(box, 12f * density, 12f * density, tunePaint)
+        tunePaint.style = Paint.Style.STROKE
+        tunePaint.strokeWidth = 1f * density
+        tunePaint.color = 0x33FFFFFF
+        canvas.drawRoundRect(box, 12f * density, 12f * density, tunePaint)
+        tunePaint.style = Paint.Style.FILL
+
+        tuneText.color = 0x99FFFFFF.toInt()
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_title),
+            box.left + tunePad, box.top + 20f * density, tuneText,
+        )
+        tuneRow(
+            canvas, box, box.top + 48f * density,
+            context.getString(R.string.sandbox_tune_rate), rateText(),
+        )
+        tuneRow(
+            canvas, box, box.top + 76f * density,
+            context.getString(R.string.sandbox_tune_amp), ampText(),
+        )
+        tuneRow(
+            canvas, box, box.top + 104f * density,
+            context.getString(R.string.sandbox_tune_gain), gainText(),
+        )
+
+        // The slider, with both ends named: 0.02 to 1.0 is not a range anybody guesses, and
+        // where a value sits between them is the whole question this panel answers.
+        val slider = tuneSlider()
+        val cy = slider.centerY()
+        val knob = slider.left + slider.width() * gainToSlider(Ragdoll.PIN_JOINT_GAIN)
+        tunePaint.color = 0x3DFFFFFF
+        canvas.drawRoundRect(
+            RectF(slider.left, cy - 3f * density, slider.right, cy + 3f * density),
+            3f * density, 3f * density, tunePaint,
+        )
+        tunePaint.color = 0xFF8FA8FF.toInt()
+        canvas.drawRoundRect(
+            RectF(slider.left, cy - 3f * density, knob, cy + 3f * density),
+            3f * density, 3f * density, tunePaint,
+        )
+        tunePaint.color = 0xFFF4F2FB.toInt()
+        canvas.drawCircle(knob, cy, 7f * density, tunePaint)
+        tuneText.color = 0x66FFFFFF
+        canvas.drawText(TUNE_GAIN_MIN.toString(), slider.left, cy + 22f * density, tuneText)
+        tuneText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(TUNE_GAIN_MAX.toString(), slider.right, cy + 22f * density, tuneText)
+        tuneText.textAlign = Paint.Align.LEFT
+
+        // 回 1.0 on the left, and what the two numbers are about on the right -- the bone and
+        // how many frame pairs are behind them, which is how you know the window has filled.
+        val reset = tuneReset()
+        tunePaint.color = 0x26FFFFFF
+        canvas.drawRoundRect(reset, reset.height() / 2f, reset.height() / 2f, tunePaint)
+        tuneText.color = 0xFF8FA8FF.toInt()
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_reset),
+            reset.left + 12f * density, reset.centerY() + 4f * density, tuneText,
+        )
+        tuneText.color = 0x66FFFFFF
+        tuneText.textAlign = Paint.Align.RIGHT
+        canvas.drawText(
+            jitterBone?.let { context.getString(R.string.sandbox_tune_bone, it, jitterPairs) }
+                ?: context.getString(R.string.sandbox_tune_idle),
+            box.right - tunePad, reset.centerY() + 4f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
+    }
+
+    /**
+     * A finger landing on the panel, which takes it before the bench does.
+     *
+     * The panel is drawn on top of the pet, so it has to win the finger the same way a prop
+     * wins over a bone: without this, dragging the slider would drag whatever bone is under
+     * it. It deliberately does not touch lastTapAt either, so a tap here cannot arm the
+     * double-tap reset.
+     */
+    private fun tuneDown(id: Int, x: Float, y: Float): Boolean {
+        if (tuneTab().contains(x, y)) {
+            tuning = !tuning
+            tunePointer = id
+            tuneSliding = false
+            invalidate()
+            return true
+        }
+        if (!tuning || !tunePanel().contains(x, y)) return false
+        tunePointer = id
+        tuneSliding = tuneSlider().contains(x, y)
+        when {
+            tuneSliding -> setTuneFromSlider(x)
+            // On the press rather than on the lift: it is one number, and the readout it
+            // moves is the thing the finger is already watching.
+            tuneReset().contains(x, y) -> {
+                Ragdoll.PIN_JOINT_GAIN = TUNE_GAIN_DEFAULT
+                invalidate()
+            }
+        }
+        return true
+    }
+
+    /** That finger letting go. It never held a bone or a prop, so there is nothing to drop. */
+    private fun tuneUp(id: Int) {
+        if (id != tunePointer) return
+        tunePointer = -1
+        tuneSliding = false
+    }
+
     // -- input --------------------------------------------------------------
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val rag = ragdoll ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // Before the double tap, the grab and the pan: the panel is a control drawn
+                // on top of the bench, and a finger that lands on it is not doing any of the
+                // three. It does not count towards the double-tap reset either.
+                if (tuneDown(event.getPointerId(0), event.x, event.y)) {
+                    lastFrameNs = System.nanoTime()
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 val now = System.currentTimeMillis()
                 if (now - lastTapAt < 300) {
                     resetWorld()
@@ -1565,7 +1943,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // start of a pinch. That is how "pull both thighs apart" and "zoom out" can
                 // both be two-fingered gestures without either getting in the other's way.
                 val index = event.actionIndex
-                beginGrab(rag, event.getPointerId(index), event.getX(index), event.getY(index))
+                val id = event.getPointerId(index)
+                // A finger on the panel is the panel's, not the bench's.
+                if (!tuneDown(id, event.getX(index), event.getY(index))) {
+                    beginGrab(rag, id, event.getX(index), event.getY(index))
+                }
                 panning = false
                 pinchSpan = if (heldBones.isEmpty() && heldProp == null) span(event) else 0f
                 lastFrameNs = System.nanoTime()
@@ -1577,6 +1959,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 var grabbing = false
                 for (i in 0 until event.pointerCount) {
                     val id = event.getPointerId(i)
+                    // The panel's finger, handled inside the loop rather than by leaving it
+                    // early: a second finger has to be able to keep dragging the pet while
+                    // the first one holds the slider. That is what tuning looks like.
+                    if (id == tunePointer) {
+                        if (tuneSliding) setTuneFromSlider(event.getX(i))
+                        grabbing = true
+                        continue
+                    }
                     if (heldBones.containsKey(id)) {
                         heldTargets[id] = toWorld(event.getX(i), event.getY(i))
                         grabbing = true
@@ -1630,6 +2020,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
+                // Both are no-ops for the panel's finger: it holds nothing to let go of, and
+                // endGrab returns immediately for a pointer that never took a bone.
+                tuneUp(event.getPointerId(event.actionIndex))
                 endGrab(rag, event.getPointerId(event.actionIndex))
                 pinchSpan = 0f
                 postInvalidateOnAnimation()
@@ -1637,6 +2030,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // Not an early return: a second finger may have been holding a bone or a prop,
+                // and this is the last finger up. The panel's own finger has nothing to drop.
+                tuneUp(event.getPointerId(event.actionIndex))
                 heldProp?.let { releaseProp(it) }
                 heldProp = null
                 propPointer = -1
@@ -1779,5 +2175,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
         /** Above this the release is a throw, below it the pet was simply put down. */
         private const val THROW_SPEED = 700f
         private const val SHOT_SPEED = 2600f
+
+        /**
+         * The tuning readout's window, in seconds, and the ring it is kept in.
+         *
+         * Two seconds is the Python's window for the same measurement, so the numbers on the
+         * phone can be read against the numbers in the diagnosis. 512 frames is that window
+         * at 120 Hz and then some; the window itself is enforced by time, not by count, so a
+         * phone that drops to 30 fps still shows two seconds rather than four.
+         */
+        private const val JITTER_WINDOW = 2.0f
+        private const val JITTER_SAMPLES = 512
+
+        /** The slider's ends, and where 回 1.0 goes back to. See gainToSlider. */
+        private const val TUNE_GAIN_MIN = 0.02f
+        private const val TUNE_GAIN_MAX = 1.0f
+        private const val TUNE_GAIN_DEFAULT = 1.0f
     }
 }

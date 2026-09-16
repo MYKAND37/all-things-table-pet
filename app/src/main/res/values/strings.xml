@@ -175,6 +175,17 @@
     <string name="sandbox_props">道具</string>
     <string name="sandbox_props_empty">还没有道具。去「道具管理」做一个。</string>
 
+    <!-- 测试场：拖动抖动调参面板。数字要照着念，所以单位跟在数值后面一起读。 -->
+    <string name="sandbox_tune_tab">调参</string>
+    <string name="sandbox_tune_close">收起</string>
+    <string name="sandbox_tune_title">拖动抖动 · IK 增益</string>
+    <string name="sandbox_tune_rate">变号率</string>
+    <string name="sandbox_tune_amp">平均幅度</string>
+    <string name="sandbox_tune_gain">IK 增益</string>
+    <string name="sandbox_tune_reset">回 1.0</string>
+    <string name="sandbox_tune_idle">拖住一根骨头才有读数</string>
+    <string name="sandbox_tune_bone">量的 %1$s · %2$d 帧</string>
+
     <!-- 逻辑管理 -->
     <string name="logic_stats">数值</string>
     <string name="logic_stats_hint">角色身上的数字。H 归零会死、P 太高会休克——不过那是你自己写规则说了算。</string>
