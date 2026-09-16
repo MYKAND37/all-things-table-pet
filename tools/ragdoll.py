@@ -163,6 +163,9 @@ class Ragdoll:
         self.spec = spec
         self.by_name = by_name
         self.order = order
+        #: How much of MAX_IK_RATE each joint has already spent THIS frame. See _apply_pins:
+        #: the budget is per frame, not per iteration.
+        self.ik_spent = {}
         physics = spec.get("physics", {})
         self.gravity = float(physics.get("gravity", 2400.0))
         self.gravity_scale = 1.0
@@ -615,6 +618,16 @@ class Ragdoll:
             self.root_pos[1] += dy * CARRY_GAIN
             self.fk()
 
+        # One rate budget per joint per FRAME, shared by every iteration and every outer round.
+        #
+        # This reset is the whole point: the cap inside _solve_pin_aim used to sit in the
+        # iteration loop, which quietly multiplied it by PIN_OUTER * PIN_IK_ITERATIONS = 18.
+        # A joint could therefore turn 18x the intended rate in a single frame -- measured
+        # 46-77 deg/frame against a nominal 8.6. A proximal joint (hip, chest) reaches the
+        # finger and breaks out of the loop early, so it never spent the whole allowance; the
+        # extremities are exactly the ones that keep iterating, which is why the buzz showed
+        # up on the hands and feet and nowhere else.
+        self.ik_spent = {}
         for _ in range(PIN_OUTER):
             for name, target, offset in pins:
                 bone = self.by_name.get(name)
@@ -677,7 +690,7 @@ class Ragdoll:
                 current = math.atan2(end[1] - py, end[0] - px)
                 wanted = math.atan2(target[1] - py, target[0] - px)
                 turn = norm_angle(wanted - current) * PIN_JOINT_GAIN
-                # A limit on how far one frame may swing a joint toward the finger.
+                # A limit on how far one FRAME may swing a joint toward the finger.
                 #
                 # The aim is exact -- the joint is pointed straight at the target -- and an
                 # exact aim applied every frame to a DYNAMIC body is a fight: measured, the
@@ -685,10 +698,15 @@ class Ragdoll:
                 # its joint limits back and forth, which is the buzz the user reports as
                 # 振幅不大、频率大. A limb pulls toward what it is holding at a finite rate;
                 # bounding the step lets the dynamics keep their say and turns the fight back
-                # into a pull. Big enough never to be felt in a drag (86 degrees per frame at
-                # 60 fps is 5000 degrees per second), small enough that no single frame can
-                # teleport a joint across its whole range.
-                cap = MAX_IK_RATE * dt
+                # into a pull.
+                #
+                # The budget is whatever is LEFT of this frame's allowance, so the iterations
+                # and the outer rounds share one cap instead of each getting their own. What
+                # is spent is the rotation actually APPLIED, not the one asked for: a joint
+                # pinned against its limit has not moved and must not be charged for it.
+                cap = MAX_IK_RATE * dt - self.ik_spent.get(b.name, 0.0)
+                if cap <= 0.0:
+                    continue
                 turn = max(-cap, min(cap, turn))
                 if b.parent is None:
                     # The root owns the figure's whole orientation, and gravity has the
@@ -706,6 +724,7 @@ class Ragdoll:
                 elif turned > hi:
                     turned = hi
                 if turned != b.rotation:
+                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(turned - b.rotation)
                     b.rotation = turned
                     self.ang[b.name] = turned
                     self.fk()
@@ -781,6 +800,15 @@ class Ragdoll:
             return
 
         settled = False
+        # One chance per bone per frame. Turning the SAME bone four times is what made the
+        # feet buzz: with the contact only ~68 px from the joint, the step that would clear
+        # the penetration is larger than MAX_TURN_STEP, so the pass rotates its full 20 deg
+        # and carries the contact past the joint -- dx changes sign, the next pass computes
+        # the same 20 deg the other way, and the two undo each other four times inside one
+        # frame. The net motion is nothing; the flicker is at four times the frame rate,
+        # which is the 振幅不大、频率大 the user reports, and it lands on whichever part is
+        # touching the floor -- the feet.
+        turned = set()
         for _ in range(GROUND_PASSES):
             deepest, target = 0.0, None
             for b in self.order:
@@ -788,13 +816,17 @@ class Ragdoll:
                 # and the floor must not lift the whole figure because of it.
                 if not self.solid.get(b.name, True):
                     continue
+                if b.name in turned:
+                    continue
                 pen = self.collider_low(b) - self.floor
                 if pen > deepest:
                     deepest, target = pen, b
             if target is None or deepest < 0.05:
                 settled = True
                 break
-            if not self._turn_out(target, deepest):
+            if self._turn_out(target, deepest):
+                turned.add(target.name)
+            else:
                 self._lift(deepest, dt)
 
         if not settled:
@@ -816,7 +848,13 @@ class Ragdoll:
         self._walls()
 
     def _turn_out(self, bone, pen):
-        """Rotate a bone about its own joint until the part of it in the floor comes out."""
+        """Rotate a bone about its own joint until the part of it in the floor comes out.
+
+        Returns False when turning cannot help, and the root has to carry the figure instead.
+        That is now also the answer for a rotation that makes things WORSE: the linear estimate
+        pen/dx stops meaning anything once the step is big enough to swing the contact past the
+        joint, and applying it anyway is how the pass ended up undoing itself every frame.
+        """
         kind, _ = self.collider[bone.name]
         h = bone.wpos
         if kind == "circle":
@@ -840,6 +878,15 @@ class Ragdoll:
             return False
         bone.rotation = after
         self.ang[bone.name] = after
+        self.fk()
+        # Did that actually lift the part out, or did it swing the contact over the top and
+        # push it deeper? A correction that does not help is a correction that will be undone
+        # by the next pass, so it is not applied at all.
+        if self.collider_low(bone) - self.floor > pen - 0.05:
+            bone.rotation = before
+            self.ang[bone.name] = before
+            self.fk()
+            return False
         # Absorb it into the integrator history: a contact that is already resting must not
         # feed the correction back in as velocity and bounce.
         self.ang_prev[bone.name] += after - before
