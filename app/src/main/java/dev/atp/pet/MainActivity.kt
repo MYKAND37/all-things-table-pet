@@ -1865,13 +1865,23 @@ class MainActivity : AppCompatActivity() {
             ).apply { marginEnd = dp(6) }
             switchRow.addView(chip)
         }
+        // A switch, not a chip among equals: there is nothing to compare it against, so it
+        // is drawn as on or off rather than as the selected one of a set.
+        fun paintPartSwitches() {
+            for ((chip, on) in listOf(collideChip to collides, grabChip to grabbable)) {
+                chip.background = getDrawable(
+                    if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+                )
+                chip.setTextColor(if (on) INK else MUTED)
+            }
+        }
         collideChip.setOnClickListener {
             collides = !collides
-            paintChips(listOf(collideChip), listOf(true), { collides })
+            paintPartSwitches()
         }
         grabChip.setOnClickListener {
             grabbable = !grabbable
-            paintChips(listOf(grabChip), listOf(true), { grabbable })
+            paintPartSwitches()
         }
         box.addView(switchRow)
         box.addView(label(getString(R.string.rig_part_switches_hint), 10f, MUTED, top = 6))
@@ -1900,8 +1910,7 @@ class MainActivity : AppCompatActivity() {
             .create()
         dialog.show()
         paintChips(typeViews, listOf("capsule", "circle"), { type })
-        paintChips(listOf(collideChip), listOf(true), { collides })
-        paintChips(listOf(grabChip), listOf(true), { grabbable })
+        paintPartSwitches()
     }
 
     /**
@@ -3240,17 +3249,17 @@ class MainActivity : AppCompatActivity() {
             switchRow.addView(chip)
         }
         fun paintSwitches() {
+            for ((chip, on) in listOf(gravityChip to gravity, stainChip to stains)) {
+                chip.background = getDrawable(
+                    if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+                )
+                chip.setTextColor(if (on) INK else MUTED)
+            }
             gravityChip.text = getString(
                 if (gravity) R.string.particle_gravity_on else R.string.particle_gravity_off
             )
-            gravityChip.background = getDrawable(
-                if (gravity) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-            )
             stainChip.text = getString(
                 if (stains) R.string.particle_stains_on else R.string.particle_stains_off
-            )
-            stainChip.background = getDrawable(
-                if (stains) R.drawable.menu_item_selected else R.drawable.menu_item_idle
             )
         }
         gravityChip.setOnClickListener { gravity = !gravity; paintSwitches() }

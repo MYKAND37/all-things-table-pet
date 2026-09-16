@@ -181,6 +181,47 @@ def check_references():
     report("every R.* the code names exists", not missing, "; ".join(missing[:8]))
 
 
+#: A call to one of the chip painters, with its literal first-argument list in the capture.
+CHIP_CALL = re.compile(r"paint(Chips|Swatches)\([^,]+,\s*listOf\(([^)]*)\)")
+
+
+def check_chip_lists():
+    """
+    paintChips takes strings, paintSwatches takes colours, and both take a list.
+
+    The mistake this exists for is one line long and cost a CI round trip: a boolean switch was
+    painted with
+
+        paintChips(listOf(collideChip), listOf(true), { collides })
+
+    which does not compile, because the second argument is a List<Boolean> where a List<String>
+    belongs. A switch is not a chip among equals and wants its own two lines; the checker's job
+    is only to notice the shape, so it looks at literal listOf(...) arguments and nothing else.
+    A list built by .map { it.id } is left alone -- guessing about those would make this a
+    checker that cries wolf.
+    """
+    bad = []
+    for path in kotlin_files():
+        for i, line in enumerate(open(path, encoding="utf-8"), 1):
+            code = line.split("//")[0]
+            for m in CHIP_CALL.finditer(code):
+                kind, items = m.group(1), m.group(2).strip()
+                if not items:
+                    continue
+                first = items.split(",")[0].strip()
+                # Only the unambiguous literals are judged: a boolean or a number where the
+                # chip painter wants a String id (or a quoted string where it wants a colour).
+                # An identifier like Joins.AND is left alone, because resolving what it holds
+                # is a compiler's job and a checker that guesses is a checker nobody reads.
+                literal_bool_or_number = bool(re.match(r"^(true|false|-?[0-9]|0x)", first))
+                quoted = first.startswith('"')
+                if kind == "Chips" and literal_bool_or_number:
+                    bad.append("%s:%d  paintChips with %s" % (os.path.basename(path), i, first))
+                if kind == "Swatches" and quoted:
+                    bad.append("%s:%d  paintSwatches with %s" % (os.path.basename(path), i, first))
+    report("the chip painters get the kind of list they take", not bad, "; ".join(bad[:4]))
+
+
 #: The one file allowed to call the strict parse: the one it lives in. Everyone else has a
 #: screen to keep alive and goes through parseOrNull.
 STRICT_PARSE = re.compile(r"CharacterSpec\.parse\s*\(")
@@ -291,6 +332,7 @@ def main():
     check_references()
     check_strict_parse()
     check_private_companions()
+    check_chip_lists()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))
