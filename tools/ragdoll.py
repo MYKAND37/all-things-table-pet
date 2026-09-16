@@ -758,8 +758,17 @@ class Ragdoll:
 
             lam = (ex * ex + ey * ey) / total * PIN_JOINT_GAIN
             moved = False
-            cap = MAX_IK_RATE * dt
             for b, term in terms:
+                # The same per-FRAME budget _solve_pin_aim uses, and for the same reason: a cap
+                # written inside the iteration loop is a cap multiplied by the iteration count.
+                # Measured, this branch never came close to it -- the least-squares solve hands
+                # the error to the root, so a joint here turns at most 0.17 deg per frame over a
+                # 600 px/s drag, two orders of magnitude under the 8.59 this allows. So sharing
+                # the budget is not a behaviour change today; it is here so the mistake is not
+                # left sitting in the file for whoever next decides this mode feels better.
+                cap = MAX_IK_RATE * dt - self.ik_spent.get(b.name, 0.0)
+                if cap <= 0.0:
+                    continue
                 turn = lam * term
                 turn = max(-cap, min(cap, turn))
                 if abs(turn) < 1e-9:
@@ -771,6 +780,7 @@ class Ragdoll:
                 elif turned > hi:
                     turned = hi
                 if turned != b.rotation:
+                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(turned - b.rotation)
                     b.rotation = turned
                     self.ang[b.name] = turned
                     moved = True
@@ -1196,6 +1206,33 @@ def run(spec_path):
             if not math.isfinite(rag.ang[name]):
                 bad += 1
     ok &= _report("no NaN, no runaway", "4000 steps", bad == 0)
+
+    print("")
+    print("=== 6. the other pin solver keeps the same per-frame budget ===")
+    # _solve_pin 的 lss 分支默认不跑（PIN_MODE 是 "aim"），所以它自己的限速一直没有测试看着。
+    # 那个 cap 曾经也写在迭代循环里，会被 PIN_IK_ITERATIONS 放大 —— 和 aim 分支修掉的是
+    # 同一个写法。这里绕开积分器和地面直接调求解器，量到的就只会是 pin 自己的转动。
+    _saved_mode = globals()["PIN_MODE"]
+    globals()["PIN_MODE"] = "lss"
+    try:
+        by3, order3 = bake(spec["bones"])
+        lss = Ragdoll(spec, by3, order3, stiffness=0.0)
+        for _ in range(120):
+            lss.step(1.0 / 60.0)
+        bone3 = by3["hand_R"]
+        gx, gy = bone3.wpos
+        before3 = {b.name: b.rotation for b in order3}
+        # 目标放在 9000 px 外：求解器这辈子收到的最猛的一次误差。
+        lss._solve_pin(bone3, (gx + 9000.0, gy - 9000.0), 0.5, 1.0 / 60.0)
+        worst = max(abs(b.rotation - before3[b.name]) for b in order3)
+        budget = MAX_IK_RATE / 60.0
+        ok &= _report("the least-squares pin does turn the joints",
+                      "%.3f deg" % math.degrees(worst), worst > 1e-4)
+        ok &= _report("but one frame cannot turn one past its budget",
+                      "%.3f deg of %.3f" % (math.degrees(worst), math.degrees(budget)),
+                      worst <= budget + 1e-9)
+    finally:
+        globals()["PIN_MODE"] = _saved_mode
 
     print("")
     print("ALL OK" if ok else "SOME CHECKS FAILED")

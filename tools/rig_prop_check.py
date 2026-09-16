@@ -130,6 +130,12 @@ class World:
             p.y = self.floor_y - r
             if p.vy > 0:
                 p.vy = -p.vy * RESTITUTION
+            # 和 Kotlin 的 borders 逐字对应：趴在地上时每帧再吃掉一点横向速度。
+            # 少了这一行，一个在地上滑的道具在镜像里永远停不下来，而在 app 里会停 ——
+            # 这种漂移比没有镜像更糟，因为它还会让 PropWorld.separate 里那次「只为真正
+            # 动过的道具再跑一次边界」的防护看起来是好的：镜像根本收不到那笔摩擦，
+            # 重复收两次也测不出来。
+            p.vx *= (1.0 - 4.0 * 0.016)
             if abs(p.vy) < 30:
                 p.vy = 0.0
             p.on_floor = True
@@ -141,6 +147,9 @@ class World:
         elif p.x + r > self.world_width:
             p.x = self.world_width - r
             p.vx = -abs(p.vx) * RESTITUTION
+        # 还有一处**故意不镜像**的：Kotlin 落地时会 `p.spin *= 0.7f`。这里的 Prop 根本没有
+        # spin 这个字段（道具的旋转在这个镜像里从来没被建模过），所以这不是漂了，是没建模。
+        # 写在这里，是因为一句不说地少一个行为，和漂移看起来一模一样。
 
     def _collide(self, p, bones, radius_of, hits, on_impulse):
         speed = math.hypot(p.vx, p.vy)
@@ -336,6 +345,16 @@ def main():
     q.begin_drag()
     q.drag_to((100.5, 100.0), 1 / 60)
     report("a slow placement leaves it still", math.hypot(q.vx, q.vy) < 40.0)
+
+    print("\na prop sliding along the floor slows down")
+    # 镜像漏掉这条摩擦的时候，一个在地上的道具会永远滑下去，而 app 里早就停了。
+    # 没有摩擦的话 vx 会一动不动地停在 600 —— 这条测试就是拿来盯住那一行的。
+    w = World(2000.0, 3000.0)
+    slid = w.spawn(Spec("a", radius=60.0), (300.0, 1940.0), (600.0, 0.0))
+    for _ in range(60):
+        w.step(1 / 60, 0.0, [], radius_of, lambda *a: None)
+    report("a second on the floor takes most of the sideways speed away",
+           slid.vx < 600.0 * 0.2, "vx=%.1f after a second, from 600" % slid.vx)
 
     print("\nprops against each other")
     noop = lambda *a: None
