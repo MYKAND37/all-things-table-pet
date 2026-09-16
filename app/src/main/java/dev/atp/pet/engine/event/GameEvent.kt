@@ -61,6 +61,15 @@ data class GameEvent(
     val value: Float = 0f,
     /** Which prop was involved, if any. Empty otherwise. */
     val prop: String = "",
+    /**
+     * Which kind of particle was involved, if any. Empty otherwise.
+     *
+     * A field of its own rather than a second meaning for [prop], for the same reason
+     * ActionSpec.rule is one: "spark" and "hammer" come out of two different registries, and
+     * an event that names one of them in a field called `prop` is an event nobody can read.
+     * The two are never both set — a particle is not a prop and does not hit one.
+     */
+    val particle: String = "",
     /** Seconds since the character appeared. The log is readable in order. */
     val at: Float = 0f,
 ) {

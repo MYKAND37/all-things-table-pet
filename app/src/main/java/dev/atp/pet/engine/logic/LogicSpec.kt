@@ -75,6 +75,19 @@ object Subjects {
     const val PART_PREFIX = "part:"
 
     /**
+     * A KIND of particle: 血, 汗, 火花, 灰尘 — one subject per kind, not per drop.
+     *
+     * The last of the four things that can hold logic, and the same shape as the other three:
+     * the character DECLARES the particles (name, colour, gravity, stains), and each kind can
+     * carry rules of its own in `characters/<角色>/particles/<粒子>/logic.json`.
+     *
+     * Per kind rather than per drop because a drop lives for about a second: a rule that had
+     * to be written on one spark would have nothing left to run against by the time anybody
+     * read the log. "火花 落地 → 点燃" is a rule about sparks.
+     */
+    const val PARTICLE_PREFIX = "particle:"
+
+    /**
      * How a PART's own state is tagged on a drawing: `hand_L:sweat`, and `!hand_L:sweat` for
      * the layer that draws while it is off. A global state is its plain name.
      *
@@ -106,11 +119,15 @@ object Subjects {
 
     fun part(bone: String): String = PART_PREFIX + bone
 
+    fun particle(id: String): String = PARTICLE_PREFIX + id
+
     fun isProp(subject: String): Boolean = subject.startsWith(PROP_PREFIX)
 
     fun isLiquid(subject: String): Boolean = subject.startsWith(LIQUID_PREFIX)
 
     fun isPart(subject: String): Boolean = subject.startsWith(PART_PREFIX)
+
+    fun isParticle(subject: String): Boolean = subject.startsWith(PARTICLE_PREFIX)
 
     /** The prop or liquid id inside a subject, or "" for the character. */
     fun objectId(subject: String): String =
@@ -124,6 +141,10 @@ object Subjects {
     /** Which bone this subject is, or "" if it is not a part. */
     fun partId(subject: String): String =
         if (isPart(subject)) subject.substringAfter(':') else ""
+
+    /** Which kind of particle this subject is, or "" if it is not one. */
+    fun particleId(subject: String): String =
+        if (isParticle(subject)) subject.substringAfter(':') else ""
 
     /**
      * Does this subject's engine hear this event?
@@ -144,6 +165,14 @@ object Subjects {
      *
      * Mirrored in tools/logic_check.py, which also reads the three prefixes back out of this
      * file to make sure the two agree about a file format.
+     *
+     * WHO ACTUALLY CALLS THIS, because the `when` below reads as if it decided for everything:
+     * the bench calls it in exactly one loop, and that loop has already skipped every subject
+     * that is not a part. Props, liquids and particles are delivered TO BY NAME at the place
+     * that knows what happened (`fireTo(Subjects.prop(id), …)` and friends), which is more
+     * precise than a predicate over a shared event could be. So the isProp branch here is
+     * reachable only if that filter ever widens, and a particle branch would be dead code
+     * today -- which is why there is not one.
      */
     fun hears(subject: String, event: GameEvent): Boolean = when {
         subject == PET -> true

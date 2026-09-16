@@ -621,6 +621,10 @@ class CharacterStore(private val context: Context) {
         // parts/hand_L.png and parts/hand_L__sweat.png.
         Subjects.isPart(subject) && folder != null ->
             File(File(folder.partsDir, Subjects.partId(subject)), LOGIC_FILE)
+        // Same shape as a liquid's: the character DECLARES the particle in its own logic.json,
+        // and the kind's rules live in a folder of their own beside the other kinds'.
+        Subjects.isParticle(subject) && folder != null ->
+            File(File(File(folder.dir, PARTICLES_DIR), Subjects.particleId(subject)), LOGIC_FILE)
         else -> null
     }
 
@@ -654,6 +658,10 @@ class CharacterStore(private val context: Context) {
             for (file in walkLogicFiles(folder.partsDir)) {
                 val id = file.parentFile?.name ?: continue
                 out[Subjects.part(id)] = readOneObjectLogic(file) ?: continue
+            }
+            for (file in walkLogicFiles(File(folder.dir, PARTICLES_DIR))) {
+                val id = file.parentFile?.name ?: continue
+                out[Subjects.particle(id)] = readOneObjectLogic(file) ?: continue
             }
         }
         return out
@@ -880,6 +888,9 @@ class CharacterStore(private val context: Context) {
 
         /** One folder per thing that holds logic: characters/<角色>/liquids/<液体>/logic.json. */
         const val LIQUIDS_DIR = "liquids"
+
+        /** The same, one folder per KIND of particle (not per drop). See Subjects. */
+        const val PARTICLES_DIR = "particles"
         const val PROPS_FILE = "props.json"
     }
 }

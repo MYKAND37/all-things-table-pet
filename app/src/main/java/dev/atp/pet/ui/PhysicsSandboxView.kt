@@ -978,7 +978,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         wasGrounded = grounded
 
-        if (settings.particles) particles.step(dt, s.floorY)
+        if (settings.particles) {
+            val landed = particles.step(dt, s.floorY)
+            // One event per KIND per frame, carrying how many drops it was. Forty sparks
+            // landing together are one splash; forty events would be forty runs of the same
+            // rules inside a single frame, and a rule with no cooldown would do its thing
+            // forty times for one visible thing happening.
+            for ((id, n) in landed.groupingBy { it }.eachCount()) {
+                fireTo(
+                    Subjects.particle(id),
+                    GameEvent(EventType.LANDED, value = n.toFloat(), particle = id),
+                )
+            }
+        }
         // Liquid runs around the body: the same capsules the props collide with. The switch
         // is a performance one first and an aesthetic one second, and liquid is the expensive
         // half of the two.
@@ -1004,6 +1016,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val present = LinkedHashSet<String>()
         if (w != null) for (prop in w.live) present.add(Subjects.prop(prop.spec.id))
         if (f != null) for (id in Liquids.present(f.drops)) present.add(Subjects.liquid(id))
+        // A particle kind is present while it has drops in the air. Per KIND, not per drop: a
+        // drop lives about a second, so a rule written on one spark would have nothing left to
+        // run against by the time anybody read the log.
+        if (settings.particles) for (id in particles.liveKinds()) present.add(Subjects.particle(id))
         // Every part of the character is a subject, and it exists exactly as long as the
         // character does -- so a part is present whenever the bench is. The lookup below
         // filters this down to the parts somebody has actually given rules to.

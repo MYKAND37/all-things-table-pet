@@ -143,6 +143,10 @@ def object_logic_path(subject, character_id=None, file_name=None):
             return "characters/%s/liquids/%s/%s" % (character_id, subject.split(":", 1)[1], name)
         if subject.startswith("part:"):
             return "characters/%s/parts/%s/%s" % (character_id, subject.split(":", 1)[1], name)
+        # 一种粒子一个文件夹，和液体同一个形状：角色在自己的 logic.json 里**声明**粒子
+        # （名字、颜色、受不受重力、留不留印子），而那种粒子的规则住在旁边。
+        if subject.startswith("particle:"):
+            return "characters/%s/particles/%s/%s" % (character_id, subject.split(":", 1)[1], name)
     return None
 
 
@@ -318,6 +322,20 @@ def main():
            "characters/female_base/parts/hand_L/" + name,
            str(object_logic_path("part:hand_L", "female_base")))
     report("and the character is not one of the objects", object_logic_path("pet") is None)
+    report("a particle kind's live under the character that declares them",
+           object_logic_path("particle:spark", "female_base") ==
+           "characters/female_base/particles/spark/" + name,
+           str(object_logic_path("particle:spark", "female_base")))
+    # `part:` 是 `particle:` 的前身，两个前缀只差一个冒号的位置 —— 这条钉住它们不会被
+    # 互相认错，因为认错的下场是把粒子的规则写进某根骨头的文件夹。
+    report("and a particle is not filed as a part",
+           object_logic_path("particle:spark", "female_base") !=
+           object_logic_path("part:spark", "female_base"),
+           "%s vs %s" % (object_logic_path("particle:spark", "female_base"),
+                         object_logic_path("part:spark", "female_base")))
+    report("a particle without a character has nowhere to live",
+           object_logic_path("particle:spark", None) is None,
+           "particles are declared by a character, like liquids")
     report("a liquid without a character has nowhere to live",
            object_logic_path("liquid:slime", None) is None,
            "liquids belong to a character; a prop belongs to everybody")

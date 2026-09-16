@@ -71,10 +71,27 @@ class Particles:
                 "colour": kind["colour"],
                 "gravity": FALLING if kind["gravity"] else FLOATING,
                 "stains": kind["stains"],
+                # 每一滴都知道自己是哪种。少了它，台面上就分不出火花和灰尘，
+                # 「火花 落地 → 点燃」也就无从谈起。
+                "kind": kind["id"],
             })
         return len(self.particles)
 
+    def live_kinds(self):
+        """现在有滴在空中的种类，给「这个主体此刻在不在」用。"""
+        out = []
+        for p in self.particles:
+            if p["kind"] not in out:
+                out.append(p["kind"])
+        return out
+
     def step(self, dt, floor):
+        """推进一帧，返回**这一帧落地的种类**（可以重复，各算一次）。
+
+        返回它，才让「一种粒子」成为能写规则的主体：台面把每个 id 当成一次 LANDED
+        交给那种粒子自己的引擎。
+        """
+        landed = []
         for p in list(self.particles):
             p["life"] -= dt
             p["vy"] += p["gravity"] * dt
@@ -87,7 +104,9 @@ class Particles:
             if p["y"] >= floor:
                 if p["stains"]:
                     self.stains.append({"x": p["x"], "y": floor, "colour": p["colour"]})
+                landed.append(p["kind"])
                 self.particles.remove(p)
+        return landed
 
 
 def main():
@@ -158,6 +177,40 @@ def main():
     report("it falls back to the first kind", of("nonsense")["id"] == DEFAULTS[0]["id"])
     unknown.burst("nonsense", (0.0, 0.0), 3)
     report("and it still bursts", len(unknown.particles) == 3)
+
+    print("\n一滴知道自己属于哪种：粒子种类是能写规则的主体")
+    # 这是「粒子也是主体」的地基。少了它，台面分不出火花和灰尘，
+    # 「火花 落地 → 点燃」就写不出来 —— 而它是这个功能存在的理由。
+    mixed = Particles()
+    mixed.burst("spark", (0.0, 0.0), 2)
+    mixed.burst("dust", (0.0, 0.0), 3)
+    report("every drop carries its kind",
+           sorted(set(x["kind"] for x in mixed.particles)) == ["dust", "spark"],
+           str(sorted(set(x["kind"] for x in mixed.particles))))
+    report("and the kinds in the air are readable",
+           sorted(mixed.live_kinds()) == ["dust", "spark"], str(mixed.live_kinds()))
+
+    report("nothing in the air means no kinds", Particles().live_kinds() == [])
+
+    # LANDED 是按种类报的，而且**同一种落几滴就报几次** —— 台面据此每帧合并成一次
+    # 带数量的 LANDED，因为四十个火花同时落地是一件事，不是四十件。
+    both = Particles()
+    both.burst("spark", (0.0, 4000.0), 2)
+    both.burst("dust", (0.0, 4000.0), 3)
+    landed = both.step(1.0 / 60.0, 3670.0)
+    report("landing reports which kinds touched down",
+           sorted(landed) == ["dust", "dust", "dust", "spark", "spark"], str(sorted(landed)))
+    report("counting them is how many drops it was",
+           landed.count("dust") == 3 and landed.count("spark") == 2)
+    report("nothing in the air landed on the next frame",
+           both.step(1.0 / 60.0, 3670.0) == [])
+
+    # 还在空中的不算落地，哪怕同一种里已经有别的落了。
+    partial = Particles()
+    partial.burst("spark", (0.0, 4000.0), 1)
+    partial.burst("spark", (0.0, 0.0), 1)
+    report("only the ones that reached the floor are reported",
+           partial.step(1.0 / 60.0, 3670.0) == ["spark"] and len(partial.particles) == 1)
 
     print("")
     if FAILURES:

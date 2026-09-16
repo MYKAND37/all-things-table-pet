@@ -111,6 +111,18 @@ def part_id(subject):
     return subject.split(":", 1)[1] if is_part(subject) else ""
 
 
+def particle_subject(kind):
+    return kotlin_prefixes().get("PARTICLE_PREFIX", "particle:") + kind
+
+
+def is_particle(subject):
+    return subject.startswith(kotlin_prefixes().get("PARTICLE_PREFIX", "particle:"))
+
+
+def particle_id(subject):
+    return subject.split(":", 1)[1] if is_particle(subject) else ""
+
+
 def hears(subject, event):
     """
     Which engines hear an event. Mirrors Subjects.hears in LogicSpec.kt.
@@ -767,11 +779,25 @@ def main():
     report("the prefixes still agree with the Kotlin source",
            prefixes.get("PROP_PREFIX") == "prop:" and
            prefixes.get("LIQUID_PREFIX") == "liquid:" and
-           prefixes.get("PART_PREFIX") == "part:",
+           prefixes.get("PART_PREFIX") == "part:" and
+           prefixes.get("PARTICLE_PREFIX") == "particle:",
            str(prefixes))
     report("a part subject round-trips", part_id(part_subject("hand_L")) == "hand_L",
            part_subject("hand_L"))
     report("and the character is not a part", not is_part("pet") and part_id("pet") == "")
+
+    # 粒子也是主体。它跟另外三种一样是**文件格式**的一部分（前缀会写进 logic 文件），
+    # 所以镜像必须跟着 Kotlin 读，而不是自己写一份字面量。
+    report("a particle subject round-trips",
+           particle_id(particle_subject("spark")) == "spark", particle_subject("spark"))
+    report("and nothing else is a particle",
+           not is_particle("pet") and not is_particle(part_subject("hand_L")) and
+           not is_particle("prop:candle") and particle_id("pet") == "")
+    # 前缀必须能互相区分：`part:` 是 `particle:` 的前缀，靠 startsWith 会把一个粒子主体
+    # 认成部位。这条测试就是钉住这件事的。
+    report("a particle is not mistaken for a part",
+           not is_part(particle_subject("spark")) and not is_particle(part_subject("spark")),
+           "%s vs %s" % (particle_subject("spark"), part_subject("spark")))
 
     report("a part hears what happened to it",
            hears(part_subject("hand_L"), {"type": "impact", "part": "hand_L"}))

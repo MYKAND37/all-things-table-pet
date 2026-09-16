@@ -42,6 +42,14 @@ class Particles {
         val colour: Int,
         val gravity: Float,
         val stains: Boolean,
+        /**
+         * Which KIND this drop is, so a kind can be a subject with rules.
+         *
+         * A drop did not use to know: it carried the colour, the size and the two switches,
+         * which is everything the DRAWING needs and nothing a RULE does. 火花 落地 → 点燃 is a
+         * rule about sparks, and without this the bench could not tell a spark from dust.
+         */
+        val kind: String,
     )
 
     private class Stain(
@@ -105,12 +113,23 @@ class Particles {
                     // hardcoded for stars and hearts until a kind could be edited.
                     gravity = if (kind.gravity) FALLING else FLOATING,
                     stains = kind.stains,
+                    kind = kind.id,
                 )
             )
         }
     }
 
-    fun step(dt: Float, floor: Float) {
+    /**
+     * Move every drop, and report which KINDS touched the floor this frame.
+     *
+     * The return value is what makes a particle kind a subject that can be written about: the
+     * bench hands each id to that kind's own engine as a LANDED. It is a list rather than a
+     * callback because the caller has the clock, the event and the engine, and this class has
+     * none of them — and a set, not a list, would hide how many drops landed, which is the
+     * number a rule about "a splash" would want next.
+     */
+    fun step(dt: Float, floor: Float): List<String> {
+        val landed = ArrayList<String>()
         var i = 0
         while (i < particles.size) {
             val p = particles[i]
@@ -125,6 +144,7 @@ class Particles {
             }
             if (p.y >= floor) {
                 if (p.stains) mark(p.x, floor, p.size, p.colour)
+                landed.add(p.kind)
                 particles.removeAt(i)
                 continue
             }
@@ -137,6 +157,14 @@ class Particles {
             s.r += 1.6f * dt
             if (s.life <= 0f) stains.removeAt(j) else j++
         }
+        return landed
+    }
+
+    /** Which kinds have at least one drop in the air, for the subjects that are present. */
+    fun liveKinds(): Set<String> {
+        val out = LinkedHashSet<String>()
+        for (p in particles) out.add(p.kind)
+        return out
     }
 
     /** A mark is left where the drop landed, which is the floor, not where it started. */
