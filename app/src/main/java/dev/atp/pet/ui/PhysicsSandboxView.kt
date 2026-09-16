@@ -267,7 +267,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         bubble = null
         bubbleAt = null
 
-        engine = RuleEngine(logic)
+        // Seeded from the clock, so that two summons of the same character do not roll the
+        // same dice in the same order. Only the rules that use 概率 and 数值随机 can tell;
+        // everything else is exactly as reproducible as it was.
+        engine = RuleEngine(logic, seed = System.nanoTime())
         this.objectLogic = objectLogic
         objectEngines.clear()
         propLanded.clear()
@@ -925,7 +928,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             if (objectEngines.containsKey(subject)) continue
             val spec = objectLogic[subject] ?: continue
             if (spec.rules.isEmpty()) continue
-            val engine = RuleEngine(spec)
+            // One generator per subject, and a different one each time the subject appears:
+            // see the note on the character's own engine.
+            val engine = RuleEngine(spec, seed = System.nanoTime())
             objectEngines[subject] = engine
             fireTo(subject, GameEvent(EventType.SPAWN))
         }

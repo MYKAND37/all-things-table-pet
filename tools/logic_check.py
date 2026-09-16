@@ -8,7 +8,7 @@ that runs before its time or out of order.
 
     python3 tools/logic_check.py
 """
-import json, math, os, re, sys
+import json, math, os, random, re, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 LOGIC_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/logic/LogicSpec.kt")
@@ -66,8 +66,11 @@ def clamp(v, lo, hi):
 
 
 class Engine:
-    def __init__(self, spec):
+    def __init__(self, spec, seed=20260915):
         self.spec = spec
+        #: The dice. Seeded so that a test can say what it expects, and so that two runs of
+        #: the same rules give the same story in the log. See RuleEngine's own note.
+        self.rng = random.Random(seed)
         self.value = {s["id"]: clamp(s["value"], s["min"], s["max"]) for s in spec["stats"]}
         self.spec_by_id = {s["id"]: s for s in spec["stats"]}
         self.initial = {s["id"]: bool(s.get("on", False)) for s in spec.get("states", [])}
@@ -119,6 +122,11 @@ class Engine:
         return any_group or group
 
     def holds_one(self, c):
+        if c.get("kind") == "chance":
+            # One roll per evaluation. 0 is never and 100 is always, and the roll is a
+            # percentage rather than a fraction because every other number in this file is
+            # written the way a person would say it out loud.
+            return self.rng.random() * 100.0 < c.get("value", 0.0)
         if c.get("kind") == "state":
             # A state the character does not declare reads as off, not as an error:
             # deleting a state should not make every rule that mentioned it explode.
@@ -139,6 +147,13 @@ class Engine:
                 self.add(a.get("stat", ""), a.get("value", 0.0))
             elif k == "set":
                 self.set(a.get("stat", ""), a.get("value", 0.0))
+            elif k == "random":
+                # A number from a range, drawn fresh every time the action runs. The two ends
+                # are sorted rather than trusted: "80 to 20" is the same range as "20 to 80",
+                # and a range typed backwards should be a range, not an empty one.
+                lo = min(a.get("value", 0.0), a.get("value2", a.get("value", 0.0)))
+                hi = max(a.get("value", 0.0), a.get("value2", a.get("value", 0.0)))
+                self.set(a.get("stat", ""), lo + self.rng.random() * (hi - lo))
             elif k in ("stateOn", "stateOff", "stateToggle"):
                 sid = a.get("state", "")
                 if sid:
@@ -252,6 +267,17 @@ def main():
                     if a.get("kind") == "spill"}
     report("every liquid spilled exists", used_liquids <= liquid_ids,
            "unknown: " + str(used_liquids - liquid_ids))
+    # The kinds a condition can be are a closed set in the Kotlin (see ConditionSpec), and a
+    # file with a fourth kind in it would simply never fire. The shipped defaults are the
+    # example everybody reads, so they are where a typo in one gets caught.
+    cond_kinds = {c.get("kind") for r in default["rules"] for c in r.get("if", [])}
+    known = {"stat", "state", "chance"}
+    report("every condition kind is one the engine knows", cond_kinds <= known,
+           "unknown: " + str(cond_kinds - known))
+    action_kinds = {a["kind"] for r in default["rules"] for a in r.get("then", [])}
+    report("the shipped defaults show the dice off",
+           "chance" in cond_kinds and "random" in action_kinds,
+           "conditions: " + str(sorted(cond_kinds)) + ", actions: " + str(sorted(action_kinds)))
     report("stats have sane ranges",
            all(s["min"] <= s["value"] <= s["max"] for s in default["stats"]))
     report("every rule has at least one action",
@@ -518,6 +544,74 @@ def main():
                                     {"kind": "stateOff", "state": "x"}]}]})
     e.handle("tick")
     report("on then off in one rule ends off", e.state_on("x") is False)
+
+    print("\nthe dice: 概率 conditions and 数值随机 actions")
+    dice = {"stats": [{"id": "N", "name": "N", "value": 50, "min": 0, "max": 100}],
+            "rules": [
+                {"on": "tick", "cooldown": 0, "if": [{"kind": "chance", "value": 0}],
+                 "then": [{"kind": "say", "text": "never"}]},
+                {"on": "tick", "cooldown": 0, "if": [{"kind": "chance", "value": 100}],
+                 "then": [{"kind": "say", "text": "always"}]},
+                {"on": "tick", "cooldown": 0, "if": [{"kind": "chance", "value": 50}],
+                 "then": [{"kind": "say", "text": "half"}]},
+                {"on": "tick", "cooldown": 0,
+                 "then": [{"kind": "random", "stat": "N", "value": 20, "value2": 80}]},
+            ]}
+    def rolled_values(engine, times):
+        """Raise a tick and read the number back, which is what a random action is for."""
+        out = []
+        for _ in range(times):
+            engine.handle("tick")
+            out.append(engine.value["N"])
+        return out
+
+    runs = 400
+    e = Engine(dice, seed=20260915)
+    nevers = alwayses = halves = 0
+    seen = []
+    for _ in range(runs):
+        out = says(e.handle("tick"))
+        nevers += out.count("never")
+        alwayses += out.count("always")
+        halves += out.count("half")
+        seen.append(e.value["N"])
+    report("0% never fires", nevers == 0, str(nevers))
+    report("100% always fires", alwayses == runs, "%d of %d" % (alwayses, runs))
+    # Not 200: this is a coin, and a test that demands exactly half of four hundred is a test
+    # that fails one run in a hundred. A wide band around half says the same thing.
+    report("50% fires about half the time", 140 < halves < 260, "%d of %d" % (halves, runs))
+    report("the range is the range", all(20.0 <= v <= 80.0 for v in seen),
+           "%.1f .. %.1f" % (min(seen), max(seen)))
+    report("and it is actually random", len(set(round(v, 3) for v in seen)) > runs // 2,
+           "%d different values in %d rolls" % (len(set(round(v, 3) for v in seen)), runs))
+
+    same = rolled_values(Engine(dice, seed=20260915), 20)
+    again = rolled_values(Engine(dice, seed=20260915), 20)
+    report("the same seed gives the same dice", same == again)
+
+    backwards = {"stats": dice["stats"],
+                 "rules": [{"on": "tick", "cooldown": 0,
+                            "then": [{"kind": "random", "stat": "N", "value": 80, "value2": 20}]}]}
+    rolled = rolled_values(Engine(backwards, seed=11), 60)
+    report("80..20 is the same range as 20..80", all(20.0 <= v <= 80.0 for v in rolled),
+           "%.1f .. %.1f" % (min(rolled), max(rolled)))
+
+    wide = rolled_values(Engine(
+        {"stats": [{"id": "N", "name": "N", "value": 0, "min": 0, "max": 100}],
+         "rules": [{"on": "tick", "cooldown": 0,
+                    "then": [{"kind": "random", "stat": "N", "value": 0, "value2": 1000}]}]},
+        seed=5), 40)
+    report("a range past the stat's own limit is still clamped to it",
+           all(v <= 100.0 for v in wide), "max %.1f" % max(wide))
+
+    e6 = Engine({"stats": [{"id": "N", "name": "N", "value": 0, "min": 0, "max": 100}],
+                 "rules": [{"on": "tick", "cooldown": 0,
+                            "if": [{"kind": "chance", "value": 0},
+                                   {"kind": "chance", "value": 100, "join": "or"}],
+                            "then": [{"kind": "say", "text": "yes"}]}]},
+                seed=6)
+    report("a certain clause joined with 或者 always fires",
+           says(e6.handle("tick")) == ["yes"])
 
     print("\nTICK is raised on its own schedule")
     e = Engine(default)

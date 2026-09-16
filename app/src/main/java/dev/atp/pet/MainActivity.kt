@@ -3333,12 +3333,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun conditionText(c: ConditionSpec): String =
-        if (c.kind == "state") {
-            stateName(c.state) + getString(
+        when (c.kind) {
+            "state" -> stateName(c.state) + getString(
                 if (c.op == "off") R.string.logic_state_is_off else R.string.logic_state_is_on
             )
-        } else {
-            statName(c.stat) + " " + opSymbol(c.op) + " " + trim(c.value)
+            "chance" -> getString(R.string.logic_cond_chance_text, trim(c.value))
+            else -> statName(c.stat) + " " + opSymbol(c.op) + " " + trim(c.value)
         }
 
     private fun opSymbol(op: String): String = when (op) {
@@ -3362,6 +3362,8 @@ class MainActivity : AppCompatActivity() {
         "say" -> "说「" + a.text + "」"
         "add" -> statName(a.stat) + " " + (if (a.value >= 0f) "+" else "") + trim(a.value)
         "set" -> statName(a.stat) + " 设为 " + trim(a.value)
+        "random" -> statName(a.stat) + " 随机 " +
+            trim(minOf(a.value, a.value2)) + ".." + trim(maxOf(a.value, a.value2))
         "pose" -> "摆动作 " + a.text
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
@@ -3505,7 +3507,11 @@ class MainActivity : AppCompatActivity() {
         val existing = rule.conditions.getOrNull(condIndex)
         // Two things a character can be asked about: a number it carries, and a fact about
         // it. The kind chips switch between them; the rest of the dialog is the same shape.
-        var kind = if (existing?.kind == "state") "state" else "stat"
+        var kind = when (existing?.kind) {
+            "state" -> "state"
+            "chance" -> "chance"
+            else -> "stat"
+        }
         var stat = existing?.stat ?: logicStats.firstOrNull()?.id ?: ""
         var op = existing?.op ?: ">="
         var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
@@ -3516,12 +3522,14 @@ class MainActivity : AppCompatActivity() {
         // these two, and a local has to exist before anything can capture it.
         val statBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val stateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val chanceBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val kindChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val kindViews = mutableListOf<TextView>()
         for ((id, text) in listOf(
             "stat" to getString(R.string.logic_cond_stat),
             "state" to getString(R.string.logic_cond_state),
+            "chance" to getString(R.string.logic_cond_chance),
         )) {
             val chip = label(text, 12f, INK)
             chip.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -3531,9 +3539,10 @@ class MainActivity : AppCompatActivity() {
             ).apply { marginEnd = dp(5) }
             chip.setOnClickListener {
                 kind = id
-                paintChips(kindViews, listOf("stat", "state"), { kind })
+                paintChips(kindViews, listOf("stat", "state", "chance"), { kind })
                 statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
                 stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
+                chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
             }
             kindViews.add(chip)
             kindChips.addView(chip)
@@ -3582,6 +3591,18 @@ class MainActivity : AppCompatActivity() {
         statBox.addView(label(getString(R.string.logic_pick_op), 11f, MUTED, top = 10, bottom = 6))
         statBox.addView(opChips)
         statBox.addView(valueRow)
+
+        // The dice. A percentage, and the sentence it makes on the graph is the whole
+        // explanation: "有 30% 的概率". Rolled every time the rule is considered, which is
+        // why the hint says so -- on a 每隔一会儿 rule it is one roll per interval, and on
+        // 被打到 it is one roll per hit.
+        val (chanceRow, chanceOf) = stepperRow(
+            getString(R.string.logic_pick_percent),
+            (existing?.takeIf { it.kind == "chance" }?.value) ?: 30f,
+            5f, 0f, 100f,
+        ) { trim(it) + "%" }
+        chanceBox.addView(label(getString(R.string.logic_cond_chance_hint), 11f, MUTED, bottom = 6))
+        chanceBox.addView(chanceRow)
 
         val stateChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val stateViews = mutableListOf<TextView>()
@@ -3659,19 +3680,22 @@ class MainActivity : AppCompatActivity() {
         box.addView(kindChips)
         box.addView(statBox)
         box.addView(stateBox)
+        box.addView(chanceBox)
 
         val builder = AlertDialog.Builder(this)
             .setTitle(R.string.logic_cond_kind)
             .setView(box)
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val conditions = rule.conditions.toMutableList()
-                val spec = if (kind == "state") {
-                    ConditionSpec(
+                val spec = when (kind) {
+                    "state" -> ConditionSpec(
                         kind = "state", stat = "", op = if (stateOn) "on" else "off",
                         value = 0f, state = state, join = join,
                     )
-                } else {
-                    ConditionSpec(
+                    "chance" -> ConditionSpec(
+                        kind = "chance", stat = "", op = "", value = chanceOf(), join = join,
+                    )
+                    else -> ConditionSpec(
                         kind = "stat", stat = stat, op = op, value = valueOf(), join = join,
                     )
                 }
@@ -3687,7 +3711,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         builder.show()
-        paintChips(kindViews, listOf("stat", "state"), { kind })
+        paintChips(kindViews, listOf("stat", "state", "chance"), { kind })
         paintChips(statViews, logicStats.map { it.id }, { stat })
         paintChips(opViews, CompareOp.values().map { it.id }, { op })
         paintChips(stateViews, logicStates.map { it.id }, { state })
@@ -3695,6 +3719,7 @@ class MainActivity : AppCompatActivity() {
         paintChips(joinViews, listOf(Joins.AND, Joins.OR), { join })
         statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
         stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
+        chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
     }
 
     private fun askAction(index: Int, actionIndex: Int, isElse: Boolean = false) {
@@ -3732,6 +3757,18 @@ class MainActivity : AppCompatActivity() {
                 "statValue" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 100f) { v ->
                         putAction(index, actionIndex, isElse, ActionSpec(kind.id, stat = stat, value = v))
+                    }
+                }
+                // A range: two numbers, asked for one after the other. The engine sorts them,
+                // so typing the big one first is a range rather than an empty one.
+                "statRange" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
+                    askSigned(getString(R.string.logic_pick_from), existing?.value ?: 0f) { lo ->
+                        askSigned(getString(R.string.logic_pick_to), existing?.value2 ?: 100f) { hi ->
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, stat = stat, value = lo, value2 = hi),
+                            )
+                        }
                     }
                 }
                 "pose" -> pickList(

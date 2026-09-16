@@ -4,6 +4,7 @@ import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
 import dev.atp.pet.engine.state.StatSet
 import kotlin.math.abs
+import kotlin.random.Random
 
 /**
  * Runs a character's rules.
@@ -16,9 +17,20 @@ import kotlin.math.abs
  * See tools/logic_check.py, which mirrors this file and carries the cases that matter:
  * cooldowns, once-only rules, part matching, delayed actions, and the order rules run in.
  */
-class RuleEngine(val spec: LogicSpec) {
+class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
 
     val stats = StatSet(spec.stats)
+
+    /**
+     * The dice.
+     *
+     * Seeded, and given by the caller, for two reasons: a test can then say what it expects
+     * (see tools/logic_check.py, which mirrors this and rolls four hundred times), and the
+     * bench can hand a fresh seed per load so that a character does not do the same thing
+     * every single time it is summoned. One generator per engine, so a prop's rules and the
+     * character's rules do not take each other's rolls.
+     */
+    private val random = Random(seed)
 
     /**
      * Every switch the character owns, by id. Read by the artwork (a part that only exists
@@ -150,6 +162,15 @@ class RuleEngine(val spec: LogicSpec) {
      * the rest of the file from running.
      */
     private fun holdsOne(c: ConditionSpec): Boolean {
+        if (c.kind == "chance") {
+            // A percentage, rolled afresh every time the rule is considered: 0 is never, 100
+            // is always, and the roll is per evaluation rather than per rule, so a chance
+            // clause on 每隔一会儿 is one roll per interval and one on 被打到 is one per hit.
+            val roll = random.nextFloat() * 100f
+            val hit = roll < c.value
+            if (hit) log("    🎲 " + trim(c.value) + "% 中了")
+            return hit
+        }
         if (c.kind == "state") {
             val on = stateOn(c.state)
             val want = c.op != "off"
@@ -186,6 +207,17 @@ class RuleEngine(val spec: LogicSpec) {
                     val delta = stats.set(a.stat, a.value)
                     if (delta != 0f) log("    " + a.stat + " = " + stats.get(a.stat).toInt())
                 }
+                "random" -> {
+                    // The two ends are sorted rather than trusted: a range typed backwards is
+                    // still a range, and a range whose ends are equal is a fixed value. The
+                    // number is drawn afresh every time the action runs, and the stat's own
+                    // limits still apply -- StatSet is the one that clamps.
+                    val lo = minOf(a.value, a.value2)
+                    val hi = maxOf(a.value, a.value2)
+                    stats.set(a.stat, lo + random.nextFloat() * (hi - lo))
+                    log("    " + a.stat + " 随机 " + trim(lo) + ".." + trim(hi) +
+                        " → " + trim(stats.get(a.stat)))
+                }
                 "stateOn", "stateOff", "stateToggle" -> {
                     if (a.state.isNotEmpty()) {
                         val before = stateOn(a.state)
@@ -210,6 +242,10 @@ class RuleEngine(val spec: LogicSpec) {
         }
         return out
     }
+
+    /** A number the way the log wants to read it: no trailing ".0" on whole numbers. */
+    private fun trim(v: Float): String =
+        if (v == v.toInt().toFloat()) v.toInt().toString() else "%.1f".format(v)
 
     private fun log(text: String) {
         lines.addLast(text + "        " + "%.1f".format(clock) + "s")

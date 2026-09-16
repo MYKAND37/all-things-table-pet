@@ -191,6 +191,9 @@
     <string name="logic_cond_kind">测什么</string>
     <string name="logic_cond_stat">数值</string>
     <string name="logic_cond_state">状态</string>
+    <string name="logic_cond_chance">概率</string>
+    <string name="logic_cond_chance_hint">每次判到这条规则都掷一次，所以配「每隔一会儿」最像掷骰子；0% 永不、100% 必定。</string>
+    <string name="logic_cond_chance_text">有 %1$s%% 的概率</string>
     <string name="depth_state">状态：</string>
     <string name="depth_state_none">总是画</string>
     <string name="depth_state_not">没有 </string>
@@ -258,6 +261,9 @@
     <string name="logic_pick_stat">哪个数值</string>
     <string name="logic_pick_op">怎么比</string>
     <string name="logic_pick_value">比多少</string>
+    <string name="logic_pick_percent">概率（%）</string>
+    <string name="logic_pick_from">小的一头</string>
+    <string name="logic_pick_to">大的一头</string>
     <string name="logic_pick_action">做什么</string>
     <string name="logic_pick_text">说什么</string>
     <string name="logic_pick_bone">哪个部位</string>

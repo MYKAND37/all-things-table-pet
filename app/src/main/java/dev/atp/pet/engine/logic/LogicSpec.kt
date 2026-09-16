@@ -111,6 +111,15 @@ data class ActionSpec(
     val text: String = "",
     val stat: String = "",
     val value: Float = 0f,
+    /**
+     * The other end of a range, for the actions that have one.
+     *
+     * Only 数值随机 uses it so far, and it is a field rather than a second meaning for
+     * [value] because a range whose ends are read out of one number and one duration is a
+     * range nobody can explain in a file. The two ends are SORTED when they are used, so a
+     * range typed backwards is still a range.
+     */
+    val value2: Float = 0f,
     val bone: String = "",
     val prop: String = "",
     /** For the three state actions: which state to turn on, off, or over. */
@@ -146,6 +155,16 @@ data class RuleSpec(
 /** What a rule can do, with the parameter the editor has to ask for. */
 enum class ActionKind(val id: String, val label: String, val needs: String) {
     SAY("say", "说一句话", "text"),
+
+    /**
+     * A number from a range, drawn fresh every time the rule runs.
+     *
+     * The generator the logic system did not have: with this and the 概率 condition, "one
+     * time in five it flinches" and "the bruise is somewhere between a little and a lot" are
+     * rules rather than code. The dice are seeded per engine so that a test can say what it
+     * expects -- see RuleEngine.
+     */
+    RANDOM("random", "数值随机", "statRange"),
     ADD("add", "数值增加", "stat"),
     SET("set", "数值设为", "statValue"),
     POSE("pose", "摆动作", "pose"),
@@ -299,6 +318,7 @@ class LogicSpec(
                             text = a.optString("text", ""),
                             stat = a.optString("stat", ""),
                             value = a.optDouble("value", 0.0).toFloat(),
+                            value2 = a.optDouble("value2", 0.0).toFloat(),
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
@@ -313,6 +333,7 @@ class LogicSpec(
                             text = a.optString("text", ""),
                             stat = a.optString("stat", ""),
                             value = a.optDouble("value", 0.0).toFloat(),
+                            value2 = a.optDouble("value2", 0.0).toFloat(),
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
@@ -371,7 +392,8 @@ class LogicSpec(
                     acts.put(
                         JSONObject()
                             .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
-                            .put("value", a.value.toDouble()).put("bone", a.bone)
+                            .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
+                            .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
                     )
                 }
@@ -380,7 +402,8 @@ class LogicSpec(
                     elses.put(
                         JSONObject()
                             .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
-                            .put("value", a.value.toDouble()).put("bone", a.bone)
+                            .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
+                            .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
                     )
                 }
@@ -458,6 +481,14 @@ class LogicSpec(
         { "kind": "add", "stat": "P", "value": 10 },
         { "kind": "burst", "text": "spark", "value": 10 },
         { "kind": "say", "text": "呜！" }
+      ]
+    },
+    {
+      "on": "tick", "part": "", "cooldown": 6.0, "once": false,
+      "if": [ { "kind": "chance", "value": 25 } ],
+      "then": [
+        { "kind": "say", "text": "唔……" },
+        { "kind": "random", "stat": "P", "value": 5, "value2": 25 }
       ]
     },
     {
