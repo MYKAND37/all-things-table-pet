@@ -531,6 +531,9 @@ python3 tools/wiring_check.py     # 布局里的控件有没有人接线、函�
 | **条件分支** | 「就」现在是一条直线。真正需要的是「如果……否则……」，以及在规则之间跳 |
 | **道具之间的碰撞** | 道具只和角色碰，互相穿过 |
 | **多角色** | 引擎已经是一个角色一个实例，但界面上一次只放一只出来 |
+| **部件也是主体** | 现在主体是「角色 / 每个道具 / 每种液体」。要做的是**每个部件也是一个主体**（`part:hand_L`），于是"让手流汗"是一条长在手这个主体上的规则，而不是长在角色身上、每次都要判断部位 |
+| **局部状态** | 状态现在全是角色的。要分成**全局**和**属于某个部件的局部**：手有自己的"出汗"，角色有自己的"穿着"，两者不互相污染 |
+| **每种东西一个文件夹** | 道具和液体的规则现在挤在 `props/object-logic.json` 一个文件里。要变成**每样东西一个文件夹**（`props/<道具>/logic.json`），部件同理（`characters/<角色>/parts/<部位>/logic.json`） |
 
 ### 已经砍掉的
 
@@ -549,6 +552,7 @@ app/src/main/java/dev/atp/pet/
   engine/logic/        LogicSpec, RuleEngine（当→如果→就）
   engine/prop/         PropSpec, PropWorld（四类道具 + 碰撞）
   engine/fluid/        Fluid（液滴拥挤成水洼）, LiquidSpec
+  engine/particle/     ParticleSpec（颜色 + 大小 + 受不受重力 + 留不留印子）
   data/Settings.kt     全局设置（重力、画面开关、效果开关）+ 它的文件
   render/PartRenderer.kt / PartLibrary.kt / Particles.kt
   ui/SkeletonView.kt   骨骼可视化 + 拖拽 + 改骨骼
