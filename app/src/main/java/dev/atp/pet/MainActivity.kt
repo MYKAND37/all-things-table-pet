@@ -250,12 +250,18 @@ class MainActivity : AppCompatActivity() {
         skeletonView.onInfo = { statusLine.text = it }
         sandboxView.onInfo = { statusLine.text = it }
 
+        // ── 这份清单就是「哪些项能点」。列进来的才会挂上 setOnClickListener，也只有它们
+        //    才走得到 select()。布局里多一项、这里少一项，就是一个点了没反应的按钮 ——
+        //    menuParticles 就这么漏过一次：布局里有它，select() 里也有它的分支，但它从没
+        //    进过这份清单，所以监听器从没挂上，点下去什么都不发生，也没有任何地方说为什么。
+        //    顺序要跟布局一致：menuItems.first() 是启动时默认选中的那一项。
         menuItems = listOf(
             findViewById(R.id.menuSandbox),
             findViewById(R.id.menuPets),
             findViewById(R.id.menuProps),
             findViewById(R.id.menuLogic),
             findViewById(R.id.menuLiquids),
+            findViewById(R.id.menuParticles),
             findViewById(R.id.menuSettings),
         )
         menuItems.forEach { item ->

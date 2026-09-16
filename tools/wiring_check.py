@@ -79,6 +79,54 @@ def kotlin_text():
     return parts
 
 
+def rail_items():
+    """The rail's tappable items, read from both sides: (layout order, menuItems order).
+
+    "Is this id mentioned in the Kotlin" is NOT the same question as "does anything happen
+    when you tap it". The rail attaches its listener by iterating one list, so an item the
+    layout has and that list does not is a button that does nothing -- from every other angle
+    it looks perfectly wired.
+
+    menuParticles shipped exactly like that: the layout declared it, select() had a branch for
+    it, the id appeared in the Kotlin, so the check below was satisfied -- and no listener was
+    ever attached. Tapping it did nothing, and nothing anywhere said why.
+    """
+    layout_order = []
+    for base, _, names in os.walk(os.path.join(RES, "layout")):
+        for n in names:
+            if not n.endswith(".xml"):
+                continue
+            try:
+                root = ET.parse(os.path.join(base, n)).getroot()
+            except ET.ParseError:
+                continue
+            for el in root.iter():
+                if el.get("style") != "@style/MenuItem":
+                    continue
+                vid = el.get("{http://schemas.android.com/apk/res/android}id") or ""
+                if vid.startswith("@+id/"):
+                    layout_order.append(vid[len("@+id/"):])
+
+    list_order = []
+    for _, text in kotlin_text().items():
+        m = re.search(r"menuItems\s*=\s*listOf\(", text)
+        if not m:
+            continue
+        # 从 listOf( 起按括号配平扫到收尾。每一项都是 findViewById(...)，所以一个非贪婪的
+        # `(.*?)\)` 会在第一个 `)` 就停下，只捞到第一项 —— 那会让这条检查永远"通过"，
+        # 因为它比的是「第一项在不在」。
+        i, depth = m.end(), 1
+        while i < len(text) and depth > 0:
+            if text[i] == "(":
+                depth += 1
+            elif text[i] == ")":
+                depth -= 1
+            i += 1
+        list_order = re.findall(r"R\.id\.(\w+)", text[m.end():i])
+        break
+    return layout_order, list_order
+
+
 def main():
     ids = layout_ids()
     files = kotlin_text()
@@ -98,6 +146,19 @@ def main():
                  % (name, tag, layout))
     if dead_controls == 0:
         report("every control in the layout is named by the code", True)
+
+    print("== the rail: what the layout has vs what the list has ==")
+    layout_order, list_order = rail_items()
+    missing = [i for i in layout_order if i not in list_order]
+    extra = [i for i in list_order if i not in layout_order]
+    report("every rail item in the layout is in menuItems (so it has a listener)",
+           not missing, "no listener attached: " + str(missing) if missing else "")
+    report("and menuItems names nothing the layout does not have",
+           not extra, "not in the layout: " + str(extra) if extra else "")
+    # 顺序也要一致：menuItems.first() 是启动时默认选中并 show() 的那一项。
+    report("in the same order as the layout",
+           [i for i in layout_order if i in list_order] == list_order,
+           "layout %s vs list %s" % (layout_order, list_order))
 
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
