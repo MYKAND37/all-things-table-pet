@@ -201,6 +201,16 @@ data class ActionSpec(
     val prop: String = "",
     /** For the three state actions: which state to turn on, off, or over. */
     val state: String = "",
+    /**
+     * For 跳到规则: WHICH rule, as the number the editor and the log both show — 1 is the
+     * first rule in the file, and 0 means "no rule", which is what every other action has.
+     *
+     * A field of its own rather than [value], for the same reason [value2] is one: a rule
+     * number read out of the same number as a duration is a rule number nobody can explain
+     * in a file. It is also the only 1-based thing in the engine, and it is 1-based because
+     * it is the only one a PERSON reads — off the screen, out of the log — rather than code.
+     */
+    val rule: Int = 0,
 )
 
 /**
@@ -277,7 +287,17 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     PUSH_PROP("pushProp", "推一下道具", "propValue"),
 
     /** Take a prop or a liquid off the bench. What a candle does when it burns out. */
-    CLEAR("clear", "清掉道具", "clearWhat");
+    CLEAR("clear", "清掉道具", "clearWhat"),
+
+    /**
+     * Hand control to another rule.
+     *
+     * The first action that is not about the world at all, but about the LIST. A rule has
+     * always been a straight line — 当 → 如果 → 就, and then the next rule gets its turn —
+     * and this is the one way to say "and now that one". It is deliberately the last thing a
+     * rule can do: see RuleEngine.fire for what "control" is handed over and what is not.
+     */
+    GOTO("goto", "跳到规则", "rule");
 
     companion object {
         fun of(id: String): ActionKind = values().firstOrNull { it.id == id } ?: SAY
@@ -425,6 +445,7 @@ class LogicSpec(
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
+                            rule = a.optInt("rule", 0),
                         )
                     },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
@@ -440,6 +461,7 @@ class LogicSpec(
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
+                            rule = a.optInt("rule", 0),
                         )
                     },
                 )
@@ -511,6 +533,7 @@ class LogicSpec(
                             .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
                             .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
+                            .put("rule", a.rule)
                     )
                 }
                 val elses = JSONArray()
@@ -521,6 +544,7 @@ class LogicSpec(
                             .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
                             .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
+                            .put("rule", a.rule)
                     )
                 }
                 rules.put(

@@ -88,7 +88,9 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         val due = pending.filter { it.due <= clock }
         if (due.isNotEmpty()) {
             pending.removeAll(due)
-            for (p in due) out.addAll(run(p.actions))
+            // Each due continuation is a resolution of its own, so it gets its own `ran`: the
+            // at-most-once guard is per event, not per lifetime, and 一次 is what lifetime means.
+            for (p in due) out.addAll(follow(p.actions, mutableSetOf()))
         }
 
         tickAccum += dt
@@ -105,24 +107,76 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         // TICK is not worth a line: it fires twice a second and would bury everything else.
         if (event.type != EventType.TICK) log("· " + event.describe())
         val out = mutableListOf<ActionSpec>()
+        // The rules that have FIRED during this one event. See fire() for why it is filled in
+        // there and not when a rule is considered.
+        val ran = mutableSetOf<Int>()
         for ((index, rule) in spec.rules.withIndex()) {
             if (rule.on != event.type.id) continue
             if (!event.touches(rule.part)) continue
-            if (index in firedOnce) continue
-            val holds = holds(rule)
-            // A rule whose conditions fail and which has no else is skipped WITHOUT
-            // consuming its cooldown, so it can fire the instant they become true. That
-            // is what every rule did before there was an else, and it has to keep doing it.
-            if (!holds && rule.elseActions.isEmpty()) continue
-
-            val last = lastFired[index]
-            if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) continue
-
-            lastFired[index] = clock
-            if (rule.once) firedOnce.add(index)
-            log("  规则 " + (index + 1) + (if (holds) " →" else " → 否则"))
-            out.addAll(run(if (holds) rule.actions else rule.elseActions))
+            out.addAll(fire(index, rule, ran))
         }
+        return out
+    }
+
+    /**
+     * Fire one rule and follow wherever its actions point.
+     *
+     * A rule that arrives here from a 跳到规则 gets the same treatment as one the event matched,
+     * with one exception: **当 and 部位 are not checked**. That is the whole point of a jump —
+     * if the target still had to be triggered by the same event, jumping to it would be a way of
+     * writing the rule twice rather than a way of reaching it.
+     *
+     * Everything else still applies, because the target really is firing: its own 如果 decides
+     * between 就 and 否则, and its own 冷却 and 一次 are consumed. A rule that has already had its
+     * 一次 is not brought back to life by being jumped to.
+     */
+    private fun fire(index: Int, rule: RuleSpec, ran: MutableSet<Int>): List<ActionSpec> {
+        // At most once per event, per rule. This is what makes a loop impossible rather than
+        // merely unlikely: A → B → A stops at the second A, and any chain is bounded by the
+        // number of rules in the file, so there is no hop counter to tune and none to forget.
+        //
+        // Marked when the rule FIRES, not when it is considered. A rule that was looked at and
+        // skipped — conditions false, cooldown still running — has not had its turn, and it may
+        // legitimately hold a moment later in the same event, because the rule that skipped it
+        // can have moved a stat.
+        if (index in ran) return emptyList()
+        if (index in firedOnce) return emptyList()
+
+        val holds = holds(rule)
+        // A rule whose conditions fail and which has no else is skipped WITHOUT consuming its
+        // cooldown, so it can fire the instant they become true. That is what every rule did
+        // before there was an else, and it has to keep doing it.
+        if (!holds && rule.elseActions.isEmpty()) return emptyList()
+
+        val last = lastFired[index]
+        if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) return emptyList()
+
+        ran.add(index)
+        lastFired[index] = clock
+        if (rule.once) firedOnce.add(index)
+        log("  规则 " + (index + 1) + (if (holds) " →" else " → 否则"))
+        return follow(if (holds) rule.actions else rule.elseActions, ran)
+    }
+
+    /**
+     * Run one action list and chase the jump at the end of it, if there is one.
+     *
+     * Recursion rather than a loop with a cursor, because what a jump does is exactly "fire that
+     * rule now", and fire() is the only thing that knows how. The depth is the length of the
+     * chain, which `ran` bounds by the number of rules.
+     */
+    private fun follow(actions: List<ActionSpec>, ran: MutableSet<Int>): List<ActionSpec> {
+        val r = run(actions)
+        val out = r.actions.toMutableList()
+        if (r.jump <= 0) return out
+        val target = r.jump - 1
+        if (target !in spec.rules.indices) {
+            // The editor cannot write this, but a hand-edited file can, and a numbered jump is
+            // the one action whose mistake is silent: nothing happens and nothing says why.
+            log("    没有规则 " + r.jump + "，这次跳转没有去处")
+            return out
+        }
+        out.addAll(fire(target, spec.rules[target], ran))
         return out
     }
 
@@ -195,7 +249,7 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
      * rest of the list and ends the rule, which is what makes "hit it, then it falls over
      * a moment later" a thing somebody can write without a scripting language.
      */
-    private fun run(actions: List<ActionSpec>): List<ActionSpec> {
+    private fun run(actions: List<ActionSpec>): Ran {
         val out = mutableListOf<ActionSpec>()
         for ((i, a) in actions.withIndex()) {
             when (a.kind) {
@@ -235,12 +289,25 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
                 "wait" -> {
                     val rest = actions.drop(i + 1)
                     if (rest.isNotEmpty()) pending.add(Pending(clock + a.value, rest))
-                    return out
+                    return Ran(out, 0)
+                }
+                "goto" -> {
+                    // Hand control over, and STOP here: the actions written after a jump do not
+                    // run. 等一会儿 is the same early return, with the opposite intent -- it
+                    // queues the rest for later, a jump throws the rest away. Worth a log line,
+                    // because a list that quietly stops halfway is invisible until somebody
+                    // counts, and the number of actions that did not run is the whole surprise.
+                    val left = actions.size - i - 1
+                    log(
+                        "    跳到规则 " + a.rule +
+                            (if (left > 0) "，后面 " + left + " 个动作不跑" else "")
+                    )
+                    return Ran(out, a.rule)
                 }
                 else -> out.add(a)
             }
         }
-        return out
+        return Ran(out, 0)
     }
 
     /** A number the way the log wants to read it: no trailing ".0" on whole numbers. */
@@ -258,3 +325,15 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         private const val MAX_LOG = 60
     }
 }
+
+/**
+ * What running one action list produced.
+ *
+ * [actions] are the ones the world still has to perform. [jump] is the rule a 跳到规则 handed
+ * control to, or 0 when control stays where it is.
+ *
+ * Two values rather than a List with a marker in it, because a jump is not an action the caller
+ * can perform — it is a decision the engine has already made, and by the time the caller sees
+ * this list it has already been carried out.
+ */
+private class Ran(val actions: List<ActionSpec>, val jump: Int)

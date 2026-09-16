@@ -295,6 +295,9 @@
     <string name="logic_pick_pose">哪个动作</string>
     <string name="logic_pick_prop">哪个道具</string>
     <string name="logic_pick_burst">什么粒子</string>
+    <string name="logic_pick_rule">跳到哪条规则</string>
+    <string name="logic_rule_n">规则 %1$d</string>
+    <string name="logic_no_rules">还没有别的规则可以跳。先在上面加一条。</string>
     <string name="logic_no_poses">还没有动作。去「桌宠管理 → 摆姿势 → 存为动作」存一个。</string>
     <string name="logic_reset">恢复默认</string>
     <string name="logic_reset_confirm">丢掉你写的全部规则和数值，恢复成默认那套？</string>

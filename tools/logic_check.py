@@ -161,6 +161,9 @@ class Engine:
         self.last_fired = {}
         self.fired_once = set()
         self.pending = []
+        #: 跳到了不存在的规则号。引擎会记一条日志，这里记下来给测试断言 —— 带编号的跳转
+        #: 是唯一一种错了也不出声的动作。
+        self.no_targets = []
         self.lines = []
         self.ticks = 0
         self.TICK = 0.5
@@ -221,6 +224,12 @@ class Engine:
                 "=": abs(v - t) < 0.001}.get(op, False)
 
     def run(self, actions):
+        """跑一串动作，返回 (要世界执行的动作, 跳到第几条规则)。
+
+        jump 用 1 起数，和编辑器、日志里给用户看的号一致；0 表示控制权留在这里。
+        和 Kotlin 一样用两个值而不是往列表里塞个标记：跳转不是一个调用方能执行的动作，
+        它是引擎已经做完的决定。
+        """
         out = []
         for i, a in enumerate(actions):
             k = a.get("kind")
@@ -245,34 +254,78 @@ class Engine:
                 rest = actions[i + 1:]
                 if rest:
                     self.pending.append((self.clock + a.get("value", 0.0), rest))
-                return out
+                return out, 0
+            elif k == "goto":
+                # 交出控制权，并停在这里：写在跳转后面的动作不跑。等一会儿也是提前返回，
+                # 意图正相反 —— 它把剩下的动作排队延后，跳转把剩下的动作丢掉。
+                return out, a.get("rule", 0)
             else:
                 out.append(a)
+        return out, 0
+
+    def fire(self, index, rule, ran):
+        """点燃一条规则，并跟着它的动作走到头。
+
+        从 跳到规则 过来的规则，和被事件匹配上的规则待遇相同，只有一处例外：
+        **不检查 当 和 部位**。这就是跳转的意义 —— 如果目标还得靠同一个事件触发，
+        那跳过去就只是把规则写了两遍，而不是够得着它。
+
+        其余全部照旧，因为目标是真的在开火：它自己的 如果 决定走 就 还是 否则，
+        它自己的 冷却 和 一次 照常消耗。已经用掉 一次 的规则，不会因为被跳过去就复活。
+        """
+        # 一次事件里每条规则最多跑一次。这才让死循环成为不可能，而不只是不太可能：
+        # A → B → A 在第二个 A 停下，任何链条都被规则条数兜住，既没有跳数上限要调，也没有
+        # 会忘记设的那一个。标在「开火」时而不是「被考虑」时 —— 一条被看过又跳过的规则
+        # （条件不成立、冷却没走完）还没轮到它，而它在同一个事件里稍后完全可能成立，
+        # 因为跳过它的那条规则可能刚动过一个数值。
+        if index in ran:
+            return []
+        if index in self.fired_once:
+            return []
+
+        holds = self.holds(rule)
+        # Without an else, a rule whose conditions fail is skipped WITHOUT consuming
+        # its cooldown, so it can fire the instant they become true. That is what every
+        # rule did before there was an else, and it has to keep doing it.
+        if not holds and not rule.get("else"):
+            return []
+
+        last = self.last_fired.get(index)
+        cd = rule.get("cooldown", 0.0)
+        if cd > 0 and last is not None and self.clock - last < cd:
+            return []
+
+        ran.add(index)
+        self.last_fired[index] = self.clock
+        if rule.get("once"):
+            self.fired_once.add(index)
+        return self.follow(rule.get("then", []) if holds else rule.get("else", []), ran)
+
+    def follow(self, actions, ran):
+        """跑一串动作，并追它末尾的跳转。"""
+        out, jump = self.run(actions)
+        if jump <= 0:
+            return list(out)
+        target = jump - 1
+        if not (0 <= target < len(self.spec["rules"])):
+            # 编辑器写不出这种，但手改的文件能，而带编号的跳转是唯一一种错了也不出声的动作：
+            # 什么也不发生，也没有任何东西说为什么。
+            self.no_targets.append(jump)
+            return list(out)
+        out = list(out)
+        out.extend(self.fire(target, self.spec["rules"][target], ran))
         return out
 
     def resolve(self, event):
         out = []
+        # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
+        ran = set()
         for index, rule in enumerate(self.spec["rules"]):
             if rule.get("on") != event.get("type"):
                 continue
             if not self.touches(event, rule.get("part", "")):
                 continue
-            if index in self.fired_once:
-                continue
-            holds = self.holds(rule)
-            # Without an else, a rule whose conditions fail is skipped WITHOUT consuming
-            # its cooldown, so it can fire the instant they become true. That is what every
-            # rule did before there was an else, and it has to keep doing it.
-            if not holds and not rule.get("else"):
-                continue
-            last = self.last_fired.get(index)
-            cd = rule.get("cooldown", 0.0)
-            if cd > 0 and last is not None and self.clock - last < cd:
-                continue
-            self.last_fired[index] = self.clock
-            if rule.get("once"):
-                self.fired_once.add(index)
-            out.extend(self.run(rule.get("then", []) if holds else rule.get("else", [])))
+            out.extend(self.fire(index, rule, ran))
         return out
 
     def handle(self, etype, part="", value=0.0, prop=""):
@@ -297,7 +350,9 @@ class Engine:
         if due:
             self.pending = [p for p in self.pending if p[0] > self.clock]
             for _, acts in due:
-                out.extend(self.run(acts))
+                # 每条到期的续跑是它自己的一次结算，所以给它自己的 ran：最多跑一次的闸门
+                # 是按事件算的，不是按一辈子 —— 「一次」才是按一辈子。
+                out.extend(self.follow(acts, set()))
         self.tick_accum += dt
         if self.tick_accum >= self.TICK:
             self.tick_accum = 0.0
@@ -779,6 +834,106 @@ def main():
     report("but yes at 0.5s", e.ticks == 2, str(e.ticks))
     e.step(2.0)
     report("a two-second frame is one tick, not four", e.ticks == 3, str(e.ticks))
+
+    print("\n跳到规则：控制权可以交给另一条规则")
+    jump = Engine({
+        "stats": [],
+        "rules": [
+            {"on": "click", "then": [
+                {"kind": "say", "text": "A"},
+                {"kind": "goto", "rule": 2},
+                {"kind": "say", "text": "写在后头的不跑"},
+            ]},
+            # 当 是 tick：跳转要够得着它，靠的正是「不检查当和部位」。
+            {"on": "tick", "then": [{"kind": "say", "text": "B"}]},
+        ],
+    })
+    got = says(jump.handle("click"))
+    report("a jump reaches a rule the event did NOT match", got == ["A", "B"], str(got))
+    report("and the actions written after the jump do not run",
+           "写在后头的不跑" not in got)
+
+    cond = Engine({
+        "stats": [{"id": "X", "name": "X", "value": 0, "min": 0, "max": 100}],
+        "rules": [
+            {"on": "click", "then": [{"kind": "goto", "rule": 2}]},
+            {"on": "tick", "if": [{"kind": "stat", "stat": "X", "op": ">=", "value": 80}],
+             "then": [{"kind": "say", "text": "就"}],
+             "else": [{"kind": "say", "text": "否则"}]},
+        ],
+    })
+    report("the target's own 如果 still picks the branch",
+           says(cond.handle("click")) == ["否则"])
+    cond.set("X", 90)
+    report("and the other branch once it holds", says(cond.handle("click")) == ["就"])
+
+    cd = Engine({
+        "stats": [],
+        "rules": [
+            {"on": "click", "then": [{"kind": "goto", "rule": 2}]},
+            {"on": "tick", "cooldown": 5.0, "then": [{"kind": "say", "text": "B"}]},
+        ],
+    })
+    report("jumping to a rule spends its 冷却", says(cd.handle("click")) == ["B"])
+    report("so a second jump inside the cooldown does nothing",
+           says(cd.handle("click")) == [])
+
+    spent = Engine({
+        "stats": [],
+        "rules": [
+            {"on": "click", "then": [{"kind": "goto", "rule": 2}]},
+            {"on": "tick", "once": True, "then": [{"kind": "say", "text": "B"}]},
+        ],
+    })
+    first = says(spent.handle("click"))
+    report("a rule that has already had its 一次 is not brought back by a jump",
+           first == ["B"] and says(spent.handle("click")) == [], str(first))
+
+    loop = Engine({
+        "stats": [],
+        "rules": [
+            {"on": "click", "then": [{"kind": "say", "text": "A"}, {"kind": "goto", "rule": 2}]},
+            {"on": "click", "then": [{"kind": "say", "text": "B"}, {"kind": "goto", "rule": 1}]},
+        ],
+    })
+    got = says(loop.handle("click"))
+    report("A → B → A stops instead of spinning", got == ["A", "B"], str(got))
+
+    itself = Engine({
+        "stats": [],
+        "rules": [{"on": "click", "then": [
+            {"kind": "say", "text": "A"}, {"kind": "goto", "rule": 1},
+        ]}],
+    })
+    report("a rule that jumps to itself fires once", says(itself.handle("click")) == ["A"])
+
+    gone = Engine({
+        "stats": [],
+        "rules": [{"on": "click", "then": [
+            {"kind": "say", "text": "A"}, {"kind": "goto", "rule": 99},
+        ]}],
+    })
+    report("a jump to a rule that is not there does not blow up",
+           says(gone.handle("click")) == ["A"])
+    report("and it is reported rather than silently dropped",
+           gone.no_targets == [99], str(gone.no_targets))
+
+    # 这条是「标在开火时、不是标在被考虑时」的理由本身：规则 1 跳到规则 4，规则 4 那时
+    # 条件不成立、被跳过；规则 2 随后把 X 推到 90，于是轮到规则 4 自然走到时它成立了。
+    # 如果被跳过的规则也记进 ran，这里就会一声不响地少说一句。
+    late = Engine({
+        "stats": [{"id": "X", "name": "X", "value": 50, "min": 0, "max": 100}],
+        "rules": [
+            {"on": "click", "then": [{"kind": "goto", "rule": 4}]},
+            {"on": "click", "then": [{"kind": "set", "stat": "X", "value": 90.0}]},
+            {"on": "tick", "then": []},
+            {"on": "click", "if": [{"kind": "stat", "stat": "X", "op": ">=", "value": 80}],
+             "then": [{"kind": "say", "text": "high"}]},
+        ],
+    })
+    got = says(late.handle("click"))
+    report("a rule that was jumped to and SKIPPED can still fire later in the same event",
+           got == ["high"], str(got))
 
     print("")
     if FAILURES:

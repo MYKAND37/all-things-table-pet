@@ -4280,6 +4280,25 @@ class MainActivity : AppCompatActivity() {
                 "seconds" -> askNumber(getString(R.string.logic_pick_value), existing?.value ?: 0.5f, 0f, 30f) { v ->
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, value = v))
                 }
+                // 跳到规则：目标就是上面那张表的第几条。自己不在选项里——一条规则跳到它自己
+                // 身上什么也不会发生（引擎一次事件里每条规则最多跑一次），给了只会让人以为是坏的。
+                // 标签带上目标那一条的「当」，因为挑的时候真正在想的是"那条是干嘛的"。
+                "rule" -> pickList(
+                    getString(R.string.logic_pick_rule),
+                    logicRules.indices.filter { it != index }.map {
+                        (it + 1).toString() to
+                            getString(R.string.logic_rule_n, it + 1) +
+                            " · " + EventType.of(logicRules[it].on).label
+                    },
+                    getString(R.string.logic_no_rules),
+                    existing?.rule?.takeIf { it > 0 }?.toString(),
+                ) { picked ->
+                    putAction(
+                        index, actionIndex, isElse,
+                        ActionSpec(kind.id, rule = picked.toIntOrNull() ?: 0),
+                    )
+                    true
+                }
                 // Pushing a prop: which one, how hard, and which way. The prop is named in
                 // the action rather than taken from the rule's subject, because "the pet
                 // kicks the ball" is a rule about the pet.
