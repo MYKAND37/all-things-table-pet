@@ -25,6 +25,8 @@ A key read by only one side FAILS unless it is listed in ALIASES below with a re
 Legitimately one-sided things are named there; anything else is drift until somebody says
 otherwise in writing.
 """
+import copy
+import json
 import os
 import re
 import sys
@@ -33,6 +35,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/physics/Ragdoll.kt")
 PY = os.path.join(HERE, "ragdoll.py")
+CHARACTER = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
+sys.path.insert(0, HERE)
+from ragdoll import Ragdoll  # noqa: E402
+from skeleton_tool import bake  # noqa: E402
 
 #: Keys one side reads and the other does not, with the reason. Every entry is a claim that
 #: the two are the same thing under different names, or that one side genuinely has no use
@@ -98,6 +104,35 @@ def main():
     report("and so does the reference",
            re.search(r'wall_right\s*=\s*float\(physics\.get\("worldWidth"', py_src) is not None,
            "canvas width is not the room width: the app has no wall there")
+
+    # AND THE VALUE, because the two reports above are text patterns and the line that was
+    # wrong matched them anyway. Verified by putting the old line back:
+    #
+    #     self.wall_right = float(physics.get("worldWidth", spec["canvas"]["width"]))
+    #
+    # -- the fallback that silently returns the artwork's 1024 the moment a spec stops stating
+    # its worldWidth -- and running this file: still GREEN. The alias above is satisfied (the
+    # reference does read "canvas", and that is a name for the room's width) and the pattern
+    # still matches, so the one path that actually matters is the one nothing here reads.
+    #
+    # It matters because the shipped file DOES state its width, so the fallback never runs in
+    # the suite: a reference that quietly walls the pet at the artwork's edge during the one
+    # drag a character package forgets to size would pass every test in this repo. Read the
+    # number instead, with the key and without it.
+    spec = json.load(open(sys.argv[1] if len(sys.argv) > 1 else CHARACTER, encoding="utf-8"))
+    app_width = float(spec["physics"].get("worldWidth",
+                                          float(spec["canvas"]["width"]) * 3.0))
+    silent = copy.deepcopy(spec)
+    silent["physics"].pop("worldWidth", None)
+    walls = []
+    for label, source in (("the file says", spec), ("the file is silent", silent)):
+        s = copy.deepcopy(source)
+        by_name, order = bake(s["bones"])
+        walls.append((label, float(Ragdoll(s, by_name, order, stiffness=0.0).wall_right)))
+    report("the wall the reference builds is the app's room either way",
+           all(abs(w - app_width) < 1e-9 for _, w in walls),
+           "; ".join("%s %.0f px" % (label, w) for label, w in walls)
+           + " (app %.0f, artwork %.0f)" % (app_width, spec["canvas"]["width"]))
 
     print("")
     if FAILURES:
