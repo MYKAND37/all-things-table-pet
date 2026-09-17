@@ -19,5 +19,22 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            导出诊断 的 CSV 在 getExternalFilesDir(null)/diag/ 下，那是本 App 的私有目录：
+            别的 App 拿不到 file:// 的路径（现代 Android 直接抛 FileUriExposedException），
+            所以只能由 FileProvider 发一个带临时读权限的 content:// URI 出去。authorities 用
+            ${applicationId} 而不是写死包名，debug 带后缀时两边才会一致；file_paths.xml 只
+            放出 diag/ 一个子目录，而不是整个外部私有目录。
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

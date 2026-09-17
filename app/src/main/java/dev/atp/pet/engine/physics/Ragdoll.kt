@@ -271,8 +271,14 @@ class Ragdoll(
      *
      * The bone's own rotation carries it, so the grip stays where it was taken as the limb
      * turns under it -- which is what holding a limb means.
+     *
+     * Not private, and not reimplemented by the bench that also wants it: the diagnostic
+     * recorder writes this point into the CSV beside the finger that is pulling it, and
+     * those two are only comparable if this is the SAME point the pin solver aims at. A
+     * second copy of the two lines below in the view would be a second opinion about the
+     * exact thing being diagnosed. Reads only -- see PhysicsSandboxView.recordFrame.
      */
-    private fun gripPoint(bone: Bone, offset: Float): Vec2 {
+    fun gripPoint(bone: Bone, offset: Float): Vec2 {
         if (offset == 0f) return bone.worldPosition
         val a = bone.worldRotation
         return Vec2(
@@ -884,6 +890,16 @@ class Ragdoll(
         }
         return hangingNow
     }
+
+    /**
+     * Whether the last step decided the figure is hanging off the finger.
+     *
+     * Read-only, and read from outside by exactly one thing: the bench's diagnostic recorder,
+     * which prints it per frame. It is exposed rather than re-derived because the state lives
+     * in the hysteresis above -- a view that recomputed "is it hanging" from the root angle
+     * would be a second threshold, and the whole point of [hanging] is that there is one.
+     */
+    val isHanging: Boolean get() = hangingNow
 
     private fun lowLimit(bone: Bone): Float =
         if (bone.parent == null && pinned) -FULL_TURN else bone.minAngle

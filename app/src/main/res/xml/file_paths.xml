@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+     FileProvider 放出去的东西。只有一条，而且只放一个子目录：
+     getExternalFilesDir(null)/diag/ 是导出诊断 CSV 的家（见 PhysicsSandboxView 的
+     DIAG_DIR），不是整个外部私有目录 —— 那里还有角色的图，而分享一个诊断文件不该顺手
+     把别的东西也发出去。path 带结尾的斜杠，免得 diag 之外名字以 diag 开头的目录也被算进来。
+-->
+<paths>
+    <external-files-path name="diag" path="diag/" />
+</paths>

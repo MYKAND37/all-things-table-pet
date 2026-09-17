@@ -41,6 +41,9 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.pow
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * The test bench: where a character actually runs.
@@ -241,6 +244,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
         color = 0xFFF4F2FB.toInt()
         typeface = Typeface.MONOSPACE
     }
+    /**
+     * The path line under the two buttons: smaller than the readouts and monospaced.
+     *
+     * Monospaced because it is broken at slashes to fit, and a proportional font would make
+     * the break points move with the digits. Small because getExternalFilesDir is long.
+     */
+    private val tunePath = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 8f * density
+        color = 0x88FFFFFF.toInt()
+        typeface = Typeface.MONOSPACE
+    }
     private val tunePad = 12f * density
 
     /**
@@ -253,6 +267,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val culpritStrip = 42f * density
 
     var onInfo: ((String) -> Unit)? = null
+
+    /**
+     * Hand a finished CSV to the activity, which owns the share sheet. See MainActivity.
+     *
+     * A callback rather than an Intent built here because this view has no Activity of its
+     * own to start one from, and because the file is the only thing the bench knows about:
+     * whether it goes to a mail app, a chat or a cable is not a question about physics.
+     */
+    var onShareFile: ((File) -> Unit)? = null
+
+    /** The 导出诊断 recorder: one row per frame, and the file the share button sends. */
+    private val diag = DragDiagRecorder()
 
     /** 0 = limp ragdoll, 1 = holds a pose. Changing it takes effect immediately. */
     var stiffness: Float = 0f
@@ -990,8 +1016,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         stepMsHead = (stepMsHead + 1) % STEP_SAMPLES
         stepsPerFrame++
         // Straight after the step, so that what the tuning panel shows is where the held
-        // joint ENDED UP this frame. See measureJitter.
-        measureJitter(rag, watched)
+        // joint ENDED UP this frame. See measureJitter. It hands back that same signed turn,
+        // which is the one number on the row below that cannot be read off the ragdoll.
+        val turn = measureJitter(rag, watched)
+        // And the frame into the file, when somebody asked for the file. Read-only in both
+        // directions: every value it writes was already computed for the panel, and the
+        // panel's numbers are the same numbers whether or not anything is recording.
+        recordFrame(dt, s, rag, sk, turn)
 
         world?.let { w ->
             val hits = w.step(
@@ -1706,14 +1737,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * name is handed in rather than looked up here, because it is also the name the probe
      * was armed with: the split and the whole turn below are two readings of one joint, and
      * the four phases adding up to the turn is the only thing that makes them comparable.
+     *
+     * It RETURNS that turn, or NaN when there is no turn to report -- no bone in the hand, or
+     * no frame before this one to difference against -- and the reason is the recorder: the
+     * CSV has to carry the same signed turn the panel's headline number is taken from. A
+     * second copy of this subtraction down there would be a second reading of the joint, and
+     * the one thing this panel has ever proved is that two readings of a shaking thing are
+     * two different numbers.
      */
-    private fun measureJitter(rag: Ragdoll, name: String?) {
+    private fun measureJitter(rag: Ragdoll, name: String?): Float {
         val bone = name?.let { skeleton?.find(it) }
         if (bone == null) {
             // Nothing in the hand. The window is dropped rather than left standing: a stale
             // two seconds would sit there looking like a reading of the next drag.
             forgetJitter()
-            return
+            return Float.NaN
         }
         if (jitterBone != bone.name) {
             forgetJitter()
@@ -1725,7 +1763,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             // window as a step the size of the grab itself.
             jitterHasPrev = true
             jitterPrev = bone.rotation
-            return
+            return Float.NaN
         }
         val turn = bone.rotation - jitterPrev
         jitterPrev = bone.rotation
@@ -1742,7 +1780,110 @@ class PhysicsSandboxView @JvmOverloads constructor(
         jitterHead = (jitterHead + 1) % JITTER_SAMPLES
         if (jitterCount < JITTER_SAMPLES) jitterCount++
         summariseJitter()
+        return turn
     }
+
+    // -- the raw record -----------------------------------------------------
+
+    /**
+     * One CSV row for the frame that just ran, when somebody has the recorder open.
+     *
+     * This is the whole of the feature and it is deliberately dumb: every value it writes was
+     * already computed this frame for the panel above, and it is written in the units the
+     * argument is had in -- degrees for angles, ms for time, px for positions -- because the
+     * file is going to be read by a person before it is read by a script.
+     *
+     * The COLUMNS, in the order DIAG_HEADER names them and this function appends them:
+     *
+     *   frame               rows written since the recording started, plus one
+     *   t                   seconds of physics inside this recording, at the frame's start
+     *   dt_ms               the delta the step was actually given, ms (see stepMs)
+     *   steps_this_frame    how many times it was stepped for this frame (see stepsPerFrame)
+     *   target_x/y          where the finger is, world px
+     *   grip_x/y            where the point the finger took hold of ended up, world px
+     *   pin_bone            which bone that is, or empty when nothing is held
+     *   held_offset         how far along the bone the finger landed, px
+     *   turn_total_deg      the held joint's net turn this frame, signed (measureJitter)
+     *   integ/ground/pins/carry_deg
+     *                       the four phase contributions to that same turn, signed
+     *   max_ik_rate, pin_joint_gain
+     *                       the two constants the solver ran with, both live-adjustable
+     *   stiffness, gravity_scale
+     *                       what the integrator ran with
+     *   bones_touching_floor
+     *                       how many solid bones' colliders are under the floor line
+     *   hanging             whether the step treated the figure as hanging off the finger
+     *
+     * SIGNED is the point of the four phase columns and of turn_total_deg. A joint that takes
+     * +5 degrees and then -5 has travelled ten and gone nowhere, and the whole reason this
+     * file exists is to find out which of the four is doing the reversing. An absolute value
+     * here would make the culprit look exactly like a smooth drag of the same size.
+     *
+     * Empty cells mean "there was no such thing this frame": nothing was held, or the frame
+     * was the first of a grab and had nothing before it to turn away from. Zero would be a
+     * claim, and a false one.
+     */
+    private fun recordFrame(dt: Float, s: CharacterSpec, rag: Ragdoll, sk: Skeleton, turn: Float) {
+        if (!diag.active) return
+        val held = heldBones.entries.firstOrNull()
+        val bone = held?.let { sk.find(it.value) }
+        val offset = held?.let { heldOffsets[it.key] } ?: 0f
+        val target = held?.let { heldTargets[it.key] }
+        val grip = if (bone == null) null else rag.gripPoint(bone, offset)
+        var low = 0
+        for (b in sk.bones) {
+            if (rag.isSolid(b.name) && rag.colliderLow(b) > s.floorY) low++
+        }
+        val row = StringBuilder(192)
+        row.append(diag.rows + 1).append(',')
+        row.append(plain(diag.seconds)).append(',')
+        row.append(plain(dt * 1000f)).append(',')
+        row.append(stepsPerFrame).append(',')
+        row.append(target?.let { fixed(it.x, 3) }.orEmpty()).append(',')
+        row.append(target?.let { fixed(it.y, 3) }.orEmpty()).append(',')
+        row.append(grip?.let { fixed(it.x, 3) }.orEmpty()).append(',')
+        row.append(grip?.let { fixed(it.y, 3) }.orEmpty()).append(',')
+        row.append(bone?.name.orEmpty()).append(',')
+        row.append(if (bone == null) "" else fixed(offset, 3)).append(',')
+        row.append(degrees(turn)).append(',')
+        for (p in 0 until PHASE_COUNT) row.append(degrees(phaseNow[p])).append(',')
+        row.append(fixed(Ragdoll.MAX_IK_RATE, 3)).append(',')
+        row.append(fixed(Ragdoll.PIN_JOINT_GAIN, 3)).append(',')
+        row.append(fixed(rag.stiffness, 4)).append(',')
+        row.append(fixed(rag.gravityScale, 3)).append(',')
+        row.append(low).append(',')
+        row.append(if (rag.isHanging) 1 else 0)
+        diag.row(row.toString(), dt)
+        // One message, on the frame it happens, and never again: the recording is closed by
+        // then, so the next frame returns at the top of this function.
+        if (!diag.active) {
+            onInfo?.invoke(
+                context.getString(
+                    if (diag.full) R.string.sandbox_tune_diag_full
+                    else R.string.sandbox_tune_diag_write_failed,
+                    diag.rows,
+                )
+            )
+        }
+    }
+
+    /**
+     * One CSV number, in Locale.US and never the phone's own locale.
+     *
+     * A German or French phone writes "8,5944", and a comma inside a field is the one thing a
+     * comma-separated file cannot survive: the file would open with twice as many columns as
+     * its own header. The panel is allowed to print a decimal comma, and does; this is not
+     * the panel.
+     */
+    private fun fixed(v: Float, digits: Int): String =
+        String.format(Locale.US, "%.${digits}f", v)
+
+    /** The one value that is not a measurement: a time, and three digits is well past enough. */
+    private fun plain(v: Float): String = String.format(Locale.US, "%.3f", v)
+
+    /** Radians in, degrees out, signed, and empty when there was no reading. See recordFrame. */
+    private fun degrees(rad: Float): String =
+        if (rad.isNaN()) "" else String.format(Locale.US, "%.4f", Math.toDegrees(rad.toDouble()))
 
     private fun forgetJitter() {
         jitterBone = null
@@ -1865,6 +2006,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * slider to 12 above the box's bottom edge, then the rate limit: its row at 316 with the
      * switch that turns it off, its slider at 342, and its ends named at 364.
      *
+     * [TUNE_PANEL_H] then grew a footer for the raw record, and it is a footer rather than
+     * another tab because it is used WITH the numbers above it: 开始记录 / 分享 sit on a pill
+     * row at 375, and the file's path starts at 417 on 12dp lines, at most [DIAG_PATH_LINES]
+     * of them, with the row count on the line after the last one. That last line is why the
+     * box is [TUNE_PANEL_H] tall and not 12dp less.
+     *
      * Laid out by hand because it is drawn by hand, and one place to read the rhythm from is
      * the next best thing to not having the numbers at all: every offset below is this list,
      * and a block that grows moves the ones under it with it.
@@ -1918,6 +2065,140 @@ class PhysicsSandboxView @JvmOverloads constructor(
             box.right - tunePad - 76f * density, box.top + 295f * density,
             box.right - tunePad, box.top + 321f * density,
         )
+    }
+
+    /**
+     * 开始记录 / 停止并导出, on its own row under the rate slider.
+     *
+     * The same 26dp pill as 关掉限速 and in the same corner, because it is the same kind of
+     * control: one press, one thing, and the label says which thing it will be. It is not a
+     * real Switch widget -- this panel has no widgets at all -- so the wording carries the
+     * whole state.
+     */
+    private fun tuneDiagSwitch(): RectF {
+        val box = tunePanel()
+        val w = diagButtonW()
+        return RectF(
+            box.right - tunePad - w, box.top + 375f * density,
+            box.right - tunePad, box.top + 401f * density,
+        )
+    }
+
+    /**
+     * 分享, beside it: the second half of the feature, and the one that actually gets the
+     * file off the phone. See MainActivity.shareFile.
+     */
+    private fun tuneDiagShare(): RectF {
+        val s = tuneDiagSwitch()
+        return RectF(s.left - 8f * density - s.width(), s.top, s.left - 8f * density, s.bottom)
+    }
+
+    /**
+     * How wide each of the two buttons is: 76dp, or half the panel when the rail has eaten
+     * into it. They are measured from the box rather than fixed, so that two buttons on one
+     * row cannot overlap each other on the narrowest bench this panel can end up on.
+     */
+    private fun diagButtonW(): Float =
+        min(76f * density, (tunePanel().width() - tunePad * 2f - 8f * density) / 2f)
+
+    /**
+     * The file's path, broken into lines that fit the panel width.
+     *
+     * In full and not shortened to a file name, because it is also what the user copies down
+     * when the share sheet has nothing to share with -- and broken at SLASHES, because a path
+     * cut mid-name reads as a different path. The text shrinks if it has to: the block has
+     * room for DIAG_PATH_LINES lines, and a device with a longer storage path than the one
+     * this was written on must not be the device that cannot see its own file.
+     */
+    private fun diagPathLines(path: String, width: Float): List<String> {
+        val base = tunePath.textSize
+        var lines = wrapPath(path, width)
+        while (lines.size > DIAG_PATH_LINES && tunePath.textSize > 5f * density) {
+            tunePath.textSize *= 0.85f
+            lines = wrapPath(path, width)
+        }
+        tunePath.textSize = base
+        return lines
+    }
+
+    /** One greedy pass of [diagPathLines], at whatever size the path paint is right now. */
+    private fun wrapPath(path: String, width: Float): List<String> {
+        val out = mutableListOf<String>()
+        var i = 0
+        while (i < path.length) {
+            var end = i
+            var slash = -1
+            while (end < path.length && tunePath.measureText(path, i, end + 1) <= width) {
+                if (path[end] == '/') slash = end + 1
+                end++
+            }
+            if (end >= path.length) {
+                out.add(path.substring(i))
+                break
+            }
+            val cut = if (slash > i) slash else end
+            out.add(path.substring(i, cut))
+            // A single character wider than the whole panel: nothing left to do but stop
+            // rather than spin. The rest of the path goes on this line and overflows.
+            if (cut <= i) {
+                out.add(path.substring(i))
+                break
+            }
+            i = cut
+        }
+        return out
+    }
+
+    /**
+     * Start the record, or stop it and hand the file straight to the share sheet.
+     *
+     * The switch's own label is the promise it keeps -- 停止并导出 does both -- and 分享 stays
+     * on the panel for afterwards: a share sheet that was dismissed, an app that was not
+     * installed yet, and a file that is still there all want the second press.
+     */
+    private fun toggleDiagnostics() {
+        if (diag.active) {
+            stopDiagnostics(share = true)
+            return
+        }
+        val base = context.getExternalFilesDir(null)
+        if (base == null) {
+            onInfo?.invoke(context.getString(R.string.sandbox_tune_diag_failed))
+            return
+        }
+        val name = DIAG_PREFIX + SimpleDateFormat(DIAG_STAMP, Locale.US).format(Date()) + ".csv"
+        if (!diag.start(File(base, DIAG_DIR), name, DIAG_HEADER)) {
+            onInfo?.invoke(context.getString(R.string.sandbox_tune_diag_failed))
+            return
+        }
+        onInfo?.invoke(context.getString(R.string.sandbox_tune_diag_started, name))
+        invalidate()
+    }
+
+    /** Stop writing. The file stays where it is whether or not anyone shares it. */
+    private fun stopDiagnostics(share: Boolean) {
+        if (!diag.active) return
+        diag.stop()
+        onInfo?.invoke(context.getString(R.string.sandbox_tune_diag_saved, diag.rows))
+        val f = diag.file
+        if (share && f != null && diag.rows > 0) onShareFile?.invoke(f)
+        invalidate()
+    }
+
+    /**
+     * Send the last recording somewhere the user can reach it.
+     *
+     * The panel prints the path for the same reason this can fail: the file is in this app's
+     * private directory on the shared card, which is not a place a file manager will show
+     * them, so "it did not work" has to leave them with something to write down.
+     */
+    private fun shareDiagnostics() {
+        val f = diag.file
+        if (f == null || diag.rows == 0) {
+            onInfo?.invoke(context.getString(R.string.sandbox_tune_diag_none))
+            return
+        }
+        onShareFile?.invoke(f)
     }
 
     /**
@@ -2214,6 +2495,77 @@ class PhysicsSandboxView @JvmOverloads constructor(
             canvas, tuneRateSlider(), rateToSlider(Ragdoll.MAX_IK_RATE),
             TUNE_RATE_MIN.toString(), TUNE_RATE_MAX.toString(),
         )
+
+        // ── 导出诊断: the raw record, and the two things that get it off the phone ──
+        //
+        // Everything above this line is a summary, and summaries are what has already failed
+        // to find this bug twice: 17-39% in the Python reference, 100% in a real hand, and no
+        // percentage can say what the difference between the two is. The frames themselves
+        // can, so this block writes them to a file and then gets the file out of the app's
+        // private directory -- the pressing half of the feature, because a CSV nothing can
+        // open is a CSV that was never recorded.
+        val sw = tuneDiagSwitch()
+        val sh = tuneDiagShare()
+        val canShare = diag.file != null && diag.rows > 0
+        tunePaint.color = if (diag.active) 0x33FF8A8A.toInt() else 0x26FFFFFF
+        canvas.drawRoundRect(sw, sw.height() / 2f, sw.height() / 2f, tunePaint)
+        tunePaint.color = if (canShare) 0x26FFFFFF else 0x14FFFFFF
+        canvas.drawRoundRect(sh, sh.height() / 2f, sh.height() / 2f, tunePaint)
+        tuneText.textAlign = Paint.Align.CENTER
+        tuneText.color = if (diag.active) 0xFFFF8A8A.toInt() else 0xFF8FA8FF.toInt()
+        canvas.drawText(
+            context.getString(
+                if (diag.active) R.string.sandbox_tune_diag_stop
+                else R.string.sandbox_tune_diag_start
+            ),
+            sw.centerX(), sw.centerY() + 4f * density, tuneText,
+        )
+        tuneText.color = if (canShare) 0xFF8FA8FF.toInt() else 0x55FFFFFF
+        canvas.drawText(
+            context.getString(R.string.sandbox_tune_diag_share),
+            sh.centerX(), sh.centerY() + 4f * density, tuneText,
+        )
+        tuneText.textAlign = Paint.Align.LEFT
+        // The label is dropped rather than overlapped when the rail has left the panel too
+        // narrow for it: it names the block, and a block name printed on top of its own
+        // button is worse than no name at all.
+        val diagLabel = context.getString(R.string.sandbox_tune_diag)
+        if (sh.left - (box.left + tunePad) > tuneText.measureText(diagLabel) + 6f * density) {
+            tuneText.color = 0x66FFFFFF
+            canvas.drawText(diagLabel, box.left + tunePad, sw.centerY() + 4f * density, tuneText)
+        }
+
+        // The file's full path, and how much is in it. Not decoration: it is the fallback
+        // the whole feature needs, because the share sheet is another app's screen and this
+        // is the only line on the phone that says where the data actually is.
+        val saved = diag.file
+        var pathY = box.top + DIAG_PATH_TOP * density
+        if (saved == null) {
+            tuneText.color = 0x66FFFFFF
+            canvas.drawText(
+                context.getString(R.string.sandbox_tune_diag_hint),
+                box.left + tunePad, pathY, tuneText,
+            )
+        } else {
+            tunePath.color = 0x88FFFFFF.toInt()
+            for (line in diagPathLines(saved.absolutePath, box.width() - tunePad * 2f)) {
+                canvas.drawText(line, box.left + tunePad, pathY, tunePath)
+                pathY += DIAG_LINE_H * density
+            }
+            // Red for both ways this recording has ended by itself -- the cap and a write
+            // that failed -- because in both of them the number is final and the user did
+            // not ask for it to be.
+            tuneText.color =
+                if (diag.full || diag.failed) 0xFFFF8A8A.toInt() else 0x99FFFFFF.toInt()
+            canvas.drawText(
+                context.getString(
+                    if (diag.full) R.string.sandbox_tune_diag_rows_full
+                    else R.string.sandbox_tune_diag_rows,
+                    diag.rows,
+                ),
+                box.left + tunePad, pathY, tuneText,
+            )
+        }
     }
 
     /**
@@ -2282,6 +2634,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 invalidate()
             }
             tuneRateOff().contains(x, y) -> toggleRateLimit()
+            // The recorder's two, also on the press: starting a record has to happen on the
+            // frame the finger meant it, and stopping it and opening a share sheet is a
+            // thing the user is waiting for rather than dragging.
+            tuneDiagSwitch().contains(x, y) -> toggleDiagnostics()
+            tuneDiagShare().contains(x, y) -> shareDiagnostics()
         }
         return true
     }
@@ -2600,7 +2957,40 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val TUNE_RATE_OFF = 1.0e6f
 
         /** How tall the panel is, so that [tuneTop] can tell whether it fits. See tunePanel. */
-        private const val TUNE_PANEL_H = 376f
+        private const val TUNE_PANEL_H = 465f
+
+        /**
+         * The raw record's own block, in dp below the panel's top. See the drawing in
+         * [drawTune] and the geometry in [tuneDiagSwitch] and [diagPathLines].
+         *
+         * The path gets [DIAG_PATH_LINES] lines of 12dp at 8dp monospaced, which is two
+         * lines for the length getExternalFilesDir actually returns on a phone and three for
+         * the narrowest bench this panel fits on. It shrinks rather than runs over: this is
+         * the line the user reads the file's location off, so it has to be all there.
+         */
+        private const val DIAG_PATH_TOP = 417f
+        private const val DIAG_LINE_H = 12f
+        private const val DIAG_PATH_LINES = 3
+
+        /** Where the CSVs go: getExternalFilesDir(null), then this. See DragDiagRecorder. */
+        private const val DIAG_DIR = "diag"
+        private const val DIAG_PREFIX = "drag-"
+
+        /** A name that sorts by time and cannot collide with the next recording. */
+        private const val DIAG_STAMP = "yyyyMMdd-HHmmss"
+
+        /**
+         * The columns, in the order [recordFrame] appends them.
+         *
+         * One line, and one place: a header written from a second list of names is a file
+         * whose columns mean what the header says only until somebody adds one to the row.
+         * The names carry their own units, because the first thing anyone does with this file
+         * is open the first ten lines of it and look.
+         */
+        private const val DIAG_HEADER =
+            "frame,t,dt_ms,steps_this_frame,target_x,target_y,grip_x,grip_y,pin_bone," +
+                "held_offset,turn_total_deg,integ_deg,ground_deg,pins_deg,carry_deg," +
+                "max_ik_rate,pin_joint_gain,stiffness,gravity_scale,bones_touching_floor,hanging"
 
         /** What the panel's finger is on: the gain slider, the rate slider, or a switch. */
         private const val TUNE_DRAG_NONE = 0

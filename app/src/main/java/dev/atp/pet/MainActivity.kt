@@ -1,6 +1,8 @@
 package dev.atp.pet
 
 import android.app.AlertDialog
+import android.content.ActivityNotFoundException
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
@@ -17,6 +19,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.FileProvider
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.Settings
 import dev.atp.pet.data.SettingsStore
@@ -264,6 +267,10 @@ class MainActivity : AppCompatActivity() {
 
         skeletonView.onInfo = { statusLine.text = it }
         sandboxView.onInfo = { statusLine.text = it }
+        // The bench records the drag frames itself; getting the file off the phone is this
+        // activity's job, because a share sheet is started from an Activity and not from a
+        // View. See shareFile.
+        sandboxView.onShareFile = { shareFile(it) }
 
         // ── 这份清单就是「哪些项能点」。列进来的才会挂上 setOnClickListener，也只有它们
         //    才走得到 select()。布局里多一项、这里少一项，就是一个点了没反应的按钮 ——
@@ -445,6 +452,41 @@ class MainActivity : AppCompatActivity() {
     }
 
     // ── 测试场 ──────────────────────────────────────────────────────────────
+
+    /**
+     * Hand one of the bench's diagnostic files to whatever the user wants to send it with.
+     *
+     * The 导出诊断 recorder writes its CSV under getExternalFilesDir, which since Android 11
+     * is a shelf no file manager will show and MTP exposes only sometimes: writing the file
+     * is not the same as getting it, and this is the half that gets it. The URI has to come
+     * from the FileProvider declared in the manifest -- a file:// URI is a
+     * FileUriExposedException on anything modern -- and the read grant is per-URI, which is
+     * what lets the receiving app open a file it has no permission to see.
+     *
+     * Every failure ends in the same place on purpose: the panel prints the full path beside
+     * the button, so the answer to "it did not work" is a path the user can still act on.
+     */
+    private fun shareFile(file: File) {
+        val uri = try {
+            FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+        } catch (e: IllegalArgumentException) {
+            // Not under the provider's <external-files-path>, so there is nothing to hand out.
+            Toast.makeText(this, R.string.sandbox_tune_share_failed, Toast.LENGTH_LONG).show()
+            return
+        }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/csv"
+            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_SUBJECT, file.name)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(Intent.createChooser(send, getString(R.string.sandbox_tune_share_title)))
+        } catch (e: ActivityNotFoundException) {
+            // A phone with no app that takes a file at all. Rare, and it still has the path.
+            Toast.makeText(this, R.string.sandbox_tune_share_failed, Toast.LENGTH_LONG).show()
+        }
+    }
 
     /** The states a bone can have a drawing for: the character's own, and the part's own. */
     private fun partsStates(folder: CharacterFolder, bone: String): List<StateSpec> =
