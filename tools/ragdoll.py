@@ -443,17 +443,19 @@ class Ragdoll:
         slow = abs(self.root_vel[0]) < 30.0 and abs(self.root_vel[1]) < 30.0
         span = (max(self.collider_low(b) for b in self.order)
                 - min(b.wpos[1] for b in self.order))
-        # Not while the figure is HANGING: the feedback here is strong enough that firing it
-        # mid-hang throws the figure out of the pose entirely, and a body dangling from a
-        # finger has already fallen as far as it is going to.
+        # Deliberately not while a finger is holding the figure AT ALL: "a limp body that has
+        # come to rest standing up should fall over" is a statement about a body standing on
+        # its own. One that is being carried is not standing, and this feedback is strong
+        # enough that firing it mid-hang throws the figure out of the pose entirely.
         #
-        # It IS allowed while a finger holds a figure that is still on its feet, and that is
-        # the whole reason lifting an ankle is reliable rather than a coin toss. A limp body
-        # held up by one ankle and still standing on the other is balanced on a support
-        # polygon: correct physics, and a genuine equilibrium, so whether it topples depends
-        # on which way the noise happened to nudge it. A real ragdoll has no balance to lose.
+        # This is `!pinned`, which is what Ragdoll.kt has always said. The reference had
+        # drifted to `not hanging()` -- a DIFFERENT condition, and a weaker one: it let the
+        # feedback run while a finger held a figure that was still on its feet. Every
+        # measurement taken through this file was therefore taken on a system with one more
+        # strong feedback term than the app has. mirror_check cannot see this: it compares
+        # constants, and a condition is not a constant.
         giving = (self.figure_stiffness < 0.25 and self.grounded and slow
-                  and not self.hanging()
+                  and not self.pinned
                   and span > 0.55 * self.standing_span)
         give = COLLAPSE_GAIN * (1.0 - self.figure_stiffness) if giving else 0.0
 
