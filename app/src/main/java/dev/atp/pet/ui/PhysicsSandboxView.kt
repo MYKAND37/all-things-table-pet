@@ -156,6 +156,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *  for a leg is the hip, and a figure lifted by the hip never turns over. */
     private val heldOffsets = HashMap<Int, Float>()
     private val heldTargets = HashMap<Int, Vec2>()
+
+    /**
+     * The same targets after the low pass, one per finger, kept between frames.
+     *
+     * Separate from heldTargets rather than written over it: heldTargets is what the FINGER
+     * said and is what the panel and the recorder report, and this is what the SOLVER was
+     * given. Two numbers, because "the finger moved 40 px this frame" and "the pet was asked
+     * to move 40 px this frame" are different questions and only the second one is physics.
+     */
+    private val smoothedTargets = HashMap<Int, Vec2>()
     /**
      * Ropes. A rope is not a physics object: it is a pin whose target only exists while it
      * is taut, worked out fresh every frame from how far the body has got. Everything the
@@ -349,6 +359,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         heldBones.clear()
         heldTargets.clear()
+        smoothedTargets.clear()
         heldOffsets.clear()
         heldProp = null
         framed = false
@@ -384,6 +395,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propLanded.clear()
         heldBones.clear()
         heldTargets.clear()
+        smoothedTargets.clear()
         heldOffsets.clear()
         heldProp = null
         propPointer = -1
@@ -559,6 +571,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         rag.reset()
         heldBones.clear()
         heldTargets.clear()
+        smoothedTargets.clear()
         heldOffsets.clear()
         heldProp = null
         signals.clear()
@@ -995,8 +1008,20 @@ class PhysicsSandboxView @JvmOverloads constructor(
         renderer?.states = mergedStates()
 
         val pins = heldBones.entries.mapNotNull { entry ->
-            heldTargets[entry.key]?.let {
-                Ragdoll.Pin(entry.value, it, heldOffsets[entry.key] ?: 0f)
+            heldTargets[entry.key]?.let { raw ->
+                // The finger goes through a low pass before the solver ever sees it. What a
+                // thumb on glass does between two frames is jump a few px, and the solver is
+                // asked for a real POSITION: fed the raw number it reproduces the jump, and
+                // what that looks like on a mid-bone grab is the pet buzzing at 6.29 px per
+                // frame. See Ragdoll.PIN_TARGET_ALPHA for the measurement and the price.
+                //
+                // The filter is seeded with the RAW target on the frame the finger lands
+                // (the first time through, there is nothing to smooth from), so taking hold
+                // of the pet does not itself move it, and it is dropped with the finger.
+                val target = smoothedTargets[entry.key]
+                    ?.let { Ragdoll.smoothTarget(it, raw) } ?: raw
+                smoothedTargets[entry.key] = target
+                Ragdoll.Pin(entry.value, target, heldOffsets[entry.key] ?: 0f)
             }
         }.toMutableList()
         pins.addAll(ropePins(sk))
@@ -2896,6 +2921,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun endGrab(rag: Ragdoll, id: Int) {
         if (heldBones.remove(id) == null) return
         heldTargets.remove(id)
+        smoothedTargets.remove(id)
         heldOffsets.remove(id)
         if (heldBones.isEmpty()) rag.release()
     }

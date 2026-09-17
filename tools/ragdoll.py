@@ -86,6 +86,30 @@ MAX_IK_RATE = 9.0
 #: grabbed-at-the-joint cases (offset 0) down; tools/carry_check.py pins the hanging down.
 LEVER_MIN = 6.0
 
+# How much of the way to the finger a target moves in one frame: a first-order low pass on
+# the thing the finger is asking for. 1.0 is "use the finger as it is".
+#
+# A real finger is not a straight line. Measured on a mid-bone grab (30 px along the hand)
+# dragged at 260 px/s, with the finger jumping +-8 px per frame the way a thumb on glass does,
+# the held joint's own turn alternates on 38% of frames at 1.06 degrees and the whole body
+# oscillates 6.29 px per frame. Nothing upstream of the finger causes that and nothing
+# downstream can undo it: the solver is asked for a real POSITION, and the position is noisy.
+# At 0.35 the same drag reads 15% at 0.265 degrees and 2.19 px, and the price is that the pet
+# trails the finger by v * (1 - a) / a / 60 -- 8.8 px at 260 px/s, and nothing once the finger
+# stops. tools/drag_check.py pins both the gain and the price.
+#
+# The rate cap does NOT touch this: measured across 9, 20, 30, 60, 120 and off, the same drag
+# reads the same to three decimals. This is the input; that is the solver.
+PIN_TARGET_ALPHA = 0.35
+
+
+def smooth_target(previous, target, alpha=PIN_TARGET_ALPHA):
+    """One step of that low pass. The caller owns `previous` -- one per finger, seeded with
+    the raw target on the frame the finger lands so that taking hold does not move the pet."""
+    return (previous[0] + (target[0] - previous[0]) * alpha,
+            previous[1] + (target[1] - previous[1]) * alpha)
+
+
 # "aim" = cyclic coordinate descent: every joint turns to line up with the pull, which is
 #         what straightens a limp limb you dangle by its end.
 # "lss" = least squares: moves the least body, which means folding whatever folds cheapest.

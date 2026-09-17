@@ -1113,6 +1113,45 @@ class Ragdoll(
         const val LEVER_MIN = 6.0f
 
         /**
+         * How much of the way to the finger a target moves in one frame: a first-order low
+         * pass on the thing the finger is asking for. 1.0 is "use the finger as it is".
+         *
+         * A real finger is not a straight line. Measured on a mid-bone grab (30 px along the
+         * hand) dragged at 260 px/s, with the finger jumping +-8 px per frame the way a
+         * thumb on glass does, the held joint's own turn alternates 38% of frames at 1.06
+         * degrees and the whole body oscillates 6.29 px per frame. Nothing upstream of the
+         * finger causes that and nothing downstream can undo it: the solver is being asked
+         * for a real position, and the position is noisy. At 0.35 the same drag reads 15% at
+         * 0.265 degrees and 2.19 px -- a quarter of the movement -- and the price is that the
+         * pet trails the finger by v * (1 - a) / a / 60, which is 8.8 px at 260 px/s and
+         * nothing at all once the finger stops.
+         *
+         * The cap (MAX_IK_RATE) does NOT touch this: measured across 9, 20, 30, 60, 120 and
+         * off, the same drag reads the same to three decimals. This is the input, that is the
+         * solver.
+         *
+         * 0.35 rather than the smallest number that helps, because the lag is what the user
+         * feels and it grows as 1/a: 0.15 is 25 px of trail, which is a rubber band. Mirrors
+         * PIN_TARGET_ALPHA in tools/ragdoll.py; the numbers above are drag_check.py's.
+         */
+        var PIN_TARGET_ALPHA = 0.35f
+
+        /**
+         * One step of that low pass, as a function rather than a line in the bench.
+         *
+         * It is here so that the two implementations can be checked against each other: the
+         * filter is a MECHANISM, not a rendering detail, and mirror_check reads this
+         * expression in both files. The caller owns `previous` -- the bench keeps one per
+         * finger, seeded with the raw target on the frame the finger lands so that taking
+         * hold does not itself move the pet.
+         */
+        fun smoothTarget(previous: Vec2, target: Vec2, alpha: Float = PIN_TARGET_ALPHA): Vec2 =
+            Vec2(
+                previous.x + (target.x - previous.x) * alpha,
+                previous.y + (target.y - previous.y) * alpha,
+            )
+
+        /**
          * How much of the finger's pull the ROOT takes, before the chain is solved at all.
          *
          * This is the difference between POSING a limb and CARRYING the figure, and it is the

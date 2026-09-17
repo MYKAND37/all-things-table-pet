@@ -12,11 +12,12 @@ alternating a hundred pixels every single frame.
 
     python3 tools/drag_check.py
 """
-import json, math, os, sys
+import json, math, os, random, sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from skeleton_tool import bake, room
+import ragdoll
 from ragdoll import Ragdoll
 
 SPEC = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
@@ -352,8 +353,61 @@ def main():
            "ratio %.2f, amp %.2f deg (rms d1 %.2f, d2 %.2f deg/frame; unbounded it was 1.32 and 13.2)"
            % (ratio, amp, rms1, rms2))
 
-    print("\nthe figure does not lurch while a joint is dragged")
-    # The lever arm. The case above holds the hand 0.5 px along its bone -- a finger that took
+    print("\nthe finger's own shake does not become the pet's")
+
+    # A real finger is not a straight line: between two frames a thumb on glass jumps a few
+    # px, in any direction, and the physics is asked for a POSITION. The rate cap cannot help
+    # -- measured below across 9 to off, this drag reads the same to three decimals -- because
+    # the noise is in the INPUT. What can help is a low pass on the target, and the price is
+    # that the pet then trails the finger, so both halves are pinned here.
+    #
+    # The grab is mid-bone (30 px along the hand) on purpose: at a joint (offset 0) the same
+    # drag reads 0.14 px and there is nothing to fix, which is why "which part of a bone did
+    # you take hold of" has been the question behind this whole file.
+    def shaken(alpha, jitter, rate=9.0, speed=260.0, seconds=4.0, seed=7):
+        rnd = random.Random(seed)
+        ragdoll.MAX_IK_RATE = rate
+        pet, bn = fresh()
+        bone = bn["hand_R"]
+        x0, y0 = bone.wpos
+        sx, sy = x0, y0                      # seeded with the raw target: no jump on grab
+        loc, lag = [], []
+        for i in range(int(seconds * 60)):
+            t = i / 60.0
+            fx = x0 + speed * t + (rnd.uniform(-jitter, jitter) if jitter else 0.0)
+            fy = y0 + (rnd.uniform(-jitter, jitter) if jitter else 0.0)
+            sx, sy = ragdoll.smooth_target((sx, sy), (fx, fy), alpha)
+            pet.step(1.0 / 60.0, [("hand_R", (sx, sy), 30.0)])
+            if i > 40:
+                loc.append(math.degrees(bone.rotation))
+                got = pet._grip(bone, 30.0)
+                lag.append(math.hypot(got[0] - fx, got[1] - fy))
+        _, amp = tremor(loc)
+        return amp, sum(lag) / len(lag)
+
+    raw_amp, _ = shaken(1.0, 8.0)
+    smooth_amp, smooth_lag = shaken(ragdoll.PIN_TARGET_ALPHA, 8.0)
+    report("a jittery finger is filtered, not reproduced",
+           smooth_amp < raw_amp * 0.4,
+           "%.3f -> %.3f deg per frame (%.1fx)" % (raw_amp, smooth_amp, raw_amp / max(smooth_amp, 1e-6)))
+    # v * (1 - a) / a / 60 at 260 px/s and a = 0.35 is 8.0 px of steady-state trail; 12 is that
+    # with room for the oscillation on top. The number matters because it is the whole price.
+    report("and the price is a finger's-width of trail, not a rubber band",
+           smooth_lag < 12.0, "%.1f px behind the finger at 260 px/s" % smooth_lag)
+    calm_raw, _ = shaken(1.0, 0.0)
+    calm_smooth, _ = shaken(ragdoll.PIN_TARGET_ALPHA, 0.0)
+    report("a steady finger is not made worse by it",
+           calm_smooth < calm_raw * 1.1,
+           "%.3f -> %.3f deg per frame" % (calm_raw, calm_smooth))
+    # The knob the panel puts in front of the user first. Pinned as a NEGATIVE result: if a
+    # future change makes the cap matter here, this line says so instead of leaving it to be
+    # discovered by a hand again.
+    fast_amp, _ = shaken(ragdoll.PIN_TARGET_ALPHA, 8.0, rate=1.0e6)
+    report("the rate cap is not what is shaking it",
+           abs(fast_amp - smooth_amp) < 0.01,
+           "R=9 %.3f vs off %.3f deg per frame" % (smooth_amp, fast_amp))
+
+    print("\nthe figure does not lurch while a joint is dragged")    # The lever arm. The case above holds the hand 0.5 px along its bone -- a finger that took
     # hold of the joint -- and this one drags by the HIP, which is the same thing one bone up
     # and is the one that moves the whole figure.
     #

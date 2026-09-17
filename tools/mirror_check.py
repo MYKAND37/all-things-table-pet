@@ -73,6 +73,13 @@ PAIRED_MECHANISMS = [
         r"anglePrev\[b\.name\] = turned - got",
         r"self\.ang_prev\[b\.name\] = turned - got",
     ),
+    (
+        # 手指目标的低通。两边必须是同一个式子，因为这是一条机制而不是画法；系数本身
+        # 由上面的常量比对盯着（PIN_TARGET_ALPHA）。
+        "手指目标的一阶低通：previous + (target - previous) * alpha",
+        r"previous\.x \+ \(target\.x - previous\.x\) \* alpha",
+        r"previous\[0\] \+ \(target\[0\] - previous\[0\]\) \* alpha",
+    ),
 ]
 
 
