@@ -2813,10 +2813,33 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
                 // A press that never became a drag is a click: that is how "被点一下" is
                 // told apart from "被抓起", which are very different things to react to.
-                if (tapped != null && System.currentTimeMillis() - tapAt < 300 &&
-                    hypot(event.x - tapX, event.y - tapY) < 12f * density
-                ) {
-                    fire(GameEvent(EventType.CLICK, part = tapped))
+                //
+                // Where the two numbers come from, because a tap that does not register is
+                // invisible from the outside -- the rule simply does not run, and what that
+                // looks like is "it works sometimes":
+                //
+                //  * TAP_MS used to be 300, measured from finger DOWN. A deliberate tap on a
+                //    phone takes 200-400ms, so 300 threw away a good share of them. 500 is
+                //    Android's own long-press threshold, which is the line where a press
+                //    stops being a tap at all.
+                //  * TAP_SLOP is 12dp, wider than the platform's own 8dp touch slop, because
+                //    this one has to be crossed by a finger that is also holding a bone.
+                //
+                // And when a tap is thrown away the bench SAYS SO on the status line: this is
+                // the one event in the app that otherwise leaves no trace anywhere.
+                if (tapped != null) {
+                    val held = System.currentTimeMillis() - tapAt
+                    val moved = hypot(event.x - tapX, event.y - tapY)
+                    if (held < TAP_MS && moved < TAP_SLOP_DP * density) {
+                        fire(GameEvent(EventType.CLICK, part = tapped))
+                    } else {
+                        val why = if (held >= TAP_MS) {
+                            getString(R.string.sandbox_tap_too_slow, held / 1000f, TAP_MS / 1000f)
+                        } else {
+                            getString(R.string.sandbox_tap_moved, moved.toInt())
+                        }
+                        onInfo?.invoke(why)
+                    }
                 }
                 tapBone = null
                 panning = false
@@ -2935,6 +2958,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
         /** Above this the release is a throw, below it the pet was simply put down. */
         private const val THROW_SPEED = 700f
         private const val SHOT_SPEED = 2600f
+
+        /**
+         * How long a press may last, counted from finger DOWN, and still be "被点一下".
+         *
+         * It was 300, which is under what a deliberate tap takes on a phone, so taps went
+         * missing at random and the rules they should have fired looked broken. 500 is
+         * Android's own long-press threshold: the point where a press is a hold.
+         */
+        private const val TAP_MS = 500L
+
+        /** How far a finger may wander and still be a tap, in dp. The platform's slop is 8. */
+        private const val TAP_SLOP_DP = 12f
 
         /**
          * The tuning readout's window, in seconds, and the ring it is kept in.

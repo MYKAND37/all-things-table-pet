@@ -216,6 +216,13 @@
     <string name="sandbox_tune_diag_full">记满 %1$d 行，自动停了 · 按「分享」导出</string>
     <string name="sandbox_tune_diag_write_failed">写到第 %1$d 行就写不进去了 · 已记下的还能分享</string>
     <string name="sandbox_tune_diag_failed">外部存储不可用，记录没开始</string>
+
+    <!--
+        一次没算成「被点一下」的点击。写出来是因为这是全app唯一一个不留痕迹的事件：
+        规则没跑，日志里没有，用户看到的是"有时候灵有时候不灵"。
+    -->
+    <string name="sandbox_tap_too_slow">点：按了 %1$.1f 秒（超过 %2$.1f 秒算按住）· 没当成「被点一下」</string>
+    <string name="sandbox_tap_moved">点：手指挪了 %1$d px · 算拖动，没当成「被点一下」</string>
     <string name="sandbox_tune_diag_none">还没有记录，先按「开始记录」</string>
     <string name="sandbox_tune_share_title">发送诊断 CSV</string>
     <string name="sandbox_tune_share_failed">没有能接收文件的 App · 完整路径在调参面板上</string>
