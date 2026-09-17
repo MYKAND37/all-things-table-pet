@@ -104,14 +104,27 @@ def room(spec, air=ROOM_AIR):
 
     Doing it here rather than leaving it to each character file means a character drawn
     against the old template still gets a room it can be picked up in.
+
+    BOTH of the room's dimensions are this function's business, and that was not true until
+    it cost a fortnight. It deepened the floor -- and left the WIDTH at the artwork's, so the
+    reference implementation had a wall at canvas.width = 1024 where the app has none: the
+    app's room is CharacterSpec.worldWidth, 3072, and every horizontal drag measured through
+    the reference was measured against that wall. The room is described here, so the width is
+    set here, with the APP's own default (CharacterSpec.kt: canvasW * 3) rather than a second
+    opinion of our own -- readers of a "room" are entitled to assume it is the app's room, and
+    a wall is not the only thing that would have been built on the wrong number.
     """
     physics = spec.setdefault("physics", {})
+    canvas = spec.setdefault("canvas", {})
+    # Before the early return below: a spec that already carries a roomAir still has to carry
+    # a room width, and the cheap idempotence would otherwise skip it.
+    physics["worldWidth"] = float(physics.get("worldWidth",
+                                               float(canvas.get("width", 1024.0)) * 3.0))
     if "roomAir" in physics:
         return spec
     lift = max(720.0, figure_span(spec) * air)
     physics["floorY"] = float(physics.get("floorY", 2048.0)) + lift
     physics["roomAir"] = lift
-    canvas = spec.setdefault("canvas", {})
     canvas["height"] = float(canvas.get("height", 2048.0)) + lift
     return spec
 
