@@ -60,6 +60,32 @@ PIN_JOINT_GAIN = 1.0
 #: 120 fps: a per-frame limit would be twice as generous on a fast phone.
 MAX_IK_RATE = 9.0
 
+#: How short a lever arm stops being a lever, in px. See _solve_pin_aim.
+#:
+#: Turning a joint moves the point it is holding by |r| px per radian, where r runs from the
+#: joint to the grabbed point. A finger that took hold 0.5 px from the joint -- which is what
+#: a grab AT a joint is, and the offset is a distance along the bone, so it happens -- cannot
+#: be moved by turning that joint at all. The aim does not care, because the aim is an ANGLE:
+#: it asks for |e| / |r| radians, so a 1.4 px position error asks for 70 degrees, and its SIGN
+#: flips the moment that sub-pixel error changes side. The joint then spends its whole
+#: per-frame allowance every frame, turning one way and back.
+#:
+#: Measured on the hip dragged along the floor with the pin 0.5 px along the root bone: the
+#: root turned +8.13, -8.13, +8.13 degrees per frame -- the full MAX_IK_RATE * dt of 8.59 --
+#: changing sign on 54 of 179 frames, and the worst bone in the body alternated by 15.5 px per
+#: frame. That is the buzz, and it is not the solver being stiff: it is a joint being asked to
+#: satisfy a position constraint with a lever that cannot move anything, so the only thing it
+#: still does is rotate the FIGURE, which the finger is not holding.
+#:
+#: 6 px, because a joint spending its entire allowance moves the grabbed point by at most
+#: |r| * MAX_IK_RATE * dt, which is |r| * 0.15 at 60 Hz: under a pixel of movement, twice the
+#: 0.5 px at which the solver calls the pin satisfied. A length rather than a rate, so it does
+#: not move with the frame rate, and short enough that it can only ever switch off the GRABBED
+#: bone: every ancestor's lever is the chain out to the grab -- hundreds of px -- so the pull
+#: up the chain, which is the straightening, is untouched. tools/drag_check.py pins the
+#: grabbed-at-the-joint cases (offset 0) down; tools/carry_check.py pins the hanging down.
+LEVER_MIN = 6.0
+
 # "aim" = cyclic coordinate descent: every joint turns to line up with the pull, which is
 #         what straightens a limp limb you dangle by its end.
 # "lss" = least squares: moves the least body, which means folding whatever folds cheapest.
@@ -689,7 +715,11 @@ class Ragdoll:
             for b in chain:
                 end = self._grip(bone, offset)
                 px, py = b.wpos
-                if math.hypot(end[0] - px, end[1] - py) < 1e-6:
+                # Not "a zero-length r": a lever this short cannot move the grabbed point by
+                # even a pixel within this frame's allowance, so the turn it is about to be
+                # given is an orientation change wearing a position correction's clothes.
+                # See LEVER_MIN for the measurements.
+                if math.hypot(end[0] - px, end[1] - py) < LEVER_MIN:
                     continue
                 current = math.atan2(end[1] - py, end[0] - px)
                 wanted = math.atan2(target[1] - py, target[0] - px)

@@ -352,6 +352,41 @@ def main():
            "ratio %.2f, amp %.2f deg (rms d1 %.2f, d2 %.2f deg/frame; unbounded it was 1.32 and 13.2)"
            % (ratio, amp, rms1, rms2))
 
+    print("\nthe figure does not lurch while a joint is dragged")
+    # The lever arm. The case above holds the hand 0.5 px along its bone -- a finger that took
+    # hold of the joint -- and this one drags by the HIP, which is the same thing one bone up
+    # and is the one that moves the whole figure.
+    #
+    # What used to happen: the pin's aim is an ANGLE, so it asks a joint to turn by |e| / |r|
+    # radians, where r runs from the joint to the point the finger is holding. At 0.5 px of
+    # lever a 1.4 px position error is 70 degrees, and the rate limit turns the whole 8.59
+    # degrees it allows, every frame, in whichever direction that sub-pixel error happens to
+    # point this frame. Turning the joint moves the grabbed point by |r| per radian, so all 8
+    # of those degrees move it by 0.075 px: the constraint is not being served at all, and what
+    # the figure does instead is rotate. Measured on this drag: the root turned +8.13, -8.13,
+    # +8.13 degrees per frame -- MAX_IK_RATE * dt is 8.594, so it was spending its whole
+    # allowance on a joint that cannot move anything -- and the worst bone in the body
+    # alternated by 15.5 px per frame (81.9 px with a jittered step). See Ragdoll.LEVER_MIN.
+    #
+    # Asserted on the DISPLACEMENT rather than on the held bone's angle, because that is what
+    # the user sees, and it is the quantity that separates this from a fast drag: the figure
+    # moves 4.3 px per frame while it is being pulled, and none of that is a lurch.
+    pet, bn = fresh()
+    hip = bn["hip"]
+    x0, y0 = hip.wpos
+    lurch = []
+    before = dict((b.name, b.wpos) for b in pet.order)
+    for i in range(180):
+        t = i / 60.0
+        pet.step(1.0 / 60.0, [("hip", (x0 + 260.0 * t, y0), 0.5)])
+        if i > 30:
+            lurch.append(max(math.hypot(b.wpos[0] - before[b.name][0],
+                                        b.wpos[1] - before[b.name][1]) for b in pet.order))
+        before = dict((b.name, b.wpos) for b in pet.order)
+    ratio, amp = tremor(lurch)
+    report("no bone in the body lurches", amp < 2.0,
+           "amp %.2f px, ratio %.2f (it was 15.5 px and 1.55)" % (amp, ratio))
+
     print("\na pet lying on the bench, dragged along it")
     # The same switch, in the pose it happens most: a pet lying on the bench is turned over
     # just about exactly UPSIDE_DOWN, so dragging it by the hip is dragging it along the

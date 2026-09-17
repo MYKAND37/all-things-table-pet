@@ -777,7 +777,7 @@ class Ragdoll(
                 val e = gripPoint(bone, offset)
                 val px = b.worldPosition.x
                 val py = b.worldPosition.y
-                if (hypot(e.x - px, e.y - py) < 1e-6f) continue
+                if (hypot(e.x - px, e.y - py) < LEVER_MIN) continue
                 val current = atan2(e.y - py, e.x - px)
                 val wanted = atan2(target.y - py, target.x - px)
                 // Only a fraction of the way, if the gain says so: an aim that is taken in
@@ -1088,6 +1088,29 @@ class Ragdoll(
          * panel's slider is the gain.
          */
         var MAX_IK_RATE = 9.0f
+
+        /**
+         * How short a lever arm stops being a lever, in px. See solvePin.
+         *
+         * Turning a joint moves the point it is holding by |r| px per radian, where r runs
+         * from the joint to the point the finger took hold of. A finger that took hold 0.5 px
+         * from the joint — and the offset is a distance along the bone, so a grab AT a joint
+         * is exactly this — cannot be moved by turning that joint at all. The aim does not
+         * care, because the aim is an ANGLE: |e| / |r| radians, so a 1.4 px error asks for 70
+         * degrees, and its sign flips the moment that sub-pixel error changes side. The joint
+         * then spends its whole per-frame allowance every frame, one way and back.
+         *
+         * Measured on the hip dragged along the floor with the pin 0.5 px along the root bone:
+         * the root turned +8.13, -8.13, +8.13 degrees per frame — the full MAX_IK_RATE * dt —
+         * changing sign on 54 of 179 frames, and the worst bone in the body alternated by
+         * 15.5 px per frame. 6 px, because a joint spending its entire allowance moves the
+         * grabbed point by |r| * MAX_IK_RATE * dt, which is under a pixel at 60 Hz — twice the
+         * 0.5 px at which solvePin calls the pin satisfied. A length, not a rate, so it does
+         * not move with the frame rate, and short enough that it can only ever switch off the
+         * GRABBED bone: every ancestor's lever is the chain out to the grab. Mirrors LEVER_MIN
+         * in tools/ragdoll.py, where the measurements and tools/drag_check.py's cases are.
+         */
+        const val LEVER_MIN = 6.0f
 
         /**
          * How much of the finger's pull the ROOT takes, before the chain is solved at all.

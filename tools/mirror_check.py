@@ -59,6 +59,11 @@ PAIRED_MECHANISMS = [
         r"wall_right = float\(physics\.get\(\"worldWidth\"",
     ),
     (
+        "力臂短于 LEVER_MIN 的关节不参与 pin 的位置解（转它推不动抓取点）",
+        r"< LEVER_MIN\) continue",
+        r"< LEVER_MIN:",
+    ),
+    (
         "pin 的转角就是这根关节下一帧的速度（不是加在原来的速度上）",
         r"anglePrev\[b\.name\] = turned - got",
         r"self\.ang_prev\[b\.name\] = turned - got",
