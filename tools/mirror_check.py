@@ -53,6 +53,11 @@ PAIRED_MECHANISMS = [
         r"ikSpent\.clear\(\)",
         r"self\.ik_spent = \{\}",
     ),
+    (
+        "pin 的转角就是这根关节下一帧的速度（不是加在原来的速度上）",
+        r"anglePrev\[b\.name\] = turned - got",
+        r"self\.ang_prev\[b\.name\] = turned - got",
+    ),
 ]
 
 

@@ -798,9 +798,26 @@ class Ragdoll(
                 turn = turn.coerceIn(-cap, cap)
                 val turned = (b.rotation + turn).coerceIn(lowLimit(b), highLimit(b))
                 if (turned != b.rotation) {
-                    ikSpent[b.name] = (ikSpent[b.name] ?: 0f) + abs(turned - b.rotation)
+                    // The turn just made IS this joint's velocity for the next frame.
+                    //
+                    // Verlet reads angle - anglePrev as the joint's velocity, so what these two
+                    // writes leave behind is what the integrator does next. Writing angle and
+                    // leaving anglePrev alone hands the correction over as EXTRA velocity, on
+                    // top of whatever the joint already had: it overshoots the finger, the pin
+                    // turns it back, and the two alternate for ever. That is the buzz, and it is
+                    // why the panel shows the integrator and the IK as the only two hot phases --
+                    // each one is the other's input.
+                    //
+                    // Absorbing the turn instead (anglePrev += got, which is what turnOut does
+                    // for the floor) also fixes the integrator but stops the body coming with the
+                    // hand, and the floor-hold and two-finger cases go red. This is the velocity
+                    // pass of PBD, and it is the one the suites stay green with. Mirrored in
+                    // tools/ragdoll.py; see tools/mirror_check.py.
+                    val got = turned - b.rotation
+                    ikSpent[b.name] = (ikSpent[b.name] ?: 0f) + abs(got)
                     b.rotation = turned
                     angle[b.name] = turned
+                    anglePrev[b.name] = turned - got
                     skeleton.update()
                 }
             }

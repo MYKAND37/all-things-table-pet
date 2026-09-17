@@ -726,9 +726,34 @@ class Ragdoll:
                 elif turned > hi:
                     turned = hi
                 if turned != b.rotation:
-                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(turned - b.rotation)
+                    # The turn just made IS this joint's velocity for the next frame.
+                    #
+                    # Verlet reads ang - ang_prev as the joint's velocity, so what these two
+                    # writes leave behind is what the integrator does next. Writing ang and
+                    # leaving ang_prev alone hands the correction over as EXTRA velocity, on
+                    # top of whatever the joint already had: it overshoots the finger, the pin
+                    # turns it back, the velocity flips, and the two alternate for ever. That
+                    # is the buzz, and it is why the integrator and the IK are the only two
+                    # phases that run hot -- each one is the other's input.
+                    #
+                    # Absorbing the turn instead (ang_prev += got, which is what _turn_out
+                    # does for the floor) also fixes the integrator, but it stops the body
+                    # coming with the hand: tools/drag_check.py's floor-hold and two-finger
+                    # cases and tools/carry_check.py all go red with it. This is the velocity
+                    # pass of PBD -- the joint goes on moving the way the finger asked it to --
+                    # and it leaves every check green.
+                    #
+                    # Measured on the dragged bone, sign changes per frame / mean step, hip
+                    # dragged along the floor at 60 Hz: integrator 52/179 and 7.7 deg with
+                    # ang_prev left alone, 0/179 and 1.5 deg absorbed, 53/179 and 0.07 deg
+                    # like this. What the user sees moves with the integrator: holding a
+                    # lifted pet still, the furthest bone in the body went from 44 px per
+                    # frame to 18.
+                    got = turned - b.rotation
+                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(got)
                     b.rotation = turned
                     self.ang[b.name] = turned
+                    self.ang_prev[b.name] = turned - got
                     self.fk()
 
     def _solve_pin(self, bone, target, offset=0.0, dt=1.0 / 60.0):  # noqa: D401
@@ -782,9 +807,13 @@ class Ragdoll:
                 elif turned > hi:
                     turned = hi
                 if turned != b.rotation:
-                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(turned - b.rotation)
+                    # The same velocity pass as _solve_pin_aim, for the same reason: what the
+                    # pin turns this joint by is the velocity it carries into the next frame.
+                    got = turned - b.rotation
+                    self.ik_spent[b.name] = self.ik_spent.get(b.name, 0.0) + abs(got)
                     b.rotation = turned
                     self.ang[b.name] = turned
+                    self.ang_prev[b.name] = turned - got
                     moved = True
             if not moved:
                 break
