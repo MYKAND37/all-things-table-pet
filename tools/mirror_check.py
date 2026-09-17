@@ -11,12 +11,17 @@ Kotlin. The only symptom is a behaviour that no longer matches its own test suit
 Compares every constant the two files share, and lists the ones only one of them has -- those
 need a reason, not a value, so they are printed rather than failed.
 """
-import os, re, sys
+import copy, json, os, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/physics/Ragdoll.kt")
+#: Where the app decides what the room IS, as opposed to how the physics uses it.
+SPEC_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/skeleton/CharacterSpec.kt")
 PY = os.path.join(HERE, "ragdoll.py")
+CHARACTER = os.path.join(REPO, "app/src/main/assets/characters/female_base/character.json")
+sys.path.insert(0, HERE)
+from skeleton_tool import room  # noqa: E402  (the definition of the reference's room)
 
 FAILURES = []
 
@@ -127,6 +132,43 @@ def main():
             report(label, False, "Python 有、Kotlin 没有 —— App 里没有这个机制（就是这一条漏掉过一次）")
         else:
             report(label, False, "两边都没有 —— 机制被删掉了，或者记号过期了，去看一眼")
+
+    print("")
+    print("房间里那堵墙，两边是同一个宽度")
+    # The two reports that follow a pattern are about KEYS, and a key with the right name is
+    # not the same thing as two implementations that arrive at the same NUMBER. The wall drift
+    # was exactly that gap: the reference read a width -- the artwork's, 1024 -- and said
+    # nothing, so it did not look like a missing key, it looked like a wall. So this compares
+    # the number the app computes with the number the reference hands its tests, and it does it
+    # with the key AND without it: a spec that states no worldWidth is legal in the app
+    # (CharacterSpec supplies canvasW * 3), and the no-key path is the one that was silently
+    # wrong for a fortnight.
+    spec = json.load(open(sys.argv[1] if len(sys.argv) > 1 else CHARACTER, encoding="utf-8"))
+    canvas_w = float(spec["canvas"]["width"])
+    physics = spec.get("physics", {})
+    # CharacterSpec.kt: worldWidth = num(phys, "worldWidth", canvasW * 3f). Checked as text so
+    # that a changed default in the app fails here rather than quietly disagreeing with us.
+    app_default = re.search(r'worldWidth = num\(phys, "worldWidth", canvasW \* 3f\),?',
+                            open(SPEC_KT, encoding="utf-8").read())
+    app_width = float(physics.get("worldWidth", canvas_w * 3.0))
+    # Read, not indexed: a reference whose room states no width at all has to come back as a
+    # failed check with a sentence, not as a KeyError three frames down.
+    ours = room(copy.deepcopy(spec))["physics"].get("worldWidth")
+    bare = copy.deepcopy(spec)
+    bare.setdefault("physics", {}).pop("worldWidth", None)
+    ours_bare = room(bare)["physics"].get("worldWidth")
+    report("the app's default for the room width is the one being re-done here",
+           app_default is not None,
+           'CharacterSpec.kt: worldWidth = num(phys, "worldWidth", canvasW * 3f)')
+    report("the character file states its room width", "worldWidth" in physics,
+           "physics.worldWidth = %s, artwork %.0f px"
+           % (physics.get("worldWidth"), canvas_w))
+    report("the room the reference hands the tests is the app's room",
+           ours is not None and abs(app_width - float(ours)) < 1e-9,
+           "app %.0f px, reference says %s px" % (app_width, ours))
+    report("with no key in the file it lands on the app's room, not the artwork's",
+           ours_bare is not None and abs(float(ours_bare) - canvas_w * 3.0) < 1e-9,
+           "%s px, and the artwork is %.0f px" % (ours_bare, canvas_w))
 
     print("")
     print("only in Ragdoll.kt (Kotlin-only by design, or a mirror that is missing):")

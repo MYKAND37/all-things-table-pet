@@ -198,9 +198,20 @@ class Ragdoll:
         self.floor = float(physics.get("floorY", 2048.0))
         self.ceiling = 0.0
         self.wall_left = 0.0
-        # The room is the APP's room: CharacterSpec.worldWidth, not the art canvas.
-        # See the note in mirror_check.py -- this line was 1024 wide while the app's was 3072.
-        self.wall_right = float(physics.get("worldWidth", spec["canvas"]["width"]))
+        # The room's width, which is the APP's room and not the artwork's: CharacterSpec
+        # reads physics.worldWidth, and skeleton_tool.room() is where the reference's room is
+        # described -- it sets this key, so every test that goes through room() is walled
+        # where the phone walls the pet.
+        #
+        # The fallback repeats the APP's default (CharacterSpec.kt: canvasW * 3) instead of
+        # having a second opinion of its own, and that is the point: this line used to be
+        # plain canvas.width with no key and no default, so the reference had a wall at 1024
+        # where the app has none, and a fortnight of horizontal-drag readings were taken
+        # against it. A fallback that silently picks a different number is how it went
+        # unnoticed; one that picks the app's number can only be wrong for a spec the app
+        # would also get wrong.
+        self.wall_right = float(physics.get("worldWidth",
+                                           float(spec["canvas"]["width"]) * 3.0))
         self.restitution = 0.2
         self.ground_friction = 2.5
 

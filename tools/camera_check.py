@@ -77,7 +77,10 @@ class Camera:
 
     def clamp_pan(self):
         vw, vh = self.view_width(), self.view_height()
-        self.pan_x = min(max(self.pan_x, 0.0), max(0.0, self.spec["canvas"]["width"] * 3 - vw))
+        # The room's width, read off the room instead of rebuilt from the artwork: this was
+        # canvas.width * 3 by hand, which agrees with the app only while every character file
+        # leaves worldWidth at its default. skeleton_tool.room is where the room is described.
+        self.pan_x = min(max(self.pan_x, 0.0), max(0.0, self.spec["physics"]["worldWidth"] - vw))
         self.pan_y = min(max(self.pan_y, 0.0), max(0.0, self.spec["physics"]["floorY"] - vh))
 
     def frame_pet(self, root):
@@ -389,7 +392,8 @@ def main():
     cam.pan_x = -99999.0
     cam.pan_y = 99999.0
     cam.clamp_pan()
-    report("x clamped into the room", 0.0 <= cam.pan_x <= max(0.0, spec["canvas"]["width"] * 3 - cam.view_width()),
+    report("x clamped into the room",
+           0.0 <= cam.pan_x <= max(0.0, spec["physics"]["worldWidth"] - cam.view_width()),
            "pan_x %.1f" % cam.pan_x)
     report("y clamped into the room", 0.0 <= cam.pan_y <= max(0.0, floor - cam.view_height()),
            "pan_y %.1f" % cam.pan_y)
