@@ -407,6 +407,57 @@ def main():
            abs(fast_amp - smooth_amp) < 0.01,
            "R=9 %.3f vs off %.3f deg per frame" % (smooth_amp, fast_amp))
 
+    # And the same experiment in the units the OWNER reads it in. The bench prints a row per
+    # phase of the step and marks every row reversing on at least half the window's moving
+    # frames (PHASE_CULPRIT = 50f, PhysicsSandboxView.signChanges); the owner's report was
+    # "限速最小 -> 积分器和 IK 亮, 最大 -> 只剩 IK". The rate is not what moves that marker
+    # (above), but the FINGER is: with a shaking finger the integrator row lights up as well,
+    # because it is the phase that carries the pin's own turn on as velocity the frame after.
+    # This test is that reading, and the low pass is what puts it back to one row.
+    def hot_rows(alpha, jitter, seed=11, seconds=3.0):
+        rnd = random.Random(seed)
+        ragdoll.MAX_IK_RATE = 9.0
+        pet, bn = fresh()
+        pet.probe_bone = "hand_R"
+        bone = bn["hand_R"]
+        x0, y0 = bone.wpos
+        sx, sy = x0, y0
+        turns = [[] for _ in range(4)]
+        for i in range(int(seconds * 60)):
+            t = i / 60.0
+            fx = x0 + 260.0 * t + (rnd.uniform(-jitter, jitter) if jitter else 0.0)
+            fy = y0 + (rnd.uniform(-jitter, jitter) if jitter else 0.0)
+            sx, sy = ragdoll.smooth_target((sx, sy), (fx, fy), alpha)
+            pet.step(1.0 / 60.0, [("hand_R", (sx, sy), 30.0)])
+            if i > 40:
+                for k in range(4):
+                    turns[k].append(pet.probe_turn[k])
+        rates = []
+        for s in turns:
+            pairs = flips = 0
+            last = 0
+            for v in s:
+                sign = 1 if v > 0 else (-1 if v < 0 else 0)
+                if sign == 0:
+                    continue
+                if last != 0:
+                    pairs += 1
+                    if sign != last:
+                        flips += 1
+                last = sign
+            rates.append(100.0 * flips / pairs if pairs else 0.0)
+        return rates, turns
+
+    shaken_rates, _ = hot_rows(1.0, 8.0)
+    calm_rates, _ = hot_rows(ragdoll.PIN_TARGET_ALPHA, 8.0)
+    report("a shaking finger lights the integrator row too",
+           shaken_rates[0] >= 50.0 and shaken_rates[2] >= 50.0,
+           "积分器 %.0f%%, IK %.0f%%" % (shaken_rates[0], shaken_rates[2]))
+    report("and the low pass puts it back to one row, without touching the slider",
+           calm_rates[0] < 50.0,
+           "积分器 %.0f%% (was %.0f%%), IK %.0f%%"
+           % (calm_rates[0], shaken_rates[0], calm_rates[2]))
+
     print("\nthe figure does not lurch while a joint is dragged")    # The lever arm. The case above holds the hand 0.5 px along its bone -- a finger that took
     # hold of the joint -- and this one drags by the HIP, which is the same thing one bone up
     # and is the one that moves the whole figure.
@@ -440,6 +491,38 @@ def main():
     ratio, amp = tremor(lurch)
     report("no bone in the body lurches", amp < 2.0,
            "amp %.2f px, ratio %.2f (it was 15.5 px and 1.55)" % (amp, ratio))
+
+    # The same family of drag, one grab further along the bone, and measured PER BONE instead
+    # of as the maximum over all of them. The max is the right number for a lurch -- one bone
+    # jumping is the bug -- but on a pull that is genuinely fast it stops being a trajectory:
+    # the bone holding the maximum changes identity from frame to frame, and that switch by
+    # itself puts a large second difference into the series. Measured on a mid-bone pull
+    # (71.5 px along the hip, the fastest thing in this file): the max over bones reads an
+    # "amplitude" of 17 px and a ratio of 1.4 -- the shape of a relay -- while every single
+    # bone reverses on 6-8% of frames and travels 20-33 px per frame in ONE direction. It is
+    # a whip, not a buzz, and the same pull with the figure lifted off the floor reads 0.39
+    # px. Pinned so that the next reader does not spend a day chasing a maximum.
+    pet, bn = fresh()
+    hip = bn["hip"]
+    x0, y0 = hip.wpos
+    step = dict((b.name, []) for b in pet.order)
+    before = dict((b.name, b.wpos) for b in pet.order)
+    for i in range(180):
+        t = i / 60.0
+        pet.step(1.0 / 60.0, [("hip", (x0 + 260.0 * t, y0), 71.5)])
+        if i > 40:
+            for b in pet.order:
+                step[b.name].append(b.wpos[0] - before[b.name][0])
+        before = dict((b.name, b.wpos) for b in pet.order)
+    worst = 0.0
+    worst_name = ""
+    for name, d in step.items():
+        flips = sum(1 for i in range(1, len(d)) if d[i] * d[i - 1] < 0)
+        rate = 100.0 * flips / max(1, len(d) - 1)
+        if rate > worst:
+            worst, worst_name = rate, name
+    report("a fast mid-bone pull is a whip, not a relay: no bone reverses",
+           worst < 15.0, "worst bone %s reverses on %.0f%% of frames" % (worst_name, worst))
 
     print("\na pet lying on the bench, dragged along it")
     # The same switch, in the pose it happens most: a pet lying on the bench is turned over

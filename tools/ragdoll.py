@@ -102,6 +102,14 @@ LEVER_MIN = 6.0
 # reads the same to three decimals. This is the input; that is the solver.
 PIN_TARGET_ALPHA = 0.35
 
+# The four phases of one step, in the order step() runs them, for probe_turn. Same numbers
+# and same names as Ragdoll.kt's PROBE_*: the panel's four rows are indexed by them.
+PROBE_INTEGRATOR = 0
+PROBE_GROUND = 1
+PROBE_PINS = 2
+PROBE_CARRY = 3
+PROBE_PHASES = 4
+
 
 def smooth_target(previous, target, alpha=PIN_TARGET_ALPHA):
     """One step of that low pass. The caller owns `previous` -- one per finger, seeded with
@@ -338,6 +346,30 @@ class Ragdoll:
         # Velocity of the finger, handed to the caller so a release can throw.
         self.pin_vel = [0.0, 0.0]
 
+        # -- the phase probe, for the bench's tuning panel -----------------------
+        #
+        # Which bone the four pieces of the split are about (see Ragdoll.kt's probeBone),
+        # and what each phase of the last step turned it by, signed, in radians. The panel
+        # reads this to answer "which of the four is reversing", which is a question a
+        # total cannot answer: a joint that takes +5 degrees and then -5 has travelled ten
+        # and gone nowhere.
+        self.probe_bone = None
+        self.probe_turn = [0.0] * PROBE_PHASES
+
+    def _probe_cut(self, phase, at):
+        """Close one phase's slice and report where the next one starts.
+
+        A null probe writes zero rather than leaving the last frame's numbers behind, so
+        probe_turn is always one frame's split and never a mixture of two.
+        """
+        b = self.by_name.get(self.probe_bone) if self.probe_bone else None
+        if b is None:
+            self.probe_turn[phase] = 0.0
+            return 0.0
+        now = self.ang[b.name]
+        self.probe_turn[phase] = now - at
+        return now
+
     def release(self):
         """Let go: keep whatever speed the drag had."""
         self.root_vel[0] = self.pin_vel[0]
@@ -449,6 +481,10 @@ class Ragdoll:
         self.fk()
 
         self.pin_chain = []
+        # Where the probe starts this frame. Read before anything moves, so the four cuts
+        # below partition the whole step with nothing missing and nothing counted twice.
+        probe_at = (self.ang[self.probe_bone]
+                    if (self.probe_bone and self.probe_bone in self.ang) else 0.0)
         # The app's gravity, as a multiple of the character's own: see Ragdoll.gravityScale
         # in Kotlin. Live, because the settings screen is where it is turned.
         g = self.gravity * self.gravity_scale
@@ -571,6 +607,8 @@ class Ragdoll:
         self.root_vel[0] *= damp
         self.root_vel[1] *= damp
 
+        probe_at = self._probe_cut(PROBE_INTEGRATOR, probe_at)
+
         speed = math.hypot(self.root_vel[0], self.root_vel[1])
         if speed > MAX_SPEED:
             scale = MAX_SPEED / speed
@@ -582,6 +620,7 @@ class Ragdoll:
 
         self.fk()
         self._ground(dt)
+        probe_at = self._probe_cut(PROBE_GROUND, probe_at)
         # Refresh before pinning: the ground may have moved the root, and the pin needs
         # the grabbed point's CURRENT position or the correction it applies is off by
         # exactly whatever the ground just did.
@@ -590,7 +629,9 @@ class Ragdoll:
         held = self._normalise(pin)
         if held:
             self._pins(dt, held)
+            probe_at = self._probe_cut(PROBE_PINS, probe_at)
             self.carry_floor(dt)
+            self._probe_cut(PROBE_CARRY, probe_at)
             # Running _ground(dt) again HERE -- giving the floor the last word of the frame --
             # was tried while chasing a vibration, and reverted. It changed one case's
             # alternation ratio from 1.97 to 0.87 and cost the two-finger split 60 px of
