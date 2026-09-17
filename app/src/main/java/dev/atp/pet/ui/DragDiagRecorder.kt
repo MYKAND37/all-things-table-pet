@@ -109,7 +109,11 @@ class DragDiagRecorder {
         val w = writer ?: return false
         try {
             w.write(line)
-            w.newLine()
+            // A bare "\n" rather than Writer.newLine(): that extension is not resolvable with
+            // this module's Kotlin setup (CI: "Unresolved reference: newLine" at this line),
+            // and the CSV is read by a computer either way. Android writes "\n"; a reader on
+            // Windows copes with it, which is more than can be said for the build not existing.
+            w.write("\n")
         } catch (e: IOException) {
             failed = true
             stop()
