@@ -46,6 +46,22 @@ class Drop(
     var prevY = y
     var pushX = 0f
     var pushY = 0f
+
+    /**
+     * Whether the floor has ever stopped it.
+     *
+     * This is what makes 落地 a thing that happens ONCE to a drop rather than a state it is
+     * in. Every drop in a settled puddle is on the floor every single frame, so "it is on the
+     * floor" would fire sixty times a second over a puddle that is not moving — and the two
+     * cleverer tests both failed on measurement. A speed test: a drop on the second layer of
+     * a puddle is squeezed down onto the floor at 300px/s and is not landing (a settled
+     * 120-drop puddle reported eight of those in ten seconds). A height test: a drop sliding
+     * off the top of the pile really has fallen, and it is still not new liquid arriving.
+     *
+     * "The first time the floor stops it" is the one that matches what a rule means by 落地 —
+     * 这一滴东西到地上了 — and it cannot be noisy, because it cannot happen twice.
+     */
+    var landed = false
 }
 
 /**
@@ -121,13 +137,26 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         while (drops.size > MAX_DROPS) drops.removeAt(0)
     }
 
+    /**
+     * Move every drop, and report which LIQUIDS had a drop touch down this frame.
+     *
+     * The return value is what makes a liquid a subject that can be written about: the bench
+     * hands each id to that liquid's own engine as a 落地. A list rather than a callback for
+     * the same reason Particles.step returns one — the caller has the clock, the event and
+     * the engine, and this class has none of them — and a list rather than a set because how
+     * many drops landed is the number a rule about "a splash" wants next.
+     *
+     * Empty ids are skipped: a drop spilled without a name (the tools do this) belongs to no
+     * subject, and `liquid:` is not a subject anybody can write a rule on.
+     */
     fun step(
         dt: Float,
         gravity: Float,
         skeleton: Skeleton?,
         radiusOf: (Bone) -> Float,
-    ) {
-        if (drops.isEmpty()) return
+    ): List<String> {
+        if (drops.isEmpty()) return emptyList()
+        val landed = ArrayList<String>()
         val d = dt.coerceIn(0f, 0.05f)
 
         for (drop in drops) {
@@ -145,7 +174,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         for (pass in 0 until PASSES) separate()
 
         for (drop in drops) {
-            borders(drop, d)
+            if (borders(drop, d) && drop.liquid.isNotEmpty()) landed.add(drop.liquid)
             if (skeleton != null) {
                 for (bone in skeleton.bones) {
                     pushOut(drop, bone.worldPosition, bone.tipPosition(), radiusOf(bone))
@@ -160,6 +189,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 drop.vy = (drop.y - drop.prevY) / d
             }
         }
+        return landed
     }
 
     /**
@@ -233,8 +263,20 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
 
     private fun cellKey(x: Int, y: Int): Long = (x.toLong() shl 32) or (y.toLong() and 0xFFFFFFFFL)
 
-    private fun borders(drop: Drop, dt: Float) {
+    /**
+     * Walls and floor. Returns true on the frame the floor FIRST stops this drop: its 落地.
+     *
+     * The floor stopping it means the clamp below, which is the one moment the liquid is
+     * actually being held up — and [Drop.landed] makes it a latch, so a drop reports once in
+     * its life no matter how many times the crowding pushes it back down afterwards. That
+     * latch is the whole mechanism, and it replaced two that looked more physical and
+     * measured worse; the numbers are on [Drop.landed].
+     */
+    private fun borders(drop: Drop, dt: Float): Boolean {
+        var stopped = false
         if (drop.y + drop.radius > floorY) {
+            stopped = !drop.landed
+            drop.landed = true
             drop.y = floorY - drop.radius
             if (drop.vy > 0f) drop.vy = 0f
             drop.vx *= max(0f, 1f - FLOOR_FRICTION * dt)
@@ -246,6 +288,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
             drop.x = worldWidth - drop.radius
             drop.vx = -abs(drop.vx) * 0.2f
         }
+        return stopped
     }
 
     /** Liquid runs around a limb rather than through it. */

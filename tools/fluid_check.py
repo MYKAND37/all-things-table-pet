@@ -39,7 +39,8 @@ AIR_DRAG = 0.4
 
 
 class Drop:
-    __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy", "liquid")
+    __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy",
+                 "liquid", "landed")
 
     def __init__(self, x, y, vx, vy, colour, r, liquid=""):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
@@ -49,6 +50,9 @@ class Drop:
         # Which liquid this is, by name: the colour is not enough, because two liquids can be
         # the same colour and a liquid with rules of its own has to be findable in a crowd.
         self.liquid = liquid
+        # Whether the floor has EVER stopped it, so that 落地 happens once to a drop instead
+        # of being a state it is in. See _borders for why the two cleverer tests lost.
+        self.landed = False
 
 
 class Fluid:
@@ -88,7 +92,13 @@ class Fluid:
             self.drops.pop(0)
 
     def step(self, dt, gravity, bones=(), radius_of=None):
-        """bones: [(a, b, radius)] capsules the liquid must run around."""
+        """bones: [(a, b, radius)] capsules the liquid must run around.
+
+        Returns which LIQUIDS had a drop touch down this frame -- the same list the bench
+        hands to each liquid's own engine as a 落地. One entry per drop, so a caller can
+        count how many landed (len), or which kinds (set).
+        """
+        landed = []
         for d in self.drops:
             d.age += dt
             d.px, d.py = d.x, d.y
@@ -103,7 +113,8 @@ class Fluid:
             self._separate()
 
         for d in self.drops:
-            self._borders(d)
+            if self._borders(d) and d.liquid:
+                landed.append(d.liquid)
             for (a, b, r) in bones:
                 self._bone(d, a, b, r)
 
@@ -119,6 +130,7 @@ class Fluid:
             for d in self.drops:
                 d.vx = (d.x - d.px) / dt
                 d.vy = (d.y - d.py) / dt
+        return landed
 
     def _separate(self):
         """
@@ -183,7 +195,24 @@ class Fluid:
             d.y += d.dy
 
     def _borders(self, d):
+        """Walls and floor. True on the frame the floor FIRST stops this drop -- its 落地.
+
+        The floor stopping it means the clamp below, which is the one moment the liquid is
+        actually being held up, and d.landed makes it a latch: a drop reports once in its life
+        however many times the crowding pushes it back down afterwards.
+
+        That latch is the whole mechanism, and it replaced two that looked more physical and
+        measured worse. A speed test said "it arrived at 300px/s", and a drop on the second
+        layer of a settled puddle is squeezed down onto the floor at exactly that speed: eight
+        false landings in ten seconds over 120 drops. A height test said "it fell a drop's
+        height", and a drop sliding off the top of the pile really has -- and it is still not
+        new liquid arriving. What a rule means by 落地 is 这一滴东西到地上了, and that happens
+        once.
+        """
+        stopped = False
         if d.y + d.r > self.floor:
+            stopped = not d.landed
+            d.landed = True
             d.y = self.floor - d.r
             if d.vy > 0:
                 d.vy = 0.0
@@ -194,6 +223,7 @@ class Fluid:
         elif d.x + d.r > self.width:
             d.x = self.width - d.r
             d.vx = -abs(d.vx) * 0.2
+        return stopped
 
     def _bone(self, d, a, b, r):
         abx, aby = b[0] - a[0], b[1] - a[1]
@@ -250,6 +280,58 @@ def main():
     report("it came to rest", len(moving) <= 10, "%d still moving" % len(moving))
     report("no drop left the arena",
            all(-1 <= d.x <= 3001 for d in f.drops))
+
+    # 落地 is the one event a liquid was promised and never got: the bench had no delivery
+    # path to `liquid:<id>` at all, so every rule written on a liquid that was not 出现时 or
+    # 每隔一会儿 was dead on arrival. What makes it a real event rather than a state is this
+    # section: a drop lands ONCE, and a puddle that is already down says nothing.
+    print("a drop reports its own landing, and only once")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 200, 1, 0xFF0000, liquid="blood")
+    d = f.drops[0]
+    d.vx = d.vy = 0.0
+    hits = []
+    for _ in range(120):
+        hits += f.step(1 / 60, 2400.0)
+    report("the drop arrived on the floor", abs(d.y - (2000.0 - RADIUS)) < 0.5,
+           "y=%.1f (floor %.0f)" % (d.y, 2000.0))
+    report("it reported 落地 exactly once, by name", hits == ["blood"], str(hits))
+    quiet = []
+    for _ in range(120):
+        quiet += f.step(1 / 60, 2400.0)
+    report("a drop that is already down does not land again", quiet == [],
+           "%d reports in 2s" % len(quiet))
+
+    # The latch, which is what the two rejected tests were trying to be: throw a landed drop
+    # back up and let it come down. It touches the floor a second time and it is still not a
+    # landing -- nothing arrived, the pile moved.
+    d.vy = -500.0
+    bounced = []
+    for _ in range(90):
+        bounced += f.step(1 / 60, 2400.0)
+    report("a drop thrown off the floor and back does not land twice", bounced == [],
+           str(bounced))
+
+    print("a puddle does not report a landing every frame")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 1000, 120, 0xFF0000, liquid="blood")
+    for _ in range(300):
+        f.step(1 / 60, 2400.0)      # settled: the puddle section above runs the same setup
+    settled = []
+    for _ in range(600):
+        settled += f.step(1 / 60, 2400.0)
+    report("a settled puddle is quiet for 10s", settled == [],
+           "%d reports" % len(settled))
+
+    print("a drop with no name belongs to no subject")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 200, 1, 0xFF0000)     # no liquid name: `liquid:` is not a subject
+    d = f.drops[0]
+    d.vx = d.vy = 0.0
+    nameless = []
+    for _ in range(120):
+        nameless += f.step(1 / 60, 2400.0)
+    report("nothing is reported for an unnamed drop", nameless == [], str(nameless))
 
     print("a liquid knows which liquid it is")
     f = Fluid(2000.0, 3000.0)

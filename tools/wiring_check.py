@@ -160,6 +160,23 @@ def main():
            [i for i in layout_order if i in list_order] == list_order,
            "layout %s vs list %s" % (layout_order, list_order))
 
+    print("== every kind of subject that can hold logic is handed events ==")
+    # The bug this exists for: 液体·血 could be picked in 逻辑管理, could be written on, could
+    # be saved -- and its rules never ran, because nothing on the bench ever called
+    # fireTo(Subjects.liquid(...)). The README promised 落地 to liquids the whole time. A
+    # subject that can hold rules but hears nothing is invisible: no error, no log line,
+    # just a rule that does not happen.
+    bench = "".join(t for p, t in files.items() if p.endswith("PhysicsSandboxView.kt"))
+    for kind, maker in (("道具", "prop"), ("液体", "liquid"), ("粒子", "particle"),
+                        ("部位", "part")):
+        # Delivered by name -- fireTo(Subjects.<maker>(...)) -- or, for the parts, by the one
+        # loop that hands every part the figure's own events.
+        by_name = re.search(r"fireTo\(\s*Subjects\.%s\(" % maker, bench) is not None
+        by_loop = kind == "部位" and re.search(r"Subjects\.isPart\(subject\)", bench) is not None
+        report("%s 主体有人给它送事件" % kind, by_name or by_loop,
+               "" if (by_name or by_loop) else
+               "没有任何 fireTo(Subjects.%s(...))：写在它上面的规则永远不跑" % maker)
+
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
     decl = re.compile(

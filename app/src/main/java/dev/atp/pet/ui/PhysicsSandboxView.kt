@@ -1087,9 +1087,20 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // is a performance one first and an aesthetic one second, and liquid is the expensive
         // half of the two.
         if (settings.liquid) {
-            fluid?.step(dt, s.gravity * settings.gravityScale, sk) {
-            if (rag.isSolid(it.name)) rag.colliderRadius(it) else 0f
-        }
+            val touchedDown = fluid?.step(dt, s.gravity * settings.gravityScale, sk) {
+                if (rag.isSolid(it.name)) rag.colliderRadius(it) else 0f
+            }.orEmpty()
+            // One 落地 per liquid per frame, carrying how many drops it was -- the same shape
+            // the particle kinds get below, and for the same reason: a wound that sprays
+            // forty drops is one splash, not forty runs of the same rule inside one frame.
+            //
+            // This is the line the liquids never had. The README's own event table has
+            // promised 落地 to props AND liquids since the two were written, and nothing on
+            // the bench ever handed a liquid an event: a liquid's engine only ever saw 出现时
+            // and 每隔一会儿, so every rule written on one with 当=落地 was dead on arrival.
+            for ((id, n) in touchedDown.groupingBy { it }.eachCount()) {
+                fireTo(Subjects.liquid(id), GameEvent(EventType.LANDED, value = n.toFloat()))
+            }
         }
         attachRopes()
     }
