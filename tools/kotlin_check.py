@@ -317,6 +317,36 @@ def self_test():
     return ok
 
 
+def check_view_resources():
+    """
+    A View is not a Context: a bare `getString(...)` inside one does not resolve.
+
+    This is here because it SHIPPED. The bench reporting why a tap was thrown away was written
+    as `getString(R.string.sandbox_tap_too_slow, ...)` -- right in an Activity, wrong in a
+    View -- and the only thing that could tell us was a three-minute CI round trip ending in
+    `e: Unresolved reference: getString`. Every other resource read in these files already
+    goes through `context.`; this check makes the next one local.
+
+    The View files are found by the supertype in their constructor, and a file that declares
+    its own getString() is left alone.
+    """
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        if not re.search(r"\)\s*:\s*\w*View\w*\(", text):
+            continue
+        if re.search(r"fun\s+getString\s*\(", text):
+            continue
+        for i, line in enumerate(text.split("\n"), 1):
+            code = line.split("//")[0]
+            for name in ("getString", "getResources", "getColor", "getDrawable",
+                         "getDimension", "getText"):
+                if re.search(r"(?<![\w.])%s\s*\(" % name, code):
+                    bad.append("%s:%d  %s" % (os.path.basename(path), i, line.strip()[:80]))
+                    break
+    report("a View reads resources through context.*", not bad, "\n         ".join(bad))
+
+
 def main():
     if "--self-test" in sys.argv:
         print("the checker's own cases")
@@ -333,6 +363,7 @@ def main():
     check_strict_parse()
     check_private_companions()
     check_chip_lists()
+    check_view_resources()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

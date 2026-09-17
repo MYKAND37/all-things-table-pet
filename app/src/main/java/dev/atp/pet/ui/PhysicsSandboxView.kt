@@ -2834,9 +2834,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         fire(GameEvent(EventType.CLICK, part = tapped))
                     } else {
                         val why = if (held >= TAP_MS) {
-                            getString(R.string.sandbox_tap_too_slow, held / 1000f, TAP_MS / 1000f)
+                            context.getString(
+                                R.string.sandbox_tap_too_slow, held / 1000f, TAP_MS / 1000f,
+                            )
                         } else {
-                            getString(R.string.sandbox_tap_moved, moved.toInt())
+                            context.getString(R.string.sandbox_tap_moved, moved.toInt())
                         }
                         onInfo?.invoke(why)
                     }
