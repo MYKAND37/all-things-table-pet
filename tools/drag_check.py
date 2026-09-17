@@ -308,6 +308,32 @@ def main():
     #   held bone      tremor ratio   amplitude      (unbounded -> 9 rad/s)
     #   hand sideways      1.32          13.2 deg
     #                      0.99           4.6 deg
+    #
+    # BOTH NUMBERS WERE RE-CALIBRATED, and this is the paragraph that says why it is not a
+    # number moved to make a test pass. The old pair was `ratio < 1.1 and amp < 8.0`.
+    #
+    # ratio is rms(d2)/rms(d1) -- DIMENSIONLESS, so it rises for two different reasons: the
+    # alternating part grew, or the SMOOTH part shrank. The reference implementation used to
+    # wall the figure at canvas.width = 1024, which the app does not have (the room is
+    # physics.worldWidth = 3072; see the note in Ragdoll.__init__). Measured on this exact
+    # drag, before and after the wall was moved out of the way:
+    #
+    #                       held bone             worst bone in the body
+    #                ratio   amp    rms d1  rms d2     amp     rms d2
+    #   wall at 1024  0.74  1.80°   4.84°   3.60°     0.21 px   0.41 px
+    #   room   3072   1.27  1.26°   1.99°   2.53°     0.13 px   0.26 px
+    #
+    # Every absolute quantity got better -- the alternating part included, by 30% -- because
+    # the figure was no longer being shoved into a wall the app does not have, and the shove
+    # was most of what the hand's smooth rotation was. rms(d1) fell by 2.4x, rms(d2) by 1.4x,
+    # and the quotient of the two rose. So 1.1 was never purely a buzz threshold: on a 1024
+    # canvas it was partly a wall measurement, and it cannot be carried over unchanged.
+    #
+    # What the user can see is the second number, so that one is TIGHTENED (8.0 -> 3.0;
+    # 1.26 deg measured), and the ratio bound is re-derived from this scene's own readings on
+    # the room the app actually has: 1.6 against 1.27 measured. The d1/d2 pair is printed
+    # beside them so the next reader can check the quotient against its own parts instead of
+    # having to trust it.
     pet, bn = fresh()
     hand = bn["hand_R"]
     x0, y0 = hand.wpos
@@ -317,9 +343,14 @@ def main():
         pet.step(1.0 / 60.0, [("hand_R", (x0 + 260.0 * t, y0), 0.5)])
         if i > 30:
             held.append(math.degrees(hand.wrot))
+    d1 = [held[i] - held[i - 1] for i in range(1, len(held))]
+    d2 = [d1[i] - d1[i - 1] for i in range(1, len(d1))]
+    rms1 = math.sqrt(sum(v * v for v in d1) / len(d1))
+    rms2 = math.sqrt(sum(v * v for v in d2) / len(d2))
     ratio, amp = tremor(held)
-    report("the bone being held does not buzz", ratio < 1.1 and amp < 8.0,
-           "ratio %.2f, amp %.2f deg (unbounded it was 1.32 and 13.2)" % (ratio, amp))
+    report("the bone being held does not buzz", ratio < 1.6 and amp < 3.0,
+           "ratio %.2f, amp %.2f deg (rms d1 %.2f, d2 %.2f deg/frame; unbounded it was 1.32 and 13.2)"
+           % (ratio, amp, rms1, rms2))
 
     print("\na pet lying on the bench, dragged along it")
     # The same switch, in the pose it happens most: a pet lying on the bench is turned over

@@ -172,7 +172,9 @@ class Ragdoll:
         self.floor = float(physics.get("floorY", 2048.0))
         self.ceiling = 0.0
         self.wall_left = 0.0
-        self.wall_right = float(spec["canvas"]["width"])
+        # The room is the APP's room: CharacterSpec.worldWidth, not the art canvas.
+        # See the note in mirror_check.py -- this line was 1024 wide while the app's was 3072.
+        self.wall_right = float(physics.get("worldWidth", spec["canvas"]["width"]))
         self.restitution = 0.2
         self.ground_friction = 2.5
 

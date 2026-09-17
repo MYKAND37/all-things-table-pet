@@ -54,6 +54,11 @@ PAIRED_MECHANISMS = [
         r"self\.ik_spent = \{\}",
     ),
     (
+        "右墙是 App 的房间宽度 worldWidth，不是画布宽度",
+        r"wallRight = spec\.worldWidth",
+        r"wall_right = float\(physics\.get\(\"worldWidth\"",
+    ),
+    (
         "pin 的转角就是这根关节下一帧的速度（不是加在原来的速度上）",
         r"anglePrev\[b\.name\] = turned - got",
         r"self\.ang_prev\[b\.name\] = turned - got",
