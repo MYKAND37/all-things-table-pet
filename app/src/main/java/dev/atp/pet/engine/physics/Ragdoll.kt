@@ -1175,8 +1175,24 @@ class Ragdoll(
          * right over, and less than that leaves its head below the floor line on the way. The
          * floor is still a floor — see carryFloor — but it is not in the way of a body hanging
          * off a hand.
+         *
+         * 120, not the 460 it was, and the difference is a pump rather than a taste. 460 px is
+         * more than half a body: a figure dragged along the floor by the hip sank 277 px into
+         * that cushion before the floor said anything, and the correction that eventually came
+         * moved the figure by hundreds of px — which turned it over, which changed the model
+         * again. Measured, dragging the hip at 260 px/s and then holding still: with 460 the
+         * figure is still thrashing at 31 px per frame five seconds after the hand stopped,
+         * 277 px into the floor; with 120 it is at 1.7 px and 148 px. Freezing the floor's
+         * model at the moment the hand stops gives the same answer (2.75 px), which is what
+         * says the pump is the model switch and not the drag.
+         *
+         * Everything the cushion was introduced for survives at 120: an ankle lift still turns
+         * the figure over and it still hangs head-down, the sideways drag reads the same 5.3 px
+         * of overlap, and a lifted hand still reaches its finger to within the same 50 px. What
+         * shrinks is the burying: the head-down case goes from 465 px below the line to 160.
+         * Mirrors CARRY_SINK in tools/ragdoll.py, where the numbers above were taken.
          */
-        const val CARRY_SINK = 460f
+        const val CARRY_SINK = 120f
 
         /**
          * How far over a figure must be turned before the finger, and not the floor, is what

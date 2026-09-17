@@ -203,8 +203,16 @@ def main():
     report("dragging it across the floor does not bury it", w["sink"] < 120.0,
            "lowest part is %.0f px below the line" % w["sink"])
     d = scenario_head_down()
+    # A FIXED bound, and it used to be R.CARRY_SINK + 20 -- which was circular: the sink comes
+    # out at almost exactly the cushion (measured 465 px at a 460 px cushion, 160 at 120), so
+    # the old assertion could only catch a figure sinking past its own budget and would have
+    # passed a budget of ten thousand. The physical statement is the one the sideways case
+    # makes beside it: a hand's width of overlap is a body resting on the ground, a body's
+    # height (about 850 px here) is the bug. 200 px is that, tightened, and the cushion was
+    # brought down to 120 to satisfy it -- see CARRY_SINK in tools/ragdoll.py for what else
+    # that fixed.
     report("pushing the head down does not bury the figure",
-           d["sink"] < R.CARRY_SINK + 20.0, "%.0f px below the line" % d["sink"])
+           d["sink"] < 200.0, "%.0f px below the line (bound 200)" % d["sink"])
 
     print("")
     if FAILURES:

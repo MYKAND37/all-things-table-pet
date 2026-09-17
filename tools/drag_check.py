@@ -353,6 +353,36 @@ def main():
            "ratio %.2f, amp %.2f deg (rms d1 %.2f, d2 %.2f deg/frame; unbounded it was 1.32 and 13.2)"
            % (ratio, amp, rms1, rms2))
 
+    print("\na dragged figure loses energy to the floor when the hand stops")
+
+    # The pump this exists for, and it is a switch rather than a drag. The floor resolves a
+    # carried figure in one of two ways -- a cushion while it is hanging, a per-bone turn-out
+    # while it is not -- and moving between them MOVES the figure by hundreds of px, which
+    # turns it over, which moves it back. A body dragged along the floor by the hip tumbles,
+    # crosses that line over and over, and every crossing kicks it again. Measured with the
+    # cushion at 460 px: five seconds after the hand stopped it was still thrashing at 31 px
+    # per frame with 277 px of itself under the floor. Freezing the model at the moment the
+    # hand stops reads 2.75 px, which is what says the switch is the pump and not the drag;
+    # the cushion is 120 now and the numbers below are what is left of it.
+    pet, bn = fresh()
+    hip = bn["hip"]
+    x0, y0 = hip.wpos
+    rest, pen = [], []
+    before = dict((b.name, b.wpos) for b in pet.order)
+    for i in range(420):
+        tx = x0 + 260.0 * min(i, 120) / 60.0
+        pet.step(1.0 / 60.0, [("hip", (tx, y0), 71.5)])
+        if i >= 120:
+            rest.append(max(math.hypot(b.wpos[0] - before[b.name][0],
+                                       b.wpos[1] - before[b.name][1]) for b in pet.order))
+            pen.append(max(pet.collider_low(b) for b in pet.order) - pet.floor)
+        before = dict((b.name, b.wpos) for b in pet.order)
+    tail = sum(rest[-30:]) / 30
+    report("it comes to rest after the hand stops", tail < 6.0,
+           "%.2f px per frame in the last half second (it was 31)" % tail)
+    report("and it is not buried in the floor", max(pen[-30:]) < 200.0,
+           "%.0f px under the line (it was 277)" % max(pen[-30:]))
+
     print("\nthe finger's own shake does not become the pet's")
 
     # A real finger is not a straight line: between two frames a thumb on glass jumps a few

@@ -208,7 +208,22 @@ HANGING_OFF = 1.65
 # below the line, and only past that does the floor push back. It is still a floor, so a
 # figure cannot be shoved through it, but it is no longer in the way of a body hanging off
 # a hand.
-CARRY_SINK = 460.0
+# 120, not 460, and the difference is a pump rather than a taste. The cushion is what lets a
+# carried figure hang below the line; 460 px is more than half a body, so a figure dragged
+# along the floor by the hip could sink 277 px into it before the floor said anything, and
+# the correction that eventually came MOVED the figure hundreds of px -- which turned it
+# over, which changed the model again. Measured, dragging the hip along the floor at 260
+# px/s and then holding still: with 460 the figure is still thrashing at 31 px per frame
+# five seconds after the hand stopped, 277 px into the floor; with 120 it is at 1.7 px and
+# 148 px. Freezing the floor's model at the moment the hand stops gives the same answer
+# (2.75 px), which is what says the pump is the model switch and not the drag.
+#
+# Everything the cushion was introduced for survives at 120: lifting an ankle still turns
+# the figure over and it still hangs head-down (tools/carry_check.py's ankle cases), the
+# sideways drag reads the same 5.3 px of overlap, and a hand lifted with the body still
+# reaches its finger to within the same 50 px. What shrinks is the burying: the head-down
+# case goes from 465 px below the line to 160, which is the direction that test exists for.
+CARRY_SINK = 120.0
 
 # Hard ceilings on the integrator itself. Not physics: an explicit integrator that is
 # fed a bad number should saturate rather than turn the figure into NaN.
