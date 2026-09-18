@@ -155,6 +155,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** Where each bone's joint was last frame, so a piece torn off can keep its momentum. */
     private val lastBoneAt = HashMap<String, Vec2>()
 
+    /**
+     * Bones that have been 断开'd. Kept here as well as in the ragdoll ([Ragdoll.setGone])
+     * because a reset has to be able to put them back: the ragdoll does not know which of
+     * the hidden bones were hidden and which were removed.
+     */
+    private val detached = HashSet<String>()
+
     /** Named actions, so a rule can say "摆动作 挥手". */
     private var poseByName: Map<String, Map<String, Float>> = emptyMap()
 
@@ -419,6 +426,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         emitters.clear()
         debris.clear()
         lastBoneAt.clear()
+        for (name in detached) ragdoll?.setGone(name, false)
+        detached.clear()
         heldOffsets.clear()
         heldProp = null
         framed = false
@@ -458,6 +467,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         emitters.clear()
         debris.clear()
         lastBoneAt.clear()
+        for (name in detached) ragdoll?.setGone(name, false)
+        detached.clear()
         heldOffsets.clear()
         heldProp = null
         propPointer = -1
@@ -638,6 +649,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         emitters.clear()
         debris.clear()
         lastBoneAt.clear()
+        for (name in detached) ragdoll?.setGone(name, false)
+        detached.clear()
         heldOffsets.clear()
         heldProp = null
         signals.clear()
@@ -1301,6 +1314,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val rag = ragdoll ?: return
         broken.add(name)
         renderer?.hidden = broken
+        // Gone, not just hidden: no longer pickable, no longer held up by the floor, no
+        // longer weight. See Ragdoll.setGone. A finger that was holding it lets go, because
+        // a pin pulling on a piece that is not there is a hand dragging nothing.
+        detached.add(name)
+        rag.setGone(name, true)
+        for (id in heldBones.filterValues { it == name }.keys.toList()) endGrab(rag, id)
         val was = lastBoneAt[name] ?: bone.worldPosition
         val vel = (bone.worldPosition - was) * 60f
         val kick = if (bone.worldPosition.x >= sk.root.worldPosition.x) 40f else -40f
@@ -1322,6 +1341,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         broken.remove(name)
         renderer?.hidden = broken
         debris.removeAll { it.bone == name }
+        detached.remove(name)
+        ragdoll?.setGone(name, false)
     }
 
     /**

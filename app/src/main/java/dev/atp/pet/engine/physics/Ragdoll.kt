@@ -140,6 +140,29 @@ class Ragdoll(
     private var pinTargets: List<Vec2> = emptyList()
     private var pinned = false
 
+    /**
+     * Bones that are not part of the world any more: 断开部位.
+     *
+     * One set, three consequences, because they are the same statement -- this piece is gone:
+     *
+     *  * a finger cannot pick it (the hit test walks straight through it and finds whatever
+     *    was behind it, which is what a finger does to a piece that is not there);
+     *  * the floor does not hold it up, so a pet that lost a leg does not stand on the leg
+     *    it no longer has;
+     *  * it weighs nothing, so the figure topples towards the side it lost.
+     *
+     * What is left is the bone's own joint, still swinging inside the skeleton where nothing
+     * can see it. Cutting THAT out means splitting the figure into two bodies, and the whole
+     * solver is built around exactly one root.
+     */
+    private val gone = HashSet<String>()
+
+    fun setGone(name: String, on: Boolean) {
+        if (on) gone.add(name) else gone.remove(name)
+    }
+
+    fun isGone(name: String): Boolean = name in gone
+
     init {
         for (b in bones) {
             children[b.name] = mutableListOf()
@@ -249,6 +272,9 @@ class Ragdoll(
         var bestOffset = 0f
         var bestDist = Float.MAX_VALUE
         for (b in bones) {
+            // Not there, not pickable -- and the finger keeps looking, so the bone that was
+            // behind it in the drawing is what gets taken hold of.
+            if (b.name in gone) continue
             val r = colliderRadius[b.name] ?: defaultRadius
             val head = b.worldPosition
             val tip = b.tipPosition()
@@ -342,6 +368,7 @@ class Ragdoll(
             var tau = 0f
             var inertia = 0f
             for (d in subtrees[b.name]!!) {
+                if (d.name in gone) continue
                 val c = com(d)
                 val m = mass[d.name] ?: 1f
                 tau += m * g * (c.x - hx)
@@ -366,6 +393,7 @@ class Ragdoll(
             var tau = 0f
             var inertia = 0f
             for (b in bones) {
+                if (b.name in gone) continue
                 val c = com(b)
                 val m = mass[b.name] ?: 1f
                 tau += m * g * (c.x - pin.x)
@@ -473,6 +501,7 @@ class Ragdoll(
             var deepest = 0f
             var target: Bone? = null
             for (b in bones) {
+                if (b.name in gone) continue
                 val pen = colliderLow(b) - floor
                 if (pen > deepest) {
                     deepest = pen
@@ -489,7 +518,10 @@ class Ragdoll(
         if (!settled) {
             // Ran out of passes with something still under the floor: the root carries it.
             var worst = 0f
-            for (b in bones) worst = max(worst, colliderLow(b) - floor)
+            for (b in bones) {
+                if (b.name in gone) continue
+                worst = max(worst, colliderLow(b) - floor)
+            }
             if (worst > 0.05f) lift(worst, dt)
         }
 
