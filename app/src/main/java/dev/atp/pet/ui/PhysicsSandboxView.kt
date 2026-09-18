@@ -141,7 +141,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * relative to that, so a piece appears exactly where its bone was when it left.
      */
     private class Debris(
-        val bone: String,
+        /** The bone it was torn off at, and every bone under it: the piece is the whole limb. */
+        val bones: List<String>,
         var position: Vec2,
         var velocity: Vec2,
         var angle: Float,
@@ -151,6 +152,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
     )
 
     private val debris = mutableListOf<Debris>()
+
+    /** The piece a finger is carrying right now, and where that finger is. */
+    private var heldDebris: Debris? = null
+    private var debrisPointer = -1
+    private var fingerOnDebris: Vec2? = null
 
     /** Where each bone's joint was last frame, so a piece torn off can keep its momentum. */
     private val lastBoneAt = HashMap<String, Vec2>()
@@ -425,6 +431,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         smoothedTargets.clear()
         emitters.clear()
         debris.clear()
+        heldDebris = null
+        debrisPointer = -1
+        fingerOnDebris = null
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -466,6 +475,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         smoothedTargets.clear()
         emitters.clear()
         debris.clear()
+        heldDebris = null
+        debrisPointer = -1
+        fingerOnDebris = null
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -648,6 +660,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         smoothedTargets.clear()
         emitters.clear()
         debris.clear()
+        heldDebris = null
+        debrisPointer = -1
+        fingerOnDebris = null
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -1248,10 +1263,20 @@ class PhysicsSandboxView @JvmOverloads constructor(
         attachRopes()
     }
 
-    /** Every piece that has come off, drawn where it fell. See [Debris]. */
+    /**
+     * Every piece that has come off, drawn where it fell. See [Debris].
+     *
+     * One motion for the whole piece: it turns about the joint it was torn off at (that
+     * joint's rest position), and every bone in it is drawn under that same motion, so an arm
+     * keeps its elbow and its hand.
+     */
     private fun drawDebris(canvas: Canvas) {
         val art = renderer ?: return
-        for (d in debris) art.drawDetached(canvas, d.bone, d.position, d.angle)
+        for (d in debris) {
+            val origin = art.restPosition(d.bones.first()) ?: continue
+            val move = Transform(d.position + (Vec2.ZERO - origin).rotated(d.angle), d.angle)
+            for (b in d.bones) art.drawMoved(canvas, b, move)
+        }
     }
 
     /** One frame of "where was every joint", for the pieces that are about to leave. */
@@ -1272,6 +1297,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val floorY = spec.floorY
         for (d in debris) {
             if (d.settled) continue
+            if (d === heldDebris) {
+                // Carried: it goes where the finger goes (and no further down than the
+                // floor), and it keeps no velocity of its own -- letting go hands it the
+                // finger's, which is what makes throwing a piece feel like throwing.
+                val at = fingerOnDebris ?: d.position
+                val was = d.position
+                d.position = Vec2(at.x, min(at.y, floorY - d.radius))
+                d.velocity = (d.position - was) / max(dt, 1e-3f)
+                d.spin *= 0.85f
+                d.angle += d.spin * dt
+                bodyPushOut(d, spec, floorY)
+                continue
+            }
             d.velocity = Vec2(
                 d.velocity.x * (1f - DEBRIS_DRAG * dt),
                 d.velocity.y + spec.gravity * settings.gravityScale * dt,
@@ -1284,12 +1322,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // the slide, and the spin dies with it.
                 d.velocity = Vec2(d.velocity.x * 0.5f, 0f)
                 d.spin *= 0.4f
-                if (abs(d.velocity.x) < DEBRIS_REST && abs(d.spin) < 0.2f) {
+                if (d !== heldDebris && abs(d.velocity.x) < DEBRIS_REST && abs(d.spin) < 0.2f) {
                     d.velocity = Vec2.ZERO
                     d.spin = 0f
                     d.settled = true
                 }
             }
+            bodyPushOut(d, spec, floorY)
             val half = d.radius + 4f
             if (d.position.x - half < 0f) {
                 d.position = Vec2(half, d.position.y)
@@ -1299,6 +1338,57 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 d.velocity = Vec2(-abs(d.velocity.x) * 0.3f, d.velocity.y)
             }
         }
+    }
+
+    /**
+     * The body pushes the piece out of itself.
+     *
+     * One-way on purpose. The piece is a drawing that fell off, and the figure is the thing
+     * with a solver -- letting a severed hand shove the pet would be the tail wagging the
+     * dog, and the pet can be dragged while a piece leans on it. So a piece that lands on the
+     * figure rests ON it, which is the half of "still interacts" that is visible.
+     */
+    private fun bodyPushOut(d: Debris, spec: CharacterSpec, floorY: Float) {
+        val sk = skeleton ?: return
+        val rag = ragdoll ?: return
+        for (b in sk.bones) {
+            if (!rag.isSolid(b.name)) continue
+            val a = b.worldPosition
+            val t = b.tipPosition()
+            val abx = t.x - a.x
+            val aby = t.y - a.y
+            val lenSq = abx * abx + aby * aby
+            val k = if (lenSq < 1e-6f) 0f else
+                (((d.position.x - a.x) * abx + (d.position.y - a.y) * aby) / lenSq)
+                    .coerceIn(0f, 1f)
+            val cx = a.x + abx * k
+            val cy = a.y + aby * k
+            val dx = d.position.x - cx
+            val dy = d.position.y - cy
+            val dist = hypot(dx, dy)
+            val gap = d.radius + rag.colliderRadius(b)
+            if (dist >= gap || dist < 1e-4f) continue
+            val ux = dx / dist
+            val uy = dy / dist
+            d.position = Vec2(cx + ux * gap, min(cy + uy * gap, floorY - d.radius))
+            val into = d.velocity.x * ux + d.velocity.y * uy
+            if (into < 0f) d.velocity = Vec2(d.velocity.x - ux * into, d.velocity.y - uy * into)
+        }
+    }
+
+    /** What is under this finger, if it is a piece that came off. Nearest one wins. */
+    private fun debrisAt(x: Float, y: Float): Debris? {
+        val p = toWorld(x, y)
+        var best: Debris? = null
+        var bestDist = Float.MAX_VALUE
+        for (d in debris) {
+            val dist = hypot(p.x - d.position.x, p.y - d.position.y) - d.radius
+            if (dist < bestDist) {
+                bestDist = dist
+                best = d
+            }
+        }
+        return if (best != null && bestDist < 30f) best else null
     }
 
     /**
@@ -1312,37 +1402,69 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val sk = skeleton ?: return
         val bone = sk.find(name) ?: return
         val rag = ragdoll ?: return
-        broken.add(name)
+
+        // The whole limb, not the joint that was named: a shoulder that comes off takes the
+        // arm with it. Anything else leaves a forearm floating where the upper arm was, which
+        // is not a thing that happens to a body.
+        val piece = subtreeOf(bone)
+        for (b in piece) {
+            broken.add(b.name)
+            detached.add(b.name)
+            rag.setGone(b.name, true)
+            for (id in heldBones.filterValues { it == b.name }.keys.toList()) endGrab(rag, id)
+        }
         renderer?.hidden = broken
-        // Gone, not just hidden: no longer pickable, no longer held up by the floor, no
-        // longer weight. See Ragdoll.setGone. A finger that was holding it lets go, because
-        // a pin pulling on a piece that is not there is a hand dragging nothing.
-        detached.add(name)
-        rag.setGone(name, true)
-        for (id in heldBones.filterValues { it == name }.keys.toList()) endGrab(rag, id)
+
+        // How big the piece is, for the floor: the furthest any of its joints is from the
+        // joint it came off at, plus that joint's own collider.
+        var reach = rag.colliderRadius(bone)
+        for (b in piece) {
+            reach = max(reach, hypot(b.worldPosition.x - bone.worldPosition.x,
+                b.worldPosition.y - bone.worldPosition.y) + rag.colliderRadius(b))
+        }
+
         val was = lastBoneAt[name] ?: bone.worldPosition
         val vel = (bone.worldPosition - was) * 60f
         val kick = if (bone.worldPosition.x >= sk.root.worldPosition.x) 40f else -40f
-        debris.removeAll { it.bone == name }
+        // One piece: a second call for the same limb replaces the first rather than dropping
+        // two copies of the same arm.
+        val names = piece.map { it.name }.toSet()
+        debris.removeAll { d -> d.bones.any { it in names } }
         debris.add(
             Debris(
-                bone = name,
+                bones = piece.map { it.name },
                 position = bone.worldPosition,
                 velocity = Vec2(vel.x + kick, min(vel.y, 0f) - 40f),
                 angle = bone.worldRotation - bone.restRotation,
                 spin = kick / 220f,
-                radius = rag.colliderRadius(bone),
+                radius = reach,
             )
         )
     }
 
+    /** This bone and everything hanging off it, parents first -- the order artwork is drawn in. */
+    private fun subtreeOf(root: Bone): List<Bone> {
+        val out = mutableListOf<Bone>()
+        fun walk(b: Bone) {
+            out.add(b)
+            for (c in b.children) walk(c)
+        }
+        walk(root)
+        return out
+    }
+
     /** Put it back: the drawing returns and the piece on the floor is taken away. */
     private fun rejoinBone(name: String) {
-        broken.remove(name)
+        // Whichever piece this bone is part of -- it may be the shoulder that was named or
+        // the hand that came off with it -- the whole piece goes back.
+        val piece = debris.firstOrNull { name in it.bones }?.bones ?: listOf(name)
+        for (b in piece) {
+            broken.remove(b)
+            detached.remove(b)
+            ragdoll?.setGone(b, false)
+        }
         renderer?.hidden = broken
-        debris.removeAll { it.bone == name }
-        detached.remove(name)
-        ragdoll?.setGone(name, false)
+        debris.removeAll { d -> d.bones.any { it in piece } }
     }
 
     /**
@@ -2962,6 +3084,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     return true
                 }
                 lastTapAt = now
+                // A piece that came off is a thing on the bench now, so it is picked up
+                // before the figure and the props are asked: it is drawn on top of them, and
+                // the finger means what it is on.
+                val piece = debrisAt(event.x, event.y)
+                if (piece != null) {
+                    heldDebris = piece
+                    debrisPointer = event.getPointerId(0)
+                    fingerOnDebris = toWorld(event.x, event.y)
+                    piece.settled = false
+                    lastFrameNs = System.nanoTime()
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 if (!beginGrab(rag, event.getPointerId(0), event.x, event.y)) {
                     // Nothing under the finger: the finger is moving the window.
                     panning = true
@@ -3004,6 +3139,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
                             TUNE_DRAG_GAIN -> setTuneFromSlider(event.getX(i))
                             TUNE_DRAG_RATE -> setRateFromSlider(event.getX(i))
                         }
+                        grabbing = true
+                        continue
+                    }
+                    if (id == debrisPointer && heldDebris != null) {
+                        fingerOnDebris = toWorld(event.getX(i), event.getY(i))
                         grabbing = true
                         continue
                     }
@@ -3076,6 +3216,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 heldProp?.let { releaseProp(it) }
                 heldProp = null
                 propPointer = -1
+                // Letting go of a piece hands it whatever speed the finger had, which
+                // stepDebris has been reading off its own positions. Nothing else to do:
+                // the piece is already in the list the world steps.
+                heldDebris = null
+                debrisPointer = -1
+                fingerOnDebris = null
 
                 val tapped = tapBone
                 val wasHolding = heldBones.isNotEmpty()

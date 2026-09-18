@@ -160,24 +160,26 @@ class PartRenderer(
     }
 
     /**
-     * Draw one bone's artwork as a piece that has come OFF the figure.
+     * Where a bone's artwork was authored: the joint it hangs from, in canvas coordinates.
      *
-     * The same layers, the same crop offsets, one difference: instead of asking the skeleton
-     * where the bone is, this says where it would have to be. [at] is where that bone's rest
-     * position has been carried to (its joint, in canvas coordinates) and [spin] is how far
-     * the piece has turned since it left. See PhysicsSandboxView.Debris for when one exists.
-     *
-     * The motion is a rigid one about the piece's own rest position, which is what makes a
-     * detached arm lie where it fell instead of snapping back to where it was authored.
+     * This is the point a piece that has come off turns about. See [drawMoved].
      */
-    fun drawDetached(canvas: Canvas, boneName: String, at: Vec2, spin: Float) {
-        val rest = restWorld[boneName] ?: return
-        val moved = Transform(at + (Vec2.ZERO - rest.position).rotated(spin), spin)
+    fun restPosition(bone: String): Vec2? = restWorld[bone]?.position
+
+    /**
+     * One bone's artwork under a rigid motion of its own, instead of under the skeleton's.
+     *
+     * [move] is the motion of the WHOLE piece -- the same transform for every bone that left
+     * together -- so an arm that came off at the shoulder keeps its elbow and its hand where
+     * they were relative to each other. See PhysicsSandboxView.Debris, which builds it from
+     * the piece's rest position and the spin it has picked up.
+     */
+    fun drawMoved(canvas: Canvas, bone: String, move: Transform) {
         for (layer in baseOrder) {
-            if (layer.bone != boneName) continue
+            if (layer.bone != bone) continue
             if (!layer.visible(states)) continue
             val part = library.parts[layer.artKey] ?: continue
-            paintAt(canvas, part, moved)
+            paintAt(canvas, part, move)
         }
     }
 
