@@ -4511,6 +4511,9 @@ class MainActivity : AppCompatActivity() {
                         }
                         true
                     }
+                    // The outer picker's answer, for the same reason as the inner one: a
+                    // dialog that took a choice says so, and this flow took one.
+                    true
                 }
                 // 持续喷粒子：同上，喷的是粒子。
                 "burstStream" -> pickList(
