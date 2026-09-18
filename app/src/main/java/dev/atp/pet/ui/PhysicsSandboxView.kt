@@ -141,16 +141,73 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * [position] is where the bone's REST position has been carried to: the artwork is drawn
      * relative to that, so a piece appears exactly where its bone was when it left.
      */
+    /**
+     * One bone of a piece, as it was when the piece left: head, tip and collider radius,
+     * all relative to the piece's own origin.
+     *
+     * The piece carries its shape around with it, so the floor, the body and the finger all
+     * see the limb rather than a circle drawn around it. One bounding circle was what this
+     * started as, and it was wrong in three visible ways at once: an arm rested a whole arm's
+     * length above the floor, the body shoved it away from a limb's distance off, and it
+     * could be picked up from mid-air.
+     */
+    private class Piece(val head: Vec2, val tail: Vec2, val r: Float)
+
     private class Debris(
         /** The bone it was torn off at, and every bone under it: the piece is the whole limb. */
         val bones: List<String>,
+        /** The bones' capsules, relative to [position] and turned by [angle]. */
+        val shape: List<Piece>,
         var position: Vec2,
         var velocity: Vec2,
         var angle: Float,
         var spin: Float,
-        val radius: Float,
+        /** The furthest any of the shape reaches from the origin: a cheap "not near it". */
+        val bound: Float,
         var settled: Boolean = false,
     )
+
+    /** A capsule moving with a piece: where its ends are right now, in canvas coordinates. */
+    private fun headAt(d: Debris, p: Piece): Vec2 = d.position + p.head.rotated(d.angle)
+    private fun tailAt(d: Debris, p: Piece): Vec2 = d.position + p.tail.rotated(d.angle)
+
+    /** How far below [Debris.position] the piece's lowest point hangs. */
+    private fun lowestDrop(d: Debris): Float =
+        d.shape.maxOf { max(headAt(d, it).y, tailAt(d, it).y) + it.r } - d.position.y
+
+    /**
+     * How far the piece reaches left and right of its origin, at the angle it is lying at.
+     *
+     * The walls ask this: [Debris.bound] would also answer it, but a bound is the radius of a
+     * circle around the whole limb, and a piece that stopped a whole arm's length short of the
+     * wall would be the same bug as one that rested an arm's length above the floor.
+     */
+    private fun reachX(d: Debris): Float {
+        var r = 0f
+        for (pc in d.shape) {
+            r = max(r, max(abs(headAt(d, pc).x - d.position.x),
+                abs(tailAt(d, pc).x - d.position.x)) + pc.r)
+        }
+        return r
+    }
+
+    /** Distance from [p] to the piece's surface, negative inside it. */
+    private fun distanceTo(d: Debris, p: Vec2): Float {
+        if (hypot(p.x - d.position.x, p.y - d.position.y) > d.bound + 32f) return Float.MAX_VALUE
+        var best = Float.MAX_VALUE
+        for (pc in d.shape) {
+            val a = headAt(d, pc)
+            val b = tailAt(d, pc)
+            val abx = b.x - a.x
+            val aby = b.y - a.y
+            val lenSq = abx * abx + aby * aby
+            val k = if (lenSq < 1e-6f) 0f else
+                (((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
+            val dist = hypot(p.x - (a.x + abx * k), p.y - (a.y + aby * k)) - pc.r
+            if (dist < best) best = dist
+        }
+        return best
+    }
 
     private val debris = mutableListOf<Debris>()
 
@@ -158,6 +215,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var heldDebris: Debris? = null
     private var debrisPointer = -1
     private var fingerOnDebris: Vec2? = null
+
+    /** Where the piece was touched, relative to its origin: what it hangs from while carried. */
+    private var holdOffset = Vec2.ZERO
 
     /** Where each bone's joint was last frame, so a piece torn off can keep its momentum. */
     private val lastBoneAt = HashMap<String, Vec2>()
@@ -435,6 +495,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldDebris = null
         debrisPointer = -1
         fingerOnDebris = null
+        holdOffset = Vec2.ZERO
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -479,6 +540,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldDebris = null
         debrisPointer = -1
         fingerOnDebris = null
+        holdOffset = Vec2.ZERO
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -664,6 +726,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldDebris = null
         debrisPointer = -1
         fingerOnDebris = null
+        holdOffset = Vec2.ZERO
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -1302,9 +1365,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // Carried: it goes where the finger goes (and no further down than the
                 // floor), and it keeps no velocity of its own -- letting go hands it the
                 // finger's, which is what makes throwing a piece feel like throwing.
+                //
+                // The grab offset is kept, so the piece hangs from the point that was
+                // touched instead of snapping its shoulder under the finger.
                 val at = fingerOnDebris ?: d.position
                 val was = d.position
-                d.position = Vec2(at.x, min(at.y, floorY - d.radius))
+                d.position = Vec2(at.x + holdOffset.x, min(at.y + holdOffset.y, floorY - lowestDrop(d)))
                 d.velocity = (d.position - was) / max(dt, 1e-3f)
                 d.spin *= 0.85f
                 d.angle += d.spin * dt
@@ -1317,8 +1383,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             )
             d.position = d.position + d.velocity * dt
             d.angle += d.spin * dt
-            if (d.position.y + d.radius >= floorY) {
-                d.position = Vec2(d.position.x, floorY - d.radius)
+            val drop = lowestDrop(d)
+            if (d.position.y + drop >= floorY) {
+                d.position = Vec2(d.position.x, floorY - drop)
                 // Landing is not a bounce: a hand that hits the table stops. What is left is
                 // the slide, and the spin dies with it.
                 d.velocity = Vec2(d.velocity.x * 0.5f, 0f)
@@ -1330,7 +1397,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 }
             }
             bodyPushOut(d, spec, floorY)
-            val half = d.radius + 4f
+            val half = reachX(d) + 4f
             if (d.position.x - half < 0f) {
                 d.position = Vec2(half, d.position.y)
                 d.velocity = Vec2(abs(d.velocity.x) * 0.3f, d.velocity.y)
@@ -1352,28 +1419,36 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun bodyPushOut(d: Debris, spec: CharacterSpec, floorY: Float) {
         val sk = skeleton ?: return
         val rag = ragdoll ?: return
-        for (b in sk.bones) {
-            if (!rag.isSolid(b.name)) continue
-            val a = b.worldPosition
-            val t = b.tipPosition()
-            val abx = t.x - a.x
-            val aby = t.y - a.y
-            val lenSq = abx * abx + aby * aby
-            val k = if (lenSq < 1e-6f) 0f else
-                (((d.position.x - a.x) * abx + (d.position.y - a.y) * aby) / lenSq)
-                    .coerceIn(0f, 1f)
-            val cx = a.x + abx * k
-            val cy = a.y + aby * k
-            val dx = d.position.x - cx
-            val dy = d.position.y - cy
-            val dist = hypot(dx, dy)
-            val gap = d.radius + rag.colliderRadius(b)
-            if (dist >= gap || dist < 1e-4f) continue
-            val ux = dx / dist
-            val uy = dy / dist
-            d.position = Vec2(cx + ux * gap, min(cy + uy * gap, floorY - d.radius))
-            val into = d.velocity.x * ux + d.velocity.y * uy
-            if (into < 0f) d.velocity = Vec2(d.velocity.x - ux * into, d.velocity.y - uy * into)
+        // The piece's own bones are tested against the body's, end by end: a limb is a handful
+        // of capsules, and the ends are what sticks out of it. Every overlap found is applied
+        // as a move of the whole piece -- it is rigid, so pushing its origin moves all of it.
+        for (pc in d.shape) {
+            for (end in listOf(headAt(d, pc), tailAt(d, pc))) {
+                for (b in sk.bones) {
+                    if (!rag.isSolid(b.name)) continue
+                    val a = b.worldPosition
+                    val t = b.tipPosition()
+                    val abx = t.x - a.x
+                    val aby = t.y - a.y
+                    val lenSq = abx * abx + aby * aby
+                    val k = if (lenSq < 1e-6f) 0f else
+                        (((end.x - a.x) * abx + (end.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
+                    val dx = end.x - (a.x + abx * k)
+                    val dy = end.y - (a.y + aby * k)
+                    val dist = hypot(dx, dy)
+                    val gap = pc.r + rag.colliderRadius(b)
+                    if (dist >= gap || dist < 1e-4f) continue
+                    val ux = dx / dist
+                    val uy = dy / dist
+                    val slide = gap - dist
+                    val next = Vec2(d.position.x + ux * slide, d.position.y + uy * slide)
+                    d.position = Vec2(next.x, min(next.y, floorY - lowestDrop(d)))
+                    val into = d.velocity.x * ux + d.velocity.y * uy
+                    if (into < 0f) {
+                        d.velocity = Vec2(d.velocity.x - ux * into, d.velocity.y - uy * into)
+                    }
+                }
+            }
         }
     }
 
@@ -1383,13 +1458,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         var best: Debris? = null
         var bestDist = Float.MAX_VALUE
         for (d in debris) {
-            val dist = hypot(p.x - d.position.x, p.y - d.position.y) - d.radius
+            val dist = distanceTo(d, p)
             if (dist < bestDist) {
                 bestDist = dist
                 best = d
             }
         }
-        return if (best != null && bestDist < 30f) best else null
+        return if (best != null && bestDist < 24f) best else null
     }
 
     /**
@@ -1416,12 +1491,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         renderer?.hidden = broken
 
-        // How big the piece is, for the floor: the furthest any of its joints is from the
-        // joint it came off at, plus that joint's own collider.
-        var reach = rag.colliderRadius(bone)
-        for (b in piece) {
-            reach = max(reach, hypot(b.worldPosition.x - bone.worldPosition.x,
-                b.worldPosition.y - bone.worldPosition.y) + rag.colliderRadius(b))
+        // The shape it carries: every bone's capsule, measured relative to the joint it was
+        // torn off at, so the floor, the body and the finger all see the limb itself rather
+        // than a circle around it. Measured now, from the pose it left in.
+        val shape = piece.map { b ->
+            Piece(
+                head = b.worldPosition - bone.worldPosition,
+                tail = b.tipPosition() - bone.worldPosition,
+                r = rag.colliderRadius(b),
+            )
+        }
+        var bound = 0f
+        for (pc in shape) {
+            bound = max(bound, max(pc.head.length(), pc.tail.length()) + pc.r)
         }
 
         val was = lastBoneAt[name] ?: bone.worldPosition
@@ -1434,11 +1516,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         debris.add(
             Debris(
                 bones = piece.map { it.name },
+                shape = shape,
                 position = bone.worldPosition,
                 velocity = Vec2(vel.x + kick, min(vel.y, 0f) - 40f),
                 angle = bone.worldRotation - bone.restRotation,
                 spin = kick / 220f,
-                radius = reach,
+                bound = bound,
             )
         )
     }
@@ -3092,7 +3175,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 if (piece != null) {
                     heldDebris = piece
                     debrisPointer = event.getPointerId(0)
-                    fingerOnDebris = toWorld(event.x, event.y)
+                    val at = toWorld(event.x, event.y)
+                    fingerOnDebris = at
+                    holdOffset = piece.position - at
                     piece.settled = false
                     lastFrameNs = System.nanoTime()
                     postInvalidateOnAnimation()
