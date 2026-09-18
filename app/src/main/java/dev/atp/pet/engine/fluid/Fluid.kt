@@ -134,21 +134,64 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         for (i in 0 until n) {
             val angle = random.nextFloat() * TWO_PI
             val v = speed * (0.2f + random.nextFloat() * 0.8f)
-            drops.add(
-                Drop(
-                    x = at.x + (random.nextFloat() - 0.5f) * 12f,
-                    y = at.y + (random.nextFloat() - 0.5f) * 12f,
-                    vx = cos(angle) * v,
-                    vy = sin(angle) * v - 120f,
-                    colour = colour,
-                    radius = RADIUS,
-                    viscosity = viscosity,
-                    liquid = liquid,
-                    collides = collides,
-                )
+            add(
+                colour, at.x + (random.nextFloat() - 0.5f) * 12f,
+                at.y + (random.nextFloat() - 0.5f) * 12f,
+                cos(angle) * v, sin(angle) * v - 120f,
+                viscosity, liquid, collides,
             )
         }
         while (drops.size > MAX_DROPS) drops.removeAt(0)
+    }
+
+    /**
+     * Pour: the same drops, in a COLUMN instead of a splash.
+     *
+     * A spill throws in every direction from one point, which is what a splash is. A stream
+     * that does that is not a stream — it is a splash that takes longer, and at twenty drops
+     * a second it reads as a puff hanging in the air. A column gives every drop the SAME
+     * direction (down, by default) with only a few degrees of jitter, and spawns them along
+     * the emitter rather than in a 12 px ball, so they travel together and land as one line.
+     * Gravity then bends the line into the arc a poured liquid actually makes.
+     *
+     * [spread] is the half-angle of the jitter, in radians: 0.05 is about 3 degrees.
+     */
+    fun pour(
+        colour: Int,
+        at: Vec2,
+        count: Int,
+        viscosity: Float,
+        speed: Float = 320f,
+        liquid: String = "",
+        collides: Boolean = true,
+        spread: Float = COLUMN_SPREAD,
+    ) {
+        val n = count.coerceIn(0, 200)
+        for (i in 0 until n) {
+            val angle = HALF_PI + (random.nextFloat() - 0.5f) * 2f * spread
+            val v = speed * (0.9f + random.nextFloat() * 0.2f)
+            add(
+                colour, at.x + (random.nextFloat() - 0.5f) * 2f,
+                at.y + (random.nextFloat() - 0.5f) * 2f,
+                cos(angle) * v, sin(angle) * v,
+                viscosity, liquid, collides,
+            )
+        }
+        while (drops.size > MAX_DROPS) drops.removeAt(0)
+    }
+
+    /** One drop, born where and how its caller asked. Shared by [spill] and [pour]. */
+    private fun add(
+        colour: Int, x: Float, y: Float, vx: Float, vy: Float,
+        viscosity: Float, liquid: String, collides: Boolean,
+    ) {
+        drops.add(
+            Drop(
+                x = x, y = y, vx = vx, vy = vy,
+                colour = colour, radius = RADIUS, viscosity = viscosity,
+                liquid = liquid, collides = collides,
+            )
+        )
     }
 
     /**
@@ -351,6 +394,18 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         const val MAX_DROPS = 600
         const val FLOOR_FRICTION = 6f
         const val AIR_DRAG = 0.4f
+
+        /** Half a turn: down the screen, which is where a poured liquid goes. */
+        private const val HALF_PI = 1.5707964f
+
+        /**
+         * How wide a poured column is allowed to fan, as a half-angle in radians.
+         *
+         * 0.05 rad is about 3 degrees: wide enough that the jet is not a single file of drops
+         * drawn on top of each other, narrow enough that it does not read as a spray. Mirrors
+         * COLUMN_SPREAD in tools/fluid_check.py, where the landing spread is measured.
+         */
+        const val COLUMN_SPREAD = 0.05f
         private const val TWO_PI = 6.2831855f
     }
 }

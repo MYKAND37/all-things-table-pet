@@ -33,6 +33,7 @@ import dev.atp.pet.engine.logic.ConditionSpec
 import dev.atp.pet.engine.logic.Joins
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleSpec
+import dev.atp.pet.engine.logic.Shapes
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
@@ -4041,7 +4042,9 @@ class MainActivity : AppCompatActivity() {
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
         "burst" -> "喷" + ParticleKinds.of(a.text, logicParticles).name
-        "pour" -> "流" + liquidName(a.text) + " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
+        "pour" -> "流" + liquidName(a.text) +
+            (if (Shapes.of(a.shape) == Shapes.SCATTER) "（乱撒）" else "（柱状）") +
+            " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
         "stream" -> "持续喷" + ParticleKinds.of(a.text, logicParticles).name +
             " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
         "impulse" -> "推" + directionText(a.text) + " " +
@@ -4474,26 +4477,40 @@ class MainActivity : AppCompatActivity() {
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
                     true
                 }
-                // 流液体：选哪种液体 → 每秒多少滴 → 流多少秒。
+                // 流液体：柱状还是乱撒 → 选哪种液体 → 每秒多少滴 → 流多少秒。
                 "liquidStream" -> pickList(
-                    getString(R.string.logic_pick_liquid),
-                    logicLiquids.map { it.id to it.name },
-                    getString(R.string.logic_no_liquids),
-                    existing?.text,
-                ) { liquidId ->
-                    askNumber(
-                        getString(R.string.logic_pick_rate), existing?.value ?: 20f, 1f, 200f,
-                    ) { rate ->
+                    getString(R.string.logic_pick_shape),
+                    listOf(
+                        Shapes.COLUMN to getString(R.string.logic_shape_column),
+                        Shapes.SCATTER to getString(R.string.logic_shape_scatter),
+                    ),
+                    "",
+                    Shapes.of(existing?.shape ?: ""),
+                ) { shape ->
+                    pickList(
+                        getString(R.string.logic_pick_liquid),
+                        logicLiquids.map { it.id to it.name },
+                        getString(R.string.logic_no_liquids),
+                        existing?.text,
+                    ) { liquidId ->
                         askNumber(
-                            getString(R.string.logic_pick_seconds), existing?.value2 ?: 2f, 0.1f, 60f,
-                        ) { seconds ->
-                            putAction(
-                                index, actionIndex, isElse,
-                                ActionSpec(kind.id, text = liquidId, value = rate, value2 = seconds),
-                            )
+                            getString(R.string.logic_pick_rate), existing?.value ?: 20f, 1f, 200f,
+                        ) { rate ->
+                            askNumber(
+                                getString(R.string.logic_pick_seconds),
+                                existing?.value2 ?: 2f, 0.1f, 60f,
+                            ) { seconds ->
+                                putAction(
+                                    index, actionIndex, isElse,
+                                    ActionSpec(
+                                        kind.id, text = liquidId, value = rate,
+                                        value2 = seconds, shape = shape,
+                                    ),
+                                )
+                            }
                         }
+                        true
                     }
-                    true
                 }
                 // 持续喷粒子：同上，喷的是粒子。
                 "burstStream" -> pickList(

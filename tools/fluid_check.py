@@ -28,6 +28,11 @@ COHESION = 0.10        # how hard they pull together once they are apart
 COHESION_RANGE = 1.9   # in multiples of SPACING
 MAX_CORRECTION = 0.5   # one pass may not move a drop further than this, in spacings
 
+#: How wide a poured column may fan, as a half-angle in radians (about 3 degrees). Wide
+#: enough that the jet is not one file of drops drawn on top of each other, narrow enough
+#: that it does not read as a spray. Mirrors Fluid.COLUMN_SPREAD.
+COLUMN_SPREAD = 0.05
+
 # The range at which a drop stops being pushed away and starts being pulled back. Without
 # it the drops only ever push, nothing ever pulls, and a puddle spreads until it hits a
 # wall: it is not surface tension, but it is the same job, and a liquid without it looks
@@ -79,6 +84,24 @@ class Fluid:
             self.drops.clear()
             return
         self.drops = [d for d in self.drops if d.liquid != liquid]
+
+    def pour(self, x, y, count, colour, speed=320.0, liquid="", collides=True,
+             spread=None):
+        """A COLUMN: every drop the same direction (down) with a few degrees of jitter, and
+        spawned along the emitter rather than in a 12 px ball, so they travel together and
+        land as one line. Mirrors Fluid.pour in Fluid.kt; main() measures the landing width
+        of this against a spill, which is the whole difference between 柱状 and 乱撒."""
+        if spread is None:
+            spread = COLUMN_SPREAD
+        for _ in range(count):
+            a = math.pi / 2 + self.rng.uniform(-spread, spread)
+            v = speed * self.rng.uniform(0.9, 1.1)
+            self.drops.append(
+                Drop(x + self.rng.uniform(-1, 1), y + self.rng.uniform(-1, 1),
+                     math.cos(a) * v, math.sin(a) * v, colour, RADIUS, liquid, collides)
+            )
+        while len(self.drops) > MAX_DROPS:
+            self.drops.pop(0)
 
     def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid="", collides=True):
         # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
@@ -388,6 +411,47 @@ def main():
     report("no drop is inside the bone", len(inside) == 0, "%d inside" % len(inside))
     report("it piled up around the bone",
            max(d.x for d in f.drops) - min(d.x for d in f.drops) > 150.0)
+
+    print("a column stays a column")
+    # 流液体 has two shapes and this is the difference between them, measured at the moment
+    # the drops land: a column arrives as a line, a spill arrives as a puddle the width of
+    # its own throw. Anything in between is a stream that reads as a puff hanging in the air.
+    def landing_width(pour, spread=None):
+        # Spawned the way the bench's emitter does it -- twenty a second, a few at a time --
+        # and measured at the moment the first drop lands. Both halves matter: forty drops
+        # born on one frame all overlap, the crowding blows them apart, and a column of them
+        # reads as a puff no matter what shape it was poured in. A stream is drops spread
+        # over TIME, which is also what keeps them from pushing each other sideways.
+        f = Fluid(2000.0, 3000.0)
+        carry, spawned = 0.0, 0
+        for _ in range(600):
+            carry += 20.0 / 60.0
+            n = int(carry)
+            carry -= n
+            if n:
+                spawned += n
+                if pour:
+                    f.pour(1500, 400, n, 0xFF0000, liquid="water", spread=spread)
+                else:
+                    f.spill(1500, 400, n, 0xFF0000, liquid="water")
+            f.step(1 / 60, 2400.0)
+            xs = [d.x for d in f.drops]
+            if xs and any(d.y + d.r >= 2000.0 for d in f.drops):
+                return max(xs) - min(xs), spawned
+        return 0.0, spawned
+
+    col_w, col_n = landing_width(True)
+    spl_w, spl_n = landing_width(False)
+    report("a poured column lands as a line", col_w < 120.0,
+           "%.0f px wide from %d drops" % (col_w, col_n))
+    report("a spill lands as a puddle", spl_w > col_w * 2.0,
+           "%.0f px wide vs the column's %.0f" % (spl_w, col_w))
+    # The knob is what makes a column a column: the same pour with a 23 degree fan is a
+    # spray again. Without this the test would pass for a "column" that was narrow because
+    # its drops never spread at all -- which is a different mechanism with a different fix.
+    wide_w, _ = landing_width(True, spread=0.4)
+    report("and the fan is what decides it, not something else", wide_w > col_w * 4.0,
+           "%.0f px wide at a 23 degree fan vs %.0f at 3" % (wide_w, col_w))
 
     print("a liquid can be told to ignore the body")
     # The switch the owner asked for. Same spill, same leg, one flag apart: the default piles

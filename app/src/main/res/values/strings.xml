@@ -377,6 +377,9 @@
     <string name="logic_pick_prop">哪个道具</string>
     <string name="logic_pick_burst">什么粒子</string>
     <string name="logic_pick_rate">每秒多少</string>
+    <string name="logic_pick_shape">流成什么样</string>
+    <string name="logic_shape_column">柱状（一道）</string>
+    <string name="logic_shape_scatter">乱撒（一团）</string>
     <string name="logic_pick_seconds">持续几秒</string>
     <string name="logic_pick_rule">跳到哪条规则</string>
     <string name="logic_rule_n">规则 %1$d</string>

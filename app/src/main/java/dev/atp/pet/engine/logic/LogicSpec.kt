@@ -58,6 +58,18 @@ data class ConditionSpec(
  * a file, and a file that names a prop that has since been deleted has to load as "nothing
  * to run" rather than as an exception.
  */
+object Shapes {
+    /** 柱状：滴子都朝一个方向出来，落下去是一道。 */
+    const val COLUMN = "column"
+
+    /** 乱撒：和 喷液体 一样，全圆随机方向。 */
+    const val SCATTER = "scatter"
+
+    const val DEFAULT = COLUMN
+
+    fun of(id: String): String = if (id == SCATTER) SCATTER else COLUMN
+}
+
 object Subjects {
     /** The character itself. Every character has one, and it is the default everywhere. */
     const val PET = "pet"
@@ -228,6 +240,15 @@ data class ActionSpec(
     val value2: Float = 0f,
     val bone: String = "",
     val prop: String = "",
+    /**
+     * The shape of a stream: [Shapes.COLUMN] (a jet that lands as one line) or
+     * [Shapes.SCATTER] (a splash spread over seconds). Empty means column.
+     *
+     * A field of its own rather than a second meaning for `text` or `value2`, for the reason
+     * this file keeps repeating: a file has to be readable by a person, and "the liquid id is
+     * in text except when it is a shape" is not readable. Only 流液体 uses it so far.
+     */
+    val shape: String = "",
     /** For the three state actions: which state to turn on, off, or over. */
     val state: String = "",
     /**
@@ -489,6 +510,7 @@ class LogicSpec(
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
+                            shape = a.optString("shape", ""),
                             rule = a.optInt("rule", 0),
                         )
                     },
@@ -505,6 +527,7 @@ class LogicSpec(
                             bone = a.optString("bone", ""),
                             prop = a.optString("prop", ""),
                             state = a.optString("state", ""),
+                            shape = a.optString("shape", ""),
                             rule = a.optInt("rule", 0),
                         )
                     },
@@ -578,6 +601,9 @@ class LogicSpec(
                             .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
                             .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
+                            // Written only when it was chosen: a file that never asked for a
+                            // shape does not grow a key that means "the default".
+                            .apply { if (a.shape.isNotEmpty()) put("shape", a.shape) }
                             .put("rule", a.rule)
                     )
                 }
@@ -589,6 +615,9 @@ class LogicSpec(
                             .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
                             .put("bone", a.bone)
                             .put("prop", a.prop).put("state", a.state)
+                            // Written only when it was chosen: a file that never asked for a
+                            // shape does not grow a key that means "the default".
+                            .apply { if (a.shape.isNotEmpty()) put("shape", a.shape) }
                             .put("rule", a.rule)
                     )
                 }

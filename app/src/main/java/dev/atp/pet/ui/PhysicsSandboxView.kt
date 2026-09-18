@@ -19,6 +19,7 @@ import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.logic.ActionSpec
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.RuleEngine
+import dev.atp.pet.engine.logic.Shapes
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.data.Settings
 import dev.atp.pet.engine.math.Vec2
@@ -191,6 +192,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val subject: String,
         val rate: Float,
         var left: Float,
+        /** 柱状 or 乱撒, for a liquid stream. See Shapes. */
+        val shape: String = Shapes.COLUMN,
         var carry: Float = 0f,
     )
 
@@ -736,7 +739,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         val rate = a.value.coerceIn(1f, 200f)
                         val seconds = if (a.value2 > 0f) a.value2.coerceIn(0.1f, 60f) else 1f
                         emitters.removeAll { it.kind == a.kind && it.id == id && it.subject == acting }
-                        emitters.add(Emitter(a.kind, id, acting, rate, seconds))
+                        emitters.add(
+                            Emitter(a.kind, id, acting, rate, seconds, Shapes.of(a.shape))
+                        )
                     }
                 }
                 "emit" -> {
@@ -1191,10 +1196,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 val at = subjectPoint(e.subject) ?: Vec2(homeX(), homeY() - 400f)
                 if (e.kind == "pour") {
                     val liquid = Liquids.of(e.id, liquids)
-                    fluid?.spill(
-                        liquid.colour, at, n, liquid.viscosity,
-                        liquid = liquid.id, collides = liquid.collides,
-                    )
+                    if (Shapes.of(e.shape) == Shapes.COLUMN) {
+                        fluid?.pour(
+                            liquid.colour, at, n, liquid.viscosity,
+                            liquid = liquid.id, collides = liquid.collides,
+                        )
+                    } else {
+                        fluid?.spill(
+                            liquid.colour, at, n, liquid.viscosity,
+                            liquid = liquid.id, collides = liquid.collides,
+                        )
+                    }
                 } else {
                     particles.burst(e.id, at, n)
                 }
