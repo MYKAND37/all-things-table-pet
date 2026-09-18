@@ -3236,8 +3236,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     // finger already said what it is holding.
                     twistPointer = id
                     twistAt = atan2(
-                        event.getY(index) - vy(piece.position),
-                        event.getX(index) - vx(piece.position),
+                        event.getY(index) - vy(piece.position.y),
+                        event.getX(index) - vx(piece.position.x),
                     )
                 } else if (!tuneDown(id, event.getX(index), event.getY(index))) {
                     // A finger on the panel is the panel's, not the bench's.
@@ -3274,8 +3274,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     if (id == twistPointer && heldDebris != null) {
                         val d = heldDebris!!
                         val now = atan2(
-                            event.getY(i) - vy(d.position),
-                            event.getX(i) - vx(d.position),
+                            event.getY(i) - vy(d.position.y),
+                            event.getX(i) - vx(d.position.x),
                         )
                         d.angle += normalizeAngle(now - twistAt)
                         twistAt = now
