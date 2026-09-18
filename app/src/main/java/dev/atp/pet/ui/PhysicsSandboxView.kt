@@ -22,6 +22,7 @@ import dev.atp.pet.engine.logic.RuleEngine
 import dev.atp.pet.engine.logic.Shapes
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.data.Settings
+import dev.atp.pet.engine.math.Transform
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
 import dev.atp.pet.engine.prop.Prop
