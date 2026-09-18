@@ -4,6 +4,7 @@ import android.graphics.Canvas
 import android.graphics.Matrix
 import android.graphics.Paint
 import dev.atp.pet.engine.math.Transform
+import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
@@ -152,25 +153,53 @@ class PartRenderer(
             val bone = skeleton.find(layer.bone) ?: continue
             val rest = restWorld[layer.bone] ?: continue
 
-            val t = bone.worldTransform.compose(rest.inverse())
-
-            // The crop offset is applied to the bitmap BEFORE the bone transform, so it
-            // has to be rotated and scaled into place by hand.
-            val c = cos(t.rotation) * t.scale
-            val s = sin(t.rotation) * t.scale
-            val tx = t.position.x + part.offsetX * c - part.offsetY * s
-            val ty = t.position.y + part.offsetX * s + part.offsetY * c
-
-            matrix.setValues(
-                floatArrayOf(
-                    c, -s, tx,
-                    s, c, ty,
-                    0f, 0f, 1f,
-                )
-            )
-            canvas.drawBitmap(part.bitmap, matrix, paint)
+            paintAt(canvas, library.parts[layer.artKey]!!, bone.worldTransform.compose(rest.inverse()))
             drawn++
         }
         drawnLastFrame = drawn
+    }
+
+    /**
+     * Draw one bone's artwork as a piece that has come OFF the figure.
+     *
+     * The same layers, the same crop offsets, one difference: instead of asking the skeleton
+     * where the bone is, this says where it would have to be. [at] is where that bone's rest
+     * position has been carried to (its joint, in canvas coordinates) and [spin] is how far
+     * the piece has turned since it left. See PhysicsSandboxView.Debris for when one exists.
+     *
+     * The motion is a rigid one about the piece's own rest position, which is what makes a
+     * detached arm lie where it fell instead of snapping back to where it was authored.
+     */
+    fun drawDetached(canvas: Canvas, boneName: String, at: Vec2, spin: Float) {
+        val rest = restWorld[boneName] ?: return
+        val moved = Transform(at + (Vec2.ZERO - rest.position).rotated(spin), spin)
+        for (layer in baseOrder) {
+            if (layer.bone != boneName) continue
+            if (!layer.visible(states)) continue
+            val part = library.parts[layer.artKey] ?: continue
+            paintAt(canvas, part, moved)
+        }
+    }
+
+    /**
+     * One part's bitmap at one bone transform.
+     *
+     * The crop offset is applied to the bitmap BEFORE the bone transform, so it has to be
+     * rotated and scaled into place by hand -- which is exactly the arithmetic that must not
+     * be written twice, once for the body and once for the pieces that fall off it.
+     */
+    private fun paintAt(canvas: Canvas, part: Part, t: Transform) {
+        val c = cos(t.rotation) * t.scale
+        val s = sin(t.rotation) * t.scale
+        val tx = t.position.x + part.offsetX * c - part.offsetY * s
+        val ty = t.position.y + part.offsetX * s + part.offsetY * c
+        matrix.setValues(
+            floatArrayOf(
+                c, -s, tx,
+                s, c, ty,
+                0f, 0f, 1f,
+            )
+        )
+        canvas.drawBitmap(part.bitmap, matrix, paint)
     }
 }

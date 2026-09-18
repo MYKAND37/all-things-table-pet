@@ -125,6 +125,36 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** Parts whose artwork is gone. The bones are still there; only the drawing is not. */
     private val broken = HashSet<String>()
 
+    /**
+     * A piece that has come off the figure: 断开部位.
+     *
+     * What it is: a copy of the part's artwork, starting where the bone was, keeping whatever
+     * velocity the body had at that point, and falling to the floor.
+     *
+     * What it is NOT: a second body. The figure's own skeleton keeps the bone -- hidden, but
+     * still there, still carrying weight, still swinging. So a pet whose hand has come off
+     * still balances as if it had one. That is a deliberate cheat and it is written here
+     * rather than left to be discovered, because the honest version means splitting the
+     * skeleton into two ragdolls, and the whole solver is built around exactly one root.
+     *
+     * [position] is where the bone's REST position has been carried to: the artwork is drawn
+     * relative to that, so a piece appears exactly where its bone was when it left.
+     */
+    private class Debris(
+        val bone: String,
+        var position: Vec2,
+        var velocity: Vec2,
+        var angle: Float,
+        var spin: Float,
+        val radius: Float,
+        var settled: Boolean = false,
+    )
+
+    private val debris = mutableListOf<Debris>()
+
+    /** Where each bone's joint was last frame, so a piece torn off can keep its momentum. */
+    private val lastBoneAt = HashMap<String, Vec2>()
+
     /** Named actions, so a rule can say "摆动作 挥手". */
     private var poseByName: Map<String, Map<String, Float>> = emptyMap()
 
@@ -387,6 +417,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldTargets.clear()
         smoothedTargets.clear()
         emitters.clear()
+        debris.clear()
+        lastBoneAt.clear()
         heldOffsets.clear()
         heldProp = null
         framed = false
@@ -424,6 +456,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldTargets.clear()
         smoothedTargets.clear()
         emitters.clear()
+        debris.clear()
+        lastBoneAt.clear()
         heldOffsets.clear()
         heldProp = null
         propPointer = -1
@@ -602,6 +636,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldTargets.clear()
         smoothedTargets.clear()
         emitters.clear()
+        debris.clear()
+        lastBoneAt.clear()
         heldOffsets.clear()
         heldProp = null
         signals.clear()
@@ -767,6 +803,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     val bone = sk.find(a.bone.ifEmpty { event?.part ?: "" }) ?: sk.root
                     rag.impulse(bone, dir, a.value)
                 }
+                // 隐藏 / 显示：骨架和物理一点都不动，动的只是"画不画它"。
                 "break" -> {
                     val name = a.bone.ifEmpty { event?.part ?: "" }
                     if (name.isNotEmpty()) {
@@ -774,6 +811,25 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         renderer?.hidden = broken
                         particles.burst("spark", pointOf(event), 12)
                     }
+                }
+                "show" -> {
+                    val name = a.bone.ifEmpty { event?.part ?: "" }
+                    if (name.isNotEmpty()) {
+                        broken.remove(name)
+                        renderer?.hidden = broken
+                    }
+                }
+                // 断开 / 接回：断开是"藏起来 + 掉一块在地上"，接回是两样都收回去。
+                "detach" -> {
+                    val name = a.bone.ifEmpty { event?.part ?: "" }
+                    if (name.isNotEmpty()) {
+                        detachBone(name)
+                        particles.burst("blood", pointOf(event), 10)
+                    }
+                }
+                "rejoin" -> {
+                    val name = a.bone.ifEmpty { event?.part ?: "" }
+                    if (name.isNotEmpty()) rejoinBone(name)
                 }
             }
         }
@@ -1174,7 +1230,97 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
         stepEmitters(dt)
+        rememberBones(sk)
+        stepDebris(dt, s.floorY)
         attachRopes()
+    }
+
+    /** Every piece that has come off, drawn where it fell. See [Debris]. */
+    private fun drawDebris(canvas: Canvas) {
+        val art = renderer ?: return
+        for (d in debris) art.drawDetached(canvas, d.bone, d.position, d.angle)
+    }
+
+    /** One frame of "where was every joint", for the pieces that are about to leave. */
+    private fun rememberBones(sk: Skeleton) {
+        for (b in sk.bones) lastBoneAt[b.name] = b.worldPosition
+    }
+
+    /**
+     * Gravity, the floor and the walls, and nothing else.
+     *
+     * A piece that has come off does not collide with the figure it came off: it is a copy of
+     * a drawing, and shoving the body around with it would be the bench pretending the copy
+     * is real -- the one thing this cheat must not do. The floor is real, because a piece
+     * that fell through the bench would be worse than no feature at all.
+     */
+    private fun stepDebris(dt: Float, floorY: Float) {
+        if (debris.isEmpty()) return
+        for (d in debris) {
+            if (d.settled) continue
+            d.velocity = Vec2(
+                d.velocity.x * (1f - DEBRIS_DRAG * dt),
+                d.velocity.y + s.gravity * settings.gravityScale * dt,
+            )
+            d.position = d.position + d.velocity * dt
+            d.angle += d.spin * dt
+            if (d.position.y + d.radius >= floorY) {
+                d.position = Vec2(d.position.x, floorY - d.radius)
+                // Landing is not a bounce: a hand that hits the table stops. What is left is
+                // the slide, and the spin dies with it.
+                d.velocity = Vec2(d.velocity.x * 0.5f, 0f)
+                d.spin *= 0.4f
+                if (abs(d.velocity.x) < DEBRIS_REST && abs(d.spin) < 0.2f) {
+                    d.velocity = Vec2.ZERO
+                    d.spin = 0f
+                    d.settled = true
+                }
+            }
+            val half = d.radius + 4f
+            if (d.position.x - half < 0f) {
+                d.position = Vec2(half, d.position.y)
+                d.velocity = Vec2(abs(d.velocity.x) * 0.3f, d.velocity.y)
+            } else if (d.position.x + half > s.worldWidth) {
+                d.position = Vec2(s.worldWidth - half, d.position.y)
+                d.velocity = Vec2(-abs(d.velocity.x) * 0.3f, d.velocity.y)
+            }
+        }
+    }
+
+    /**
+     * Take one bone's drawing off the figure and drop it.
+     *
+     * The velocity is the one the joint had a frame ago, so a hand torn off a pet that was
+     * being thrown flies the way it was already going -- which is the whole read of the
+     * effect. A piece that only ever fell straight down looks switched off, not torn.
+     */
+    private fun detachBone(name: String) {
+        val sk = skeleton ?: return
+        val bone = sk.find(name) ?: return
+        val rag = ragdoll ?: return
+        broken.add(name)
+        renderer?.hidden = broken
+        val was = lastBoneAt[name] ?: bone.worldPosition
+        val vel = (bone.worldPosition - was) * 60f
+        val kick = if (bone.worldPosition.x >= sk.root.worldPosition.x) 40f else -40f
+        debris.removeAll { it.bone == name }
+        debris.add(
+            Debris(
+                bone = name,
+                position = bone.worldPosition,
+                velocity = Vec2(vel.x + kick, min(vel.y, 0f) - 40f),
+                angle = bone.worldRotation - bone.restRotation,
+                spin = kick / 220f,
+                radius = rag.colliderRadius(bone),
+            )
+        )
+    }
+
+    /** Put it back: the drawing returns and the piece on the floor is taken away. */
+    private fun rejoinBone(name: String) {
+        broken.remove(name)
+        renderer?.hidden = broken
+        debris.removeAll { it.bone == name }
     }
 
     /**
@@ -1430,6 +1576,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         if (settings.liquid) drawFluid(canvas)
         drawCharacter(canvas, sk)
+        drawDebris(canvas)
         drawProps(canvas)
         drawRopes(canvas, sk)
         if (settings.showBalance) drawBalance(canvas, sk)
@@ -3071,6 +3218,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val FOLLOW_EASE = 0.10f
         /** Above this the release is a throw, below it the pet was simply put down. */
         private const val THROW_SPEED = 700f
+
+        /** Air drag on a falling piece, and the slide speed under which it stops for good. */
+        private const val DEBRIS_DRAG = 0.5f
+        private const val DEBRIS_REST = 12f
         private const val SHOT_SPEED = 2600f
 
         /**

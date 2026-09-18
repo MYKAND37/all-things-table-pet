@@ -321,7 +321,30 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     /** 持续喷粒子：同上，喷的是粒子。 */
     STREAM("stream", "持续喷粒子", "burstStream"),
     IMPULSE("impulse", "推一下", "boneValue"),
-    BREAK("break", "打坏部位", "bone"),
+    /**
+     * 隐藏部位：把一根骨头的图藏起来。
+     *
+     * 骨架和物理一点都不动——那根骨头还在、还有重量、还会被拖——藏掉的只是"画它"这件事。
+     * 所以要"恢复了"就得有 [SHOW]：一个只能藏不能显的动作和"打坏"没有区别。
+     *
+     * 名字原本叫「打坏部位」，但它从来没打断过任何东西：它一直实现的就是隐藏。
+     */
+    BREAK("break", "隐藏部位", "bone"),
+
+    /** 显示部位：把 [BREAK] 藏起来的图放回去。 */
+    SHOW("show", "显示部位", "bone"),
+
+    /**
+     * 断开部位：这一节从身上掉下去，落到地面。
+     *
+     * 掉下去的是一份**它的图**：真正的骨头仍然在骨架里（隐藏着），所以宠物还是平衡的、
+     * 还是会甩那条看不见的腿——这是明写的取巧，另一半（把骨架真的拆成两个刚体）要重写
+     * 整个求解器，那套东西从头到尾只有一个根。见 PhysicsSandboxView.Debris。
+     */
+    DETACH("detach", "断开部位", "bone"),
+
+    /** 接回部位：把 [DETACH] 掉下去的那一节接回来（图重新画上，地上的那块收走）。 */
+    REJOIN("rejoin", "接回部位", "bone"),
     WAIT("wait", "等一会儿", "seconds"),
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),

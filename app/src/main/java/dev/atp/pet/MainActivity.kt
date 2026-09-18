@@ -4049,7 +4049,10 @@ class MainActivity : AppCompatActivity() {
             " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
         "impulse" -> "推" + directionText(a.text) + " " +
             (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
-        "break" -> "打坏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
+        "break" -> "隐藏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
+        "show" -> "显示 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
+        "detach" -> "断开 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
+        "rejoin" -> "接回 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "wait" -> "等 " + trim(a.value) + " 秒"
         "stateOn" -> "打开「" + stateName(a.state) + "」"
         "stateOff" -> "关闭「" + stateName(a.state) + "」"
