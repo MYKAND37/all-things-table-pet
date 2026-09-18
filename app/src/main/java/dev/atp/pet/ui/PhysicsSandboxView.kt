@@ -23,6 +23,7 @@ import dev.atp.pet.engine.logic.Shapes
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.data.Settings
 import dev.atp.pet.engine.math.Transform
+import dev.atp.pet.engine.math.normalizeAngle
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
 import dev.atp.pet.engine.prop.Prop
@@ -37,6 +38,7 @@ import dev.atp.pet.render.PartLibrary
 import dev.atp.pet.render.PartRenderer
 import dev.atp.pet.render.Particles
 import kotlin.math.abs
+import kotlin.math.atan2
 import kotlin.math.hypot
 import kotlin.math.ln
 import kotlin.math.max
@@ -218,6 +220,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Where the piece was touched, relative to its origin: what it hangs from while carried. */
     private var holdOffset = Vec2.ZERO
+
+    /**
+     * The finger that is TURNING the carried piece, and where it was on the last frame.
+     *
+     * One finger carries a piece and two fingers turn it, the way a photograph behaves in a
+     * gallery: the second finger's angle around the piece is the angle it has been turned by.
+     * A piece could otherwise only ever be moved -- it could not be picked up and put back
+     * down the other way up, and once it had settled on the floor its angle was frozen for
+     * good.
+     */
+    private var twistPointer = -1
+    private var twistAt = 0f
 
     /** Where each bone's joint was last frame, so a piece torn off can keep its momentum. */
     private val lastBoneAt = HashMap<String, Vec2>()
@@ -496,6 +510,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         debrisPointer = -1
         fingerOnDebris = null
         holdOffset = Vec2.ZERO
+        twistPointer = -1
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -541,6 +556,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         debrisPointer = -1
         fingerOnDebris = null
         holdOffset = Vec2.ZERO
+        twistPointer = -1
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -727,6 +743,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         debrisPointer = -1
         fingerOnDebris = null
         holdOffset = Vec2.ZERO
+        twistPointer = -1
         lastBoneAt.clear()
         for (name in detached) ragdoll?.setGone(name, false)
         detached.clear()
@@ -1409,12 +1426,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /**
-     * The body pushes the piece out of itself.
+     * Contact between a piece and the body, in BOTH directions.
      *
-     * One-way on purpose. The piece is a drawing that fell off, and the figure is the thing
-     * with a solver -- letting a severed hand shove the pet would be the tail wagging the
-     * dog, and the pet can be dragged while a piece leans on it. So a piece that lands on the
-     * figure rests ON it, which is the half of "still interacts" that is visible.
+     * The piece is moved out of the body, and the body is pushed away from the piece by the
+     * same overlap -- a severed arm that lands across the pet's back now shoves it, which is
+     * what "the piece can move the bones it came off" means. It used to be one-way, on the
+     * theory that a hand should not wag the dog; the owner asked for the other behaviour and
+     * the argument for one-way was never a measurement, just tidiness.
+     *
+     * The push on the body is an impulse, because that is the only door the solver leaves
+     * open for something outside it: [impulse] hands the figure a velocity and a spin about
+     * the bone that was touched. It is scaled by how deep the contact is and capped, so a
+     * piece resting on the pet keeps nudging it while a piece dropped on it from a height
+     * shoves it once, hard.
      */
     private fun bodyPushOut(d: Debris, spec: CharacterSpec, floorY: Float) {
         val sk = skeleton ?: return
@@ -1447,6 +1471,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     if (into < 0f) {
                         d.velocity = Vec2(d.velocity.x - ux * into, d.velocity.y - uy * into)
                     }
+                    // And the other way. The same overlap, in the opposite direction, as a
+                    // per-frame impulse on the bone that was touched -- see the note above.
+                    val push = min(slide * PIECE_PUSH, PIECE_PUSH_MAX)
+                    rag.impulse(b, Vec2(-ux, -uy), push)
                 }
             }
         }
@@ -3179,6 +3207,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     fingerOnDebris = at
                     holdOffset = piece.position - at
                     piece.settled = false
+                    onInfo?.invoke(context.getString(R.string.sandbox_piece_held))
                     lastFrameNs = System.nanoTime()
                     postInvalidateOnAnimation()
                     return true
@@ -3200,12 +3229,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // both be two-fingered gestures without either getting in the other's way.
                 val index = event.actionIndex
                 val id = event.getPointerId(index)
-                // A finger on the panel is the panel's, not the bench's.
-                if (!tuneDown(id, event.getX(index), event.getY(index))) {
+                val piece = heldDebris
+                if (piece != null && id != debrisPointer) {
+                    // A second finger on a piece that is being carried turns it. It is the
+                    // same finger pair as a pinch, and it means the other thing: the first
+                    // finger already said what it is holding.
+                    twistPointer = id
+                    twistAt = atan2(
+                        event.getY(index) - vy(piece.position),
+                        event.getX(index) - vx(piece.position),
+                    )
+                } else if (!tuneDown(id, event.getX(index), event.getY(index))) {
+                    // A finger on the panel is the panel's, not the bench's.
                     beginGrab(rag, id, event.getX(index), event.getY(index))
                 }
                 panning = false
-                pinchSpan = if (heldBones.isEmpty() && heldProp == null) span(event) else 0f
+                pinchSpan = if (heldBones.isEmpty() && heldProp == null && piece == null) {
+                    span(event)
+                } else {
+                    0f
+                }
                 lastFrameNs = System.nanoTime()
                 postInvalidateOnAnimation()
                 return true
@@ -3225,6 +3268,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
                             TUNE_DRAG_GAIN -> setTuneFromSlider(event.getX(i))
                             TUNE_DRAG_RATE -> setRateFromSlider(event.getX(i))
                         }
+                        grabbing = true
+                        continue
+                    }
+                    if (id == twistPointer && heldDebris != null) {
+                        val d = heldDebris!!
+                        val now = atan2(
+                            event.getY(i) - vy(d.position),
+                            event.getX(i) - vx(d.position),
+                        )
+                        d.angle += normalizeAngle(now - twistAt)
+                        twistAt = now
+                        d.spin = 0f
                         grabbing = true
                         continue
                     }
@@ -3286,6 +3341,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_POINTER_UP -> {
+                if (event.getPointerId(event.actionIndex) == twistPointer) twistPointer = -1
                 // Both are no-ops for the panel's finger: it holds nothing to let go of, and
                 // endGrab returns immediately for a pointer that never took a bone.
                 tuneUp(event.getPointerId(event.actionIndex))
@@ -3307,6 +3363,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // the piece is already in the list the world steps.
                 heldDebris = null
                 debrisPointer = -1
+                twistPointer = -1
                 fingerOnDebris = null
 
                 val tapped = tapBone
@@ -3476,6 +3533,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
         /** Air drag on a falling piece, and the slide speed under which it stops for good. */
         private const val DEBRIS_DRAG = 0.5f
         private const val DEBRIS_REST = 12f
+
+        /**
+         * How hard a piece pushes the body: px/s of impulse per px of overlap, and the cap.
+         *
+         * 10 px/s per px, capped at 90, is a nudge rather than a shove: a piece lying on the
+         * pet moves it about as fast as a finger brushing it, and one landing on it from a
+         * height makes it flinch. Both numbers are a feel, not a measurement -- there is no
+         * test that can say what a severed arm landing on a pet should do.
+         */
+        private const val PIECE_PUSH = 10f
+        private const val PIECE_PUSH_MAX = 90f
         private const val SHOT_SPEED = 2600f
 
         /**

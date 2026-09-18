@@ -123,6 +123,7 @@
         所以这两个按钮不做新的拖拽，只做"看一眼、记下来"这一步——原来这一步要去属性对话框里
         敲两个数字，而敲的时候屏幕上没有角度、也没有范围。
     -->
+    <string name="sandbox_piece_held">拿着一块断下来的部位 · 拖动移动 · 第二根手指转它</string>
     <string name="rig_limit_set_min">设为最小</string>
     <string name="rig_limit_set_max">设为最大</string>
     <string name="rig_limit_set">%1$s：%2$s = %3$d° · 范围 %4$d° ~ %5$d°</string>
