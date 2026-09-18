@@ -271,7 +271,12 @@ class Ragdoll(
      * The bone's own rotation carries it, so the grip stays where it was taken as the limb
      * turns under it -- which is what holding a limb means.
      */
-    private fun gripPoint(bone: Bone, offset: Float): Vec2 {
+    /**
+     * Public here, private in 0.18.0: the bench's tuning panel reads where the grip ended up
+     * (the CSV's grip_x/grip_y columns and the pin error), and that panel did not exist then.
+     * Visibility only -- the body is untouched.
+     */
+    fun gripPoint(bone: Bone, offset: Float): Vec2 {
         if (offset == 0f) return bone.worldPosition
         val a = bone.worldRotation
         return Vec2(
