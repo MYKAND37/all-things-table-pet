@@ -1231,7 +1231,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         stepEmitters(dt)
         rememberBones(sk)
-        stepDebris(dt, s.floorY)
+        stepDebris(dt, s)
         attachRopes()
     }
 
@@ -1254,13 +1254,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * is real -- the one thing this cheat must not do. The floor is real, because a piece
      * that fell through the bench would be worse than no feature at all.
      */
-    private fun stepDebris(dt: Float, floorY: Float) {
+    private fun stepDebris(dt: Float, spec: CharacterSpec) {
         if (debris.isEmpty()) return
+        val floorY = spec.floorY
         for (d in debris) {
             if (d.settled) continue
             d.velocity = Vec2(
                 d.velocity.x * (1f - DEBRIS_DRAG * dt),
-                d.velocity.y + s.gravity * settings.gravityScale * dt,
+                d.velocity.y + spec.gravity * settings.gravityScale * dt,
             )
             d.position = d.position + d.velocity * dt
             d.angle += d.spin * dt
@@ -1280,8 +1281,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
             if (d.position.x - half < 0f) {
                 d.position = Vec2(half, d.position.y)
                 d.velocity = Vec2(abs(d.velocity.x) * 0.3f, d.velocity.y)
-            } else if (d.position.x + half > s.worldWidth) {
-                d.position = Vec2(s.worldWidth - half, d.position.y)
+            } else if (d.position.x + half > spec.worldWidth) {
+                d.position = Vec2(spec.worldWidth - half, d.position.y)
                 d.velocity = Vec2(-abs(d.velocity.x) * 0.3f, d.velocity.y)
             }
         }
