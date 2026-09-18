@@ -498,6 +498,16 @@
                         android:id="@+id/rigSavePose"
                         style="@style/AlignButton"
                         android:text="@string/rig_save_pose" />
+
+                    <TextView
+                        android:id="@+id/rigLimitMin"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_limit_set_min" />
+
+                    <TextView
+                        android:id="@+id/rigLimitMax"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_limit_set_max" />
                 </LinearLayout>
             </HorizontalScrollView>
 

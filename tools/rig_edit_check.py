@@ -80,6 +80,18 @@ def descendants(bones, name):
     return out
 
 
+def limits(a, b):
+    """Mirrors RigEdit.limits: the two ends of a joint's range, sorted.
+
+    A range written backwards is not a joint that moves backwards, it is a joint that cannot
+    move at all -- min above max clamps every angle to one value -- and that reads as a broken
+    rig rather than as a typo. Both ways of setting a range go through the Kotlin version: the
+    属性 dialog, where both ends are typed, and 「设为最小 / 设为最大」, where one end comes
+    from the pose the user just made and the other from the file.
+    """
+    return (a, b) if a <= b else (b, a)
+
+
 def depths(bones):
     parent = {b.name: b.parent for b in bones}
     out = {}
@@ -384,6 +396,25 @@ def main():
            "worst %.1f deg of 40" % math.degrees(worst))
     report("and the knee still moves", worst > math.radians(5.0),
            "%.1f deg" % math.degrees(worst))
+
+    print("\nlimits()")
+    # The dialog's case: typed backwards.
+    report("a range typed backwards comes back sorted", limits(30.0, -20.0) == (-20.0, 30.0),
+           str(limits(30.0, -20.0)))
+    report("a range already in order is untouched", limits(-20.0, 30.0) == (-20.0, 30.0))
+    # A joint that cannot move: equal ends are legal and must stay equal rather than becoming
+    # an empty or inverted range.
+    report("equal ends stay equal", limits(0.0, 0.0) == (0.0, 0.0))
+    # The capture's case: 「设为最小」 with a pose inside the range it already had, and one
+    # past the maximum, which is what makes the range backwards and gets swapped.
+    report("a capture inside the range only moves its own end",
+           limits(-15.0, 30.0) == (-15.0, 30.0))
+    report("a capture past the other end swaps the two",
+           limits(45.0, 30.0) == (30.0, 45.0))
+    # Degrees, not radians: the dialog and the capture are both in degrees, and a swap that
+    # only worked on one side of zero would be a sign bug the finger would never explain.
+    report("the swap is about order, not about sign",
+           limits(-90.0, -170.0) == (-170.0, -90.0))
 
     print("")
     if FAILURES:

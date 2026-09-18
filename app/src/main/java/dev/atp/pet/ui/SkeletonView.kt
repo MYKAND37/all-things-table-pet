@@ -3,6 +3,7 @@ package dev.atp.pet.ui
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
@@ -19,8 +20,11 @@ import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.TwoBoneIK
 import dev.atp.pet.render.PartLibrary
 import dev.atp.pet.render.PartRenderer
+import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
+import kotlin.math.sin
 
 /** A draggable end: the end of a two-bone IK chain, or a bone aimed directly. */
 private class Handle(val bone: Bone, val chain: IkChainSpec?)
@@ -53,6 +57,9 @@ class SkeletonView @JvmOverloads constructor(
     private var renderer: PartRenderer? = null
     private var library: PartLibrary? = null
     private val handles = mutableListOf<Handle>()
+
+    /** One scratch rect for the range arcs, so a redraw does not allocate. */
+    private val rangeRect = RectF()
 
     private var scale = 1f
     private var offsetX = 0f
@@ -104,6 +111,20 @@ class SkeletonView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
         color = 0xFF171528.toInt()
+    }
+
+    /**
+     * The arc a joint is allowed to move through: a translucent fan for the range, and two
+     * lines for the ends. See [drawRange] for why it is centred on the REST direction.
+     */
+    private val rangePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x222C7BE5
+    }
+    private val rangeEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+        color = 0x882C7BE5.toInt()
     }
     private val framePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -158,6 +179,12 @@ class SkeletonView @JvmOverloads constructor(
     /** Re-bake the rig from the spec. Called after any edit to the geometry. */
     private fun rebuild(parsed: CharacterSpec) {
         val built = parsed.buildSkeleton()
+        // The editor's skeleton is a throwaway copy, so the joints here may be dragged past
+        // their own stops. That is the whole point of 「设为最大」: you cannot widen a range
+        // with a limb that refuses to go outside it. The fan is drawn from the file's numbers,
+        // so a limb outside the fan is exactly the picture of "this is what I want to change".
+        // See Bone.ignoreLimits; the solver on the bench clamps regardless.
+        for (b in built.bones) b.ignoreLimits = true
         built.update()
         skeleton = built
 
@@ -417,6 +444,16 @@ class SkeletonView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * The angle this joint is posed at right now, in DEGREES, or null if there is no such bone.
+     *
+     * Degrees because that is the unit the 属性 dialog and `BoneSpec.minAngle` are in, and the
+     * only reason this exists is to be written straight into one of them: 「设为最小 / 最大」
+     * takes the pose the user just made and makes it the range. Radians never leave the solver.
+     */
+    fun currentDegrees(name: String): Float? =
+        skeleton?.find(name)?.let { Math.toDegrees(it.rotation.toDouble()).toFloat() }
+
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
         val s = spec ?: return
         val pad = 8f * density
@@ -470,11 +507,60 @@ class SkeletonView @JvmOverloads constructor(
             h.bone.aimAt(target)
             sk.update()
         }
+        // What you just dragged is what the panel is about from now on: the range readout and
+        // 「设为最小 / 设为最大」 both act on `selected`, and posing is where the angle that
+        // gets captured comes from. Without this the capture would need a second trip to the
+        // bone list to say which joint was meant -- after the drag that posed it.
+        selected = h.bone.name
         invalidate()
     }
 
-    private fun span(e: MotionEvent): Float {
-        if (e.pointerCount < 2) return 0f
+    /**
+     * The arc this joint may move through, and where it is right now.
+     *
+     * Angles are the ones the 属性 dialog shows: measured from the bone's REST direction,
+     * because that is exactly what `minAngle` / `maxAngle` are offsets from. So the fan does
+     * NOT swing when the joint is posed — the bone line moves inside it. That is the whole
+     * picture this is for: 能转到哪儿 and 现在在哪儿, at the same time, instead of typing two
+     * numbers and going to the bench to find out what they meant.
+     *
+     * The radius is the bone's own length, so the arc reaches where the tip reaches, and a
+     * floor keeps a very short bone's arc from disappearing under the joint dot.
+     */
+    private fun drawRange(canvas: Canvas, b: Bone) {
+        val rest = b.worldRotation - b.rotation
+        val lo = rest + b.minAngle
+        val hi = rest + b.maxAngle
+        val cx = vx(b.worldPosition)
+        val cy = vy(b.worldPosition)
+        val r = (b.length * scale).coerceAtLeast(MIN_RANGE_RADIUS * density)
+
+        rangeRect.set(cx - r, cy - r, cx + r, cy + r)
+        val start = Math.toDegrees(lo.toDouble()).toFloat()
+        val sweep = Math.toDegrees((hi - lo).toDouble()).toFloat()
+        canvas.drawArc(rangeRect, start, sweep, true, rangePaint)
+        canvas.drawArc(rangeRect, start, sweep, true, rangeEdgePaint)
+        // The two ends as lines rather than as arc caps: an edge you can line the limb up
+        // against is the thing being adjusted here.
+        canvas.drawLine(cx, cy, cx + cos(lo) * r, cy + sin(lo) * r, rangeEdgePaint)
+        canvas.drawLine(cx, cy, cx + cos(hi) * r, cy + sin(hi) * r, rangeEdgePaint)
+
+        val now = Math.toDegrees(b.rotation.toDouble()).toFloat()
+        val text = context.getString(
+            R.string.rig_range_text,
+            Math.round(lo * 180 / PI).toInt(),
+            Math.round(hi * 180 / PI).toInt(),
+        )
+        canvas.drawText(text, cx + 10f * density, cy - 8f * density, textPaint)
+        if (abs(now) >= 0.5f) {
+            canvas.drawText(
+                context.getString(R.string.rig_range_now, Math.round(now)),
+                cx + 10f * density, cy + 5f * density, textPaint,
+            )
+        }
+    }
+
+    private fun span(e: MotionEvent): Float {        if (e.pointerCount < 2) return 0f
         return hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
@@ -529,6 +615,7 @@ class SkeletonView @JvmOverloads constructor(
                 canvas.drawCircle(vx(b.worldPosition), vy(b.worldPosition), 15f * density, selectPaint)
                 val t = b.tipPosition()
                 canvas.drawCircle(vx(t), vy(t), 11f * density, selectPaint)
+                drawRange(canvas, b)
             }
         }
 
@@ -737,6 +824,11 @@ class SkeletonView @JvmOverloads constructor(
     private companion object {
         /** How far a pick in the side panel zooms in. Enough to see a hand, not a pixel. */
         const val ZOOM_ON_PICK = 2.5f
+
+        /** The shortest arc [drawRange] will draw, so a stub of a bone still shows its range. */
+        const val MIN_RANGE_RADIUS = 26f
+
+        const val PI = Math.PI.toFloat()
     }
 
     fun release() {

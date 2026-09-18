@@ -141,4 +141,19 @@ object RigEdit {
         return prefix + n
     }
 
+    /**
+     * The two ends of a joint's range, sorted.
+     *
+     * A range written backwards is not a joint that moves backwards, it is a joint that cannot
+     * move at all — `min` above `max` clamps every angle to one value — and that reads as a
+     * broken rig rather than as a typo. Both ways of setting a range go through here so that
+     * they cannot disagree: the 属性 dialog, where the two ends are typed, and 「设为最小 /
+     * 设为最大」, where one end comes from a pose and the other from the file.
+     *
+     * Mirrored in tools/rig_edit_check.py, which carries the cases (backwards, equal, and a
+     * capture that lands inside the range it already had).
+     */
+    fun limits(a: Float, b: Float): Pair<Float, Float> =
+        if (a <= b) (a to b) else (b to a)
+
 }

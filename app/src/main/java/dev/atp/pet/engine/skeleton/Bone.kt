@@ -33,9 +33,24 @@ class Bone(
     val damping: Float = 0.86f,
     val gravity: Float = 0f,
 ) {
+    /**
+     * Whether writes to [rotation] skip the joint's own limits.
+     *
+     * Off everywhere the pet is alive: the limits ARE the joint, and the solver clamps to
+     * them in its integrator whether this is on or not. It exists for the rig editor, which
+     * has to be able to drag a knee PAST where the knee currently stops — that is how a
+     * range gets widened, and without it 「设为最大」 could only ever make the range smaller
+     * than it already was. The editor's skeleton is a throwaway copy built from the file, so
+     * turning this on there cannot reach the character on the bench.
+     */
+    var ignoreLimits = false
+
     var rotation: Float = 0f
         set(value) {
-            field = value.coerceIn(minAngle, maxAngle)
+            // The FULL_TURN clamp is the hard one and never moves: past half a turn a joint's
+            // offset stops meaning anything a person can type into a dialog.
+            field = if (ignoreLimits) value.coerceIn(-FULL_TURN, FULL_TURN)
+            else value.coerceIn(minAngle, maxAngle)
         }
 
     val localRotation: Float get() = restRotation + rotation

@@ -116,6 +116,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rigBoneList: View
     private lateinit var rigSaveBones: View
     private lateinit var rigSavePose: View
+    private lateinit var rigLimitMin: View
+    private lateinit var rigLimitMax: View
     private var rigBoneMode = false
 
     /** The open bone list, so an edit can redraw it where it stands. */
@@ -234,6 +236,10 @@ class MainActivity : AppCompatActivity() {
         rigBoneList = findViewById(R.id.rigBoneList)
         rigSaveBones = findViewById(R.id.rigSaveBones)
         rigSavePose = findViewById(R.id.rigSavePose)
+        rigLimitMin = findViewById(R.id.rigLimitMin)
+        rigLimitMax = findViewById(R.id.rigLimitMax)
+        rigLimitMin.setOnClickListener { captureLimit(asMax = false) }
+        rigLimitMax.setOnClickListener { captureLimit(asMax = true) }
         findViewById<View>(R.id.rigMode).setOnClickListener { toggleRigMode() }
         findViewById<View>(R.id.rigAddBone).setOnClickListener { askNewBone() }
         findViewById<View>(R.id.rigBoneList).setOnClickListener { showBoneList() }
@@ -1703,6 +1709,10 @@ class MainActivity : AppCompatActivity() {
         rigBoneList.visibility = editing
         rigSaveBones.visibility = editing
         rigSavePose.visibility = if (rigBoneMode) View.GONE else View.VISIBLE
+        // The capture belongs with posing: it turns the angle the finger just made into the
+        // joint's range. In bone mode the pose is at rest, so there is nothing to capture.
+        rigLimitMin.visibility = if (rigBoneMode) View.GONE else View.VISIBLE
+        rigLimitMax.visibility = if (rigBoneMode) View.GONE else View.VISIBLE
     }
 
     private fun rigHint() {
@@ -1716,6 +1726,44 @@ class MainActivity : AppCompatActivity() {
         skeletonView.setBoneEditMode(rigBoneMode)
         applyRigMode()
         rigHint()
+    }
+
+    /**
+     * Take the angle a joint is posed at and write it into that joint's range.
+     *
+     * The loop this replaces: drag the arm in 摆姿势, guess the angle in degrees, open 骨骼列表 →
+     * 属性, type it into one of two boxes, save, go to the bench, and find out. Here the pose IS
+     * the answer -- the same drag, one button, and the range is drawn on the canvas while it
+     * happens (see SkeletonView.drawRange).
+     *
+     * Only the end being set moves: 「设为最小」 leaves the maximum alone. If that makes the
+     * range backwards -- a new minimum above the old maximum -- RigEdit.limits swaps them,
+     * which is the same rule the 属性 dialog uses for a range typed backwards.
+     */
+    private fun captureLimit(asMax: Boolean) {
+        val name = skeletonView.selected
+        val deg = name?.let { skeletonView.currentDegrees(it) }
+        if (name == null || deg == null) {
+            Toast.makeText(this, R.string.rig_limit_no_pick, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val bone = skeletonView.rigBones().firstOrNull { it.name == name } ?: return
+        val pair = if (asMax) RigEdit.limits(bone.minAngle, deg)
+        else RigEdit.limits(deg, bone.maxAngle)
+        bone.minAngle = pair.first
+        bone.maxAngle = pair.second
+        saveBones()
+        statusLine.text = getString(
+            R.string.rig_limit_set,
+            boneLabel(name).ifEmpty { name },
+            getString(if (asMax) R.string.rig_limit_max_word else R.string.rig_limit_min_word),
+            Math.round(deg),
+            Math.round(bone.minAngle),
+            Math.round(bone.maxAngle),
+        )
+        // The POSE is deliberately left standing: the bone line sitting inside the fan is how
+        // the user sees which end they just set. 双击复位 puts it back.
+        skeletonView.invalidate()
     }
 
     private fun saveBones() {
@@ -2032,9 +2080,12 @@ class MainActivity : AppCompatActivity() {
                 val lo = degrees(fromInput.text.toString(), minAngle)
                 val hi = degrees(toInput.text.toString(), maxAngle)
                 // A range written backwards is a joint that cannot move at all, which reads
-                // as a broken rig rather than as a typo. Swapping is what they meant.
-                bone.minAngle = kotlin.math.min(lo, hi)
-                bone.maxAngle = kotlin.math.max(lo, hi)
+                // as a broken rig rather than as a typo. Swapping is what they meant, and the
+                // rule lives in RigEdit.limits so that this dialog and 「设为最小/最大」
+                // cannot drift apart about it.
+                val pair = RigEdit.limits(lo, hi)
+                bone.minAngle = pair.first
+                bone.maxAngle = pair.second
                 bone.colliderType = if (type == "circle") "circle" else "capsule"
                 bone.colliderRadius =
                     radiusInput.text.toString().trim().toFloatOrNull()?.coerceIn(0f, 400f) ?: 0f

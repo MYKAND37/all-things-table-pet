@@ -117,7 +117,21 @@
     <string name="rig_save_bones">保存骨骼</string>
     <string name="rig_reset">复位</string>
     <string name="rig_save_pose">存为动作</string>
-    <string name="rig_hint_pose">拖关节摆姿势 · 双击复位</string>
+
+    <!--
+        把"摆出来的角度"记成这个关节的转动范围。摆姿势那一档本来就能拖关节（aimAt / TwoBoneIK），
+        所以这两个按钮不做新的拖拽，只做"看一眼、记下来"这一步——原来这一步要去属性对话框里
+        敲两个数字，而敲的时候屏幕上没有角度、也没有范围。
+    -->
+    <string name="rig_limit_set_min">设为最小</string>
+    <string name="rig_limit_set_max">设为最大</string>
+    <string name="rig_limit_set">%1$s：%2$s = %3$d° · 范围 %4$d° ~ %5$d°</string>
+    <string name="rig_limit_min_word">最小</string>
+    <string name="rig_limit_max_word">最大</string>
+    <string name="rig_limit_no_pick">先在左边点一根骨骼，或者直接拖一根关节摆出角度</string>
+    <string name="rig_range_text">范围 %1$d°…%2$d°</string>
+    <string name="rig_range_now">现在 %1$d°</string>
+    <string name="rig_hint_pose">拖关节摆姿势 · 摆好按「设为最小/最大」记成范围 · 双击复位</string>
     <string name="rig_hint_bones">拖关节改骨骼 · 拖橙点改长度 · 加骨骼后点两下画出来</string>
     <string name="rig_bones_saved">骨骼已保存</string>
     <string name="rig_save_failed">保存失败</string>
