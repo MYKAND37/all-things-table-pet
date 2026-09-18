@@ -1,3 +1,20 @@
+package dev.atp.pet.engine.physics
+
+import dev.atp.pet.engine.math.Transform
+import dev.atp.pet.engine.math.Vec2
+import dev.atp.pet.engine.math.normalizeAngle
+import dev.atp.pet.engine.skeleton.Bone
+import dev.atp.pet.engine.skeleton.CharacterSpec
+import dev.atp.pet.engine.skeleton.Skeleton
+import kotlin.math.abs
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.hypot
+import kotlin.math.sin
+import kotlin.math.max
+import kotlin.math.sqrt
+import kotlin.random.Random
+
 /**
  * THIS IS THE 0.18.0 SOLVER, AND IT IS THE SHIPPED ONE ON PURPOSE.
  *
