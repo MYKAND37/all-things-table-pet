@@ -287,6 +287,18 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     CLEAR_POSE("clearPose", "松开动作", ""),
     SPAWN("spawn", "生成道具", "prop"),
     BURST("burst", "喷粒子", "burst"),
+
+    /**
+     * 流液体：和 喷液体 是同一种东西，只是摊在时间上。
+     *
+     * 喷液体 是一次四十滴，落地就见分晓；流 是每秒多少滴、流多少秒，位置每一帧重新取自
+     * 主体自己身上——所以一条长在手上的"流液体 血"，手走到哪儿血就跟到哪儿，像一道伤口
+     * 而不是一次喷溅。数量写在 value（每秒），时长写在 value2（秒）。
+     */
+    POUR("pour", "流液体", "liquidStream"),
+
+    /** 持续喷粒子：同上，喷的是粒子。 */
+    STREAM("stream", "持续喷粒子", "burstStream"),
     IMPULSE("impulse", "推一下", "boneValue"),
     BREAK("break", "打坏部位", "bone"),
     WAIT("wait", "等一会儿", "seconds"),
@@ -419,6 +431,9 @@ class LogicSpec(
                         name = l.optString("name", id),
                         colour = parseColour(l.optString("colour", ""), 0xFFB4212B.toInt()),
                         viscosity = l.optDouble("viscosity", 0.0).toFloat(),
+                        // A file written before this switch existed gets true, which is what
+                        // every liquid did then.
+                        collides = l.optBoolean("collides", true),
                     )
                 }
             }
@@ -526,6 +541,7 @@ class LogicSpec(
                         .put("id", l.id).put("name", l.name)
                         .put("colour", String.format("#%06X", l.colour and 0xFFFFFF))
                         .put("viscosity", l.viscosity.toDouble())
+                        .put("collides", l.collides)
                 )
             }
             root.put("liquids", liquids)
@@ -622,10 +638,10 @@ class LogicSpec(
     { "id": "hurt", "name": "受伤", "on": false }
   ],
   "liquids": [
-    { "id": "blood", "name": "血", "colour": "#B4212B", "viscosity": 0.35 },
-    { "id": "water", "name": "水", "colour": "#3D8FD1", "viscosity": 0.0 },
-    { "id": "slime", "name": "史莱姆", "colour": "#5FA83C", "viscosity": 0.8 },
-    { "id": "ink", "name": "墨", "colour": "#23202E", "viscosity": 0.15 }
+    { "id": "blood", "name": "血", "colour": "#B4212B", "viscosity": 0.35, "collides": true },
+    { "id": "water", "name": "水", "colour": "#3D8FD1", "viscosity": 0.0, "collides": true },
+    { "id": "slime", "name": "史莱姆", "colour": "#5FA83C", "viscosity": 0.8, "collides": true },
+    { "id": "ink", "name": "墨", "colour": "#23202E", "viscosity": 0.15, "collides": true }
   ],
   "particles": [
     { "id": "blood", "name": "血", "colour": "#C92A2A", "size": 1.0, "gravity": true, "stains": true },

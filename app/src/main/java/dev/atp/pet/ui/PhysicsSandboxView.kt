@@ -173,6 +173,29 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private class Rope(val anchor: Prop, val bone: String, val length: Float)
 
+    /**
+     * A rule that asked for a STREAM instead of a splash: 流液体 / 持续喷粒子.
+     *
+     * The engine hands over an action once and forgets it, so anything that lasts longer than
+     * a frame has to live somewhere the frame loop can find it. This is that: what to pour,
+     * whose place to pour it from (asked again every frame, so a hand that moves takes the
+     * stream with it), how fast, and how much longer.
+     *
+     * [carry] is the fraction of a drop that has been earned but not yet spilled. A stream of
+     * 3 drops per second at 60 Hz earns 0.05 of a drop a frame, and dropping the remainder
+     * every frame would make it a rate of 60 instead.
+     */
+    private class Emitter(
+        val kind: String,
+        val id: String,
+        val subject: String,
+        val rate: Float,
+        var left: Float,
+        var carry: Float = 0f,
+    )
+
+    private val emitters = mutableListOf<Emitter>()
+
     private val ropes = mutableListOf<Rope>()
 
     private var heldProp: Prop? = null
@@ -360,6 +383,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldBones.clear()
         heldTargets.clear()
         smoothedTargets.clear()
+        emitters.clear()
         heldOffsets.clear()
         heldProp = null
         framed = false
@@ -396,6 +420,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldBones.clear()
         heldTargets.clear()
         smoothedTargets.clear()
+        emitters.clear()
         heldOffsets.clear()
         heldProp = null
         propPointer = -1
@@ -459,7 +484,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
     fun spill(id: String, count: Int = 40) {
         val liquid = Liquids.of(id, liquids)
         fluid?.spill(
-            liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity, liquid = id,
+            liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity,
+            liquid = id, collides = liquid.collides,
         )
         invalidate()
     }
@@ -572,6 +598,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldBones.clear()
         heldTargets.clear()
         smoothedTargets.clear()
+        emitters.clear()
         heldOffsets.clear()
         heldProp = null
         signals.clear()
@@ -696,7 +723,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     fluid?.spill(
                         liquid.colour, pointOf(event),
                         a.value.toInt(), liquid.viscosity, liquid = liquid.id,
+                        collides = liquid.collides,
                     )
+                }
+                // 流液体 / 持续喷粒子: registered rather than done. A second stream of the same
+                // thing on the same subject replaces the first instead of running beside it --
+                // two rules both saying "pour blood" is one wound, and two emitters would drain
+                // the pool twice as fast for no reason anybody could see.
+                "pour", "stream" -> {
+                    if (a.text.isNotEmpty()) {
+                        val id = a.text
+                        val rate = a.value.coerceIn(1f, 200f)
+                        val seconds = if (a.value2 > 0f) a.value2.coerceIn(0.1f, 60f) else 1f
+                        emitters.removeAll { it.kind == a.kind && it.id == id && it.subject == acting }
+                        emitters.add(Emitter(a.kind, id, acting, rate, seconds))
+                    }
                 }
                 "emit" -> {
                     // A signal, raised by one rule and heard by another. Queued rather than
@@ -1127,7 +1168,40 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 fireTo(Subjects.liquid(id), GameEvent(EventType.LANDED, value = n.toFloat()))
             }
         }
+        stepEmitters(dt)
         attachRopes()
+    }
+
+    /**
+     * Spill whatever the rules are still streaming, at the rate they asked for.
+     *
+     * The position is looked up every frame rather than remembered: "让手流血" is a stream that
+     * comes out of the hand, so if the hand moves the blood follows. A stream whose subject has
+     * gone falls back to the bench's own spot, which is the same answer `pointOf` gives a rule.
+     */
+    private fun stepEmitters(dt: Float) {
+        if (emitters.isEmpty()) return
+        val finished = mutableListOf<Emitter>()
+        for (e in emitters) {
+            e.left -= dt
+            e.carry += e.rate * dt
+            val n = e.carry.toInt()
+            e.carry -= n
+            if (n > 0) {
+                val at = subjectPoint(e.subject) ?: Vec2(homeX(), homeY() - 400f)
+                if (e.kind == "pour") {
+                    val liquid = Liquids.of(e.id, liquids)
+                    fluid?.spill(
+                        liquid.colour, at, n, liquid.viscosity,
+                        liquid = liquid.id, collides = liquid.collides,
+                    )
+                } else {
+                    particles.burst(e.id, at, n)
+                }
+            }
+            if (e.left <= 0f) finished.add(e)
+        }
+        emitters.removeAll(finished)
     }
 
     /**

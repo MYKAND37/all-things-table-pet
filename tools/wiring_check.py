@@ -160,6 +160,25 @@ def main():
            [i for i in layout_order if i in list_order] == list_order,
            "layout %s vs list %s" % (layout_order, list_order))
 
+    print("== every action a rule can be given is performed by somebody ==")
+    # ActionKind is the menu; the engine and the bench are the two places an action can
+    # actually happen. A kind that appears in neither is a menu entry that does nothing --
+    # and the one that got away (a liquid's 落地, which no code ever delivered) is why this
+    # family of check exists. The engine's own actions are the ones it applies to numbers and
+    # states; anything visible has to be in the bench.
+    spec_text = "".join(t for p, t in files.items() if p.endswith("LogicSpec.kt"))
+    engine_text = "".join(t for p, t in files.items() if p.endswith("RuleEngine.kt"))
+    bench_text = "".join(t for p, t in files.items() if p.endswith("PhysicsSandboxView.kt"))
+    kinds = re.findall(r'^\s{4}[A-Z_]+\("([a-zA-Z]+)",', spec_text, re.M)
+    missing = []
+    for k in kinds:
+        handled = re.search(r'"%s"' % re.escape(k), engine_text) is not None \
+            or re.search(r'"%s"' % re.escape(k), bench_text) is not None
+        if not handled:
+            missing.append(k)
+    report("every action kind is handled by the engine or the bench", not missing,
+           "nothing performs: " + str(missing) if missing else "%d kinds" % len(kinds))
+
     print("== every kind of subject that can hold logic is handed events ==")
     # The bug this exists for: 液体·血 could be picked in 逻辑管理, could be written on, could
     # be saved -- and its rules never ran, because nothing on the bench ever called

@@ -3271,6 +3271,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun askEditLiquid(existing: LiquidSpec?, after: (() -> Unit)? = null) {
         var colour = existing?.colour ?: LIQUID_PALETTE[0]
+        var collides = existing?.collides ?: true
         val idInput = EditText(this).apply {
             setText(existing?.id ?: nextLiquidId())
             hint = getString(R.string.logic_stat_id)
@@ -3306,6 +3307,21 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.logic_liquid_viscosity), existing?.viscosity ?: 0f, 0.1f, 0f, 1f,
         ) { "%.2f".format(it) }
 
+        // The same one-chip switch the particle editor uses, for the same reason: it is one
+        // yes/no about what this stuff IS, and the wording carries the state.
+        val collideChip = label(getString(R.string.liquid_collides_on), 12f, INK)
+        collideChip.setPadding(dp(10), dp(8), dp(10), dp(8))
+        fun paintCollide() {
+            collideChip.background = getDrawable(
+                if (collides) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            collideChip.setTextColor(if (collides) INK else MUTED)
+            collideChip.text = getString(
+                if (collides) R.string.liquid_collides_on else R.string.liquid_collides_off
+            )
+        }
+        collideChip.setOnClickListener { collides = !collides; paintCollide() }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -3315,6 +3331,9 @@ class MainActivity : AppCompatActivity() {
         box.addView(label(getString(R.string.logic_liquid_colour), 11f, MUTED, top = 8, bottom = 6))
         box.addView(chips)
         box.addView(viscosityRow)
+        box.addView(label(getString(R.string.logic_liquid_kind), 11f, MUTED, top = 10, bottom = 6))
+        box.addView(collideChip)
+        box.addView(label(getString(R.string.logic_liquid_collides_hint), 10f, MUTED, top = 6))
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.logic_add_liquid else R.string.logic_liquids)
@@ -3323,7 +3342,9 @@ class MainActivity : AppCompatActivity() {
                 val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextLiquidId() }
                 val name = nameInput.text.toString().trim().ifEmpty { id }
                 logicLiquids.removeAll { it.id == id || (existing != null && it.id == existing.id) }
-                logicLiquids.add(LiquidSpec(id, name, colour, viscosityOf()))
+                logicLiquids.add(
+                    LiquidSpec(id, name, colour, viscosityOf(), collides = collides)
+                )
                 saveLiquids()
                 refreshLiquids()
                 after?.invoke()
@@ -4020,6 +4041,9 @@ class MainActivity : AppCompatActivity() {
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
         "burst" -> "喷" + ParticleKinds.of(a.text, logicParticles).name
+        "pour" -> "流" + liquidName(a.text) + " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
+        "stream" -> "持续喷" + ParticleKinds.of(a.text, logicParticles).name +
+            " " + a.value.toInt() + "/秒 · " + trim(a.value2) + "秒"
         "impulse" -> "推" + directionText(a.text) + " " +
             (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
         "break" -> "打坏 " + (if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone))
@@ -4448,6 +4472,48 @@ class MainActivity : AppCompatActivity() {
                     existing?.text,
                 ) { burstId ->
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
+                    true
+                }
+                // 流液体：选哪种液体 → 每秒多少滴 → 流多少秒。
+                "liquidStream" -> pickList(
+                    getString(R.string.logic_pick_liquid),
+                    logicLiquids.map { it.id to it.name },
+                    getString(R.string.logic_no_liquids),
+                    existing?.text,
+                ) { liquidId ->
+                    askNumber(
+                        getString(R.string.logic_pick_rate), existing?.value ?: 20f, 1f, 200f,
+                    ) { rate ->
+                        askNumber(
+                            getString(R.string.logic_pick_seconds), existing?.value2 ?: 2f, 0.1f, 60f,
+                        ) { seconds ->
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = liquidId, value = rate, value2 = seconds),
+                            )
+                        }
+                    }
+                    true
+                }
+                // 持续喷粒子：同上，喷的是粒子。
+                "burstStream" -> pickList(
+                    getString(R.string.logic_pick_burst),
+                    logicParticles.map { it.id to it.name },
+                    "",
+                    existing?.text,
+                ) { burstId ->
+                    askNumber(
+                        getString(R.string.logic_pick_rate), existing?.value ?: 10f, 1f, 200f,
+                    ) { rate ->
+                        askNumber(
+                            getString(R.string.logic_pick_seconds), existing?.value2 ?: 2f, 0.1f, 60f,
+                        ) { seconds ->
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = burstId, value = rate, value2 = seconds),
+                            )
+                        }
+                    }
                     true
                 }
                 "bone" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->

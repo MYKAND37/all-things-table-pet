@@ -88,8 +88,8 @@
         920
       ],
       "limits": [
-        -35,
-        35
+        -360,
+        360
       ],
       "collider": {
         "type": "capsule",

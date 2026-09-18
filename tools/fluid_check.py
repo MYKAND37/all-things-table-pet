@@ -40,9 +40,9 @@ AIR_DRAG = 0.4
 
 class Drop:
     __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy",
-                 "liquid", "landed")
+                 "liquid", "landed", "collides")
 
-    def __init__(self, x, y, vx, vy, colour, r, liquid=""):
+    def __init__(self, x, y, vx, vy, colour, r, liquid="", collides=True):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.px, self.py = x, y
         self.dx, self.dy = 0.0, 0.0
@@ -53,6 +53,9 @@ class Drop:
         # Whether the floor has EVER stopped it, so that 落地 happens once to a drop instead
         # of being a state it is in. See _borders for why the two cleverer tests lost.
         self.landed = False
+        # Whether the character's body is solid to this drop. Copied from the kind at spill
+        # time; the floor and the walls ignore it. Mirrors Drop.collides in Fluid.kt.
+        self.collides = collides
 
 
 class Fluid:
@@ -77,7 +80,7 @@ class Fluid:
             return
         self.drops = [d for d in self.drops if d.liquid != liquid]
 
-    def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid=""):
+    def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid="", collides=True):
         # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
         # bleeding has to keep bleeding, and a spill that silently does nothing because the
         # pool is full is worse than one that pushes the old liquid out.
@@ -86,7 +89,8 @@ class Fluid:
             v = speed * self.rng.uniform(0.2, 1.0) * spread
             self.drops.append(
                 Drop(x + self.rng.uniform(-6, 6), y + self.rng.uniform(-6, 6),
-                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS, liquid)
+                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS, liquid,
+                     collides)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
@@ -115,8 +119,11 @@ class Fluid:
         for d in self.drops:
             if self._borders(d) and d.liquid:
                 landed.append(d.liquid)
-            for (a, b, r) in bones:
-                self._bone(d, a, b, r)
+            # The body, unless this liquid was told to ignore it: "does not collide with the
+            # character" is a statement about the pet, not about the world.
+            if d.collides:
+                for (a, b, r) in bones:
+                    self._bone(d, a, b, r)
 
         # Velocity is where the drop ENDED UP, not what it was pushed with.
         #
@@ -381,6 +388,32 @@ def main():
     report("no drop is inside the bone", len(inside) == 0, "%d inside" % len(inside))
     report("it piled up around the bone",
            max(d.x for d in f.drops) - min(d.x for d in f.drops) > 150.0)
+
+    print("a liquid can be told to ignore the body")
+    # The switch the owner asked for. Same spill, same leg, one flag apart: the default piles
+    # up ON the bone, the other runs straight through it. Both are asserted, because "off"
+    # would also be satisfied by a liquid that simply stopped moving.
+    # ONE drop, straight down the middle of the leg, so the two cases differ by exactly the
+    # flag: pushed off the axis (solid) or allowed to keep its line (through). A crowd would
+    # hide it -- sixty drops push each other sideways whether or not the bone is there, and
+    # a test that passes for the wrong reason is worse than no test.
+    def down_the_leg(collides):
+        f = Fluid(2000.0, 3000.0)
+        f.spill(1500, 400, 1, 0xFF0000, liquid="acid", collides=collides)
+        d = f.drops[0]
+        d.vx = d.vy = 0.0
+        for _ in range(240):
+            f.step(1 / 60, 2400.0, [bone], None)
+        return abs(d.x - 1500.0), d.y
+
+    solid_off, solid_y = down_the_leg(True)
+    thin_off, thin_y = down_the_leg(False)
+    report("by default the body pushes it off the bone", solid_off > 40.0,
+           "landed %.0f px to the side (bone radius 60, drop radius 15)" % solid_off)
+    report("told not to collide, it keeps its line through the body", thin_off < 20.0,
+           "landed %.0f px to the side" % thin_off)
+    report("and both of them still reach the floor", abs(solid_y - thin_y) < 40.0,
+           "y %.0f vs %.0f (floor 2000)" % (solid_y, thin_y))
 
     print("the cap holds and the newest is the one kept")
     f = Fluid(2000.0, 3000.0)

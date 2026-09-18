@@ -22,6 +22,16 @@ data class LiquidSpec(
     val name: String,
     val colour: Int,
     val viscosity: Float,
+    /**
+     * Whether the character's body is solid to this liquid.
+     *
+     * On is what a liquid has always done: the drops run around the limbs and pile up on the
+     * feet rather than through them. Off is for the other half of "what is this stuff" — acid
+     * that eats through the pet, rain, a puddle that is only a drawing. The floor and the
+     * walls still hold it either way; it is the BODY this switches off, because that is the
+     * only thing the drops were ever pushed out of.
+     */
+    val collides: Boolean = true,
 )
 
 /** One blob of liquid. Drawn as a circle; only the crowding between them makes it fluid. */
@@ -41,6 +51,8 @@ class Drop(
      * of drops that all look alike.
      */
     val liquid: String = "",
+    /** Whether the body pushes this drop around. Copied from the kind when it is spilled. */
+    val collides: Boolean = true,
 ) {
     var prevX = x
     var prevY = y
@@ -116,6 +128,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         viscosity: Float,
         speed: Float = 260f,
         liquid: String = "",
+        collides: Boolean = true,
     ) {
         val n = count.coerceIn(0, 200)
         for (i in 0 until n) {
@@ -131,6 +144,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                     radius = RADIUS,
                     viscosity = viscosity,
                     liquid = liquid,
+                    collides = collides,
                 )
             )
         }
@@ -175,7 +189,10 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
 
         for (drop in drops) {
             if (borders(drop, d) && drop.liquid.isNotEmpty()) landed.add(drop.liquid)
-            if (skeleton != null) {
+            // The body, unless this liquid was told to ignore it. The floor and the walls are
+            // in borders() above and are not optional: "does not collide with the character"
+            // is a statement about the pet, not about the world.
+            if (skeleton != null && drop.collides) {
                 for (bone in skeleton.bones) {
                     pushOut(drop, bone.worldPosition, bone.tipPosition(), radiusOf(bone))
                 }
