@@ -595,8 +595,9 @@
     "bodyWidth": 330,
     "gravity": 2400,
     "floorY": 1980,
+    "ceilingY": -1600,
     "stiffness": 0.0,
     "note": "worldWidth is the play area; the canvas is only as wide as the artwork needs. floorY stays the floor everywhere.",
-    "worldWidth": 3072
+    "worldWidth": 6144
   }
 }

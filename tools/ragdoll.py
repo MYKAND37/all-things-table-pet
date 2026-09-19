@@ -243,7 +243,9 @@ class Ragdoll:
         self.gravity = float(physics.get("gravity", 2400.0))
         self.gravity_scale = 1.0
         self.floor = float(physics.get("floorY", 2048.0))
-        self.ceiling = 0.0
+        #: The roof, from the character's own file. 0 is the artwork's top edge, which is
+        #: what every character had until the room grew one. Mirrors Ragdoll.ceiling.
+        self.ceiling = float(physics.get("ceilingY", 0.0))
         self.wall_left = 0.0
         # The room's width, which is the APP's room and not the artwork's: CharacterSpec
         # reads physics.worldWidth, and skeleton_tool.room() is where the reference's room is

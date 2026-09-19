@@ -124,6 +124,15 @@ class CharacterSpec(
     val bodyWidth: Float,
     val gravity: Float,
     val floorY: Float,
+    /**
+     * The roof of the room, in canvas coordinates. 0 is the artwork's own top edge and is what
+     * every character had until the owner asked for more air; a negative number lifts it.
+     *
+     * The floor had a depth of its own and the ceiling did not, so a pet could be thrown up
+     * exactly as far as the drawing was tall -- about two body lengths -- and then stopped
+     * against a roof nobody had drawn.
+     */
+    val ceilingY: Float,
     /** Width of the play area. Wider than the canvas: the pet needs room to be thrown. */
     val worldWidth: Float,
     /**
@@ -394,6 +403,7 @@ class CharacterSpec(
                 bodyWidth = num(phys, "bodyWidth", canvasW * 0.32f),
                 gravity = num(phys, "gravity", 2400f),
                 floorY = artFloor + air,
+                ceilingY = num(phys, "ceilingY", 0f),
                 worldWidth = num(phys, "worldWidth", canvasW * 3f),
                 standOffset = air,
             )

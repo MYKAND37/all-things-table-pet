@@ -64,7 +64,7 @@ class Ragdoll(
 
     private val gravity = spec.gravity
     private val floor = spec.floorY
-    private val ceiling = 0f
+    private val ceiling = spec.ceilingY
     private val wallLeft = 0f
     private val wallRight = spec.worldWidth
     private val restitution = 0.2f

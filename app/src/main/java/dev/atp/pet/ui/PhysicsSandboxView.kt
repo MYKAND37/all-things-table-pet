@@ -1010,9 +1010,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val vw = viewWidth()
         val vh = viewHeight()
         val maxX = max(0f, s.worldWidth - vw)
-        val maxY = max(0f, s.floorY - vh)
+        // The window lives inside the room, and the room now has a roof: it used to be the
+        // artwork's top edge (0), so a pet thrown high enough left the screen upwards.
+        val maxY = max(s.ceilingY, s.floorY - vh)
         panX = panX.coerceIn(0f, maxX)
-        panY = panY.coerceIn(0f, maxY)
+        panY = panY.coerceIn(s.ceilingY, maxY)
     }
 
     /** Centre the window on the pet, at the given zoom. */
@@ -1022,7 +1024,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val vw = viewWidth()
         val vh = viewHeight()
         panX = rag.rootPos.x - vw / 2f
-        panY = if (vh >= s.floorY) 0f else s.floorY - vh
+        val roomH = s.floorY - s.ceilingY
+        panY = if (vh >= roomH) s.ceilingY else s.floorY - vh
         clampPan()
         framed = true
     }
@@ -1392,6 +1395,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 }
             }
             bodyPushOut(d, spec, floorY)
+            if (d.position.y - d.bound < spec.ceilingY) {
+                d.position = Vec2(d.position.x, spec.ceilingY + d.bound)
+                if (d.velocity.y < 0f) d.velocity = Vec2(d.velocity.x, 0f)
+            }
             val half = reachX(d) + 4f
             if (d.position.x - half < 0f) {
                 d.position = Vec2(half, d.position.y)
@@ -1789,7 +1796,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 }
                 gx += step
             }
-            var gy = 0f
+            var gy = s.ceilingY
             while (gy <= s.floorY) {
                 if (vy(gy) >= -2f && vy(gy) <= height + 2f) {
                     canvas.drawLine(0f, vy(gy), width.toFloat(), vy(gy), gridPaint)

@@ -81,12 +81,16 @@ class Camera:
         # canvas.width * 3 by hand, which agrees with the app only while every character file
         # leaves worldWidth at its default. skeleton_tool.room is where the room is described.
         self.pan_x = min(max(self.pan_x, 0.0), max(0.0, self.spec["physics"]["worldWidth"] - vw))
-        self.pan_y = min(max(self.pan_y, 0.0), max(0.0, self.spec["physics"]["floorY"] - vh))
+        ceiling = self.spec["physics"].get("ceilingY", 0.0)
+        self.pan_y = min(max(self.pan_y, ceiling),
+                         max(ceiling, self.spec["physics"]["floorY"] - vh))
 
     def frame_pet(self, root):
         vw, vh = self.view_width(), self.view_height()
         self.pan_x = root[0] - vw / 2.0
-        self.pan_y = 0.0 if vh >= self.spec["physics"]["floorY"] else self.spec["physics"]["floorY"] - vh
+        ceiling = self.spec["physics"].get("ceilingY", 0.0)
+        room = self.spec["physics"]["floorY"] - ceiling
+        self.pan_y = ceiling if vh >= room else self.spec["physics"]["floorY"] - vh
         self.clamp_pan()
         self.framed = True
 
