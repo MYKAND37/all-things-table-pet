@@ -408,6 +408,32 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** The prop each node is wearing, by node name. See [NodeSpec.prop]. */
     private val worn = HashMap<String, Prop>()
 
+    /**
+     * The marks a dragged prop has left, oldest first.
+     *
+     * A trail is not a physics object and nothing collides with it: it is a record of where
+     * something HAS BEEN, fading out. That is the whole of it -- which is why it lives here
+     * rather than in the world, where everything has a velocity and a reason to be pushed.
+     */
+    private class Mark(
+        val art: Bitmap,
+        val at: Vec2,
+        val angle: Float,
+        val size: Float,
+        var age: Float,
+    )
+
+    private val trail = mutableListOf<Mark>()
+
+    /** Where each dragged prop last left a mark, by serial, so the spacing is a distance. */
+    private val lastMark = HashMap<Int, Vec2>()
+
+    /** The patterns, by prop id, loaded once per character. See [loadTrails]. */
+    private var trailArt: Map<String, Bitmap> = emptyMap()
+
+    /** Where those patterns live. Kept because 画拖尾 saves one and the bench has to re-read. */
+    private var propsFolder: File? = null
+
     private var heldProp: Prop? = null
     /** Which finger is carrying the prop, so it follows that one and not the first. */
     private var propPointer = -1
@@ -466,6 +492,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val jointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val worldPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val ropePath = android.graphics.Path()
+    private val trailMatrix = android.graphics.Matrix()
     private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -579,6 +606,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         skeleton = built
 
         loadParticleShapes(folder, logic.particles)
+        propsFolder = propsDir
+        loadTrails()
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -685,6 +714,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         pegHitAt.clear()
         hiddenNodes.clear()
         worn.clear()
+        trail.clear()
+        lastMark.clear()
         broken.clear()
         signals.clear()
         particles.clear()
@@ -793,6 +824,36 @@ class PhysicsSandboxView @JvmOverloads constructor(
             out[kind.id] = bmp
         }
         particles.shapes = out
+    }
+
+    /**
+     * The patterns the user painted for the props that drag one.
+     *
+     * Only the props that can HAVE one are read -- a 投掷 prop is thrown, not used, and a
+     * pattern nobody will ever stamp is a file read for nothing. Missing is normal: the trail
+     * belongs to one prop and most props do not have one.
+     */
+    private fun loadTrails() {
+        val out = HashMap<String, Bitmap>()
+        // By FOLDER rather than by the props the bench was handed: a prop that was just created
+        // is not in that list until the bench is reloaded, and the trail it was just given would
+        // otherwise not appear until then. A folder with a trail.png in it is the answer to
+        // "which props have one", and it stays true across renames and edits.
+        for (folder in propsFolder?.listFiles().orEmpty()) {
+            if (!folder.isDirectory) continue
+            val file = File(folder, PropSpecs.TRAIL_FILE)
+            if (!file.isFile) continue
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+            out[folder.name] = bmp
+        }
+        for (old in trailArt.values) old.recycle()
+        trailArt = out
+    }
+
+    /** Re-read the patterns, dropping what is no longer on disk. What the board calls on save. */
+    fun refreshTrails() {
+        loadTrails()
+        invalidate()
     }
 
     /** Re-read the shapes, dropping what is no longer on disk. What the board calls on save. */
@@ -924,6 +985,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         pegHitAt.clear()
         hiddenNodes.clear()
         worn.clear()
+        trail.clear()
+        lastMark.clear()
         particles.clear()
         fluid?.clear()
         broken.clear()
@@ -1561,6 +1624,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         pegPush()
         segmentPush()
         wearProps()
+        stepTrails(dt)
     }
 
     /**
@@ -2310,6 +2374,68 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * Leave a mark behind a prop the finger is dragging.
+     *
+     * Only while it is HELD, and only when it has moved far enough: a trail is about movement.
+     * A prop at rest under a finger is not going anywhere, and a mark per frame would be a
+     * smear of two hundred copies of the same picture in the same place.
+     *
+     * The mark is turned to the direction of travel, and that is the whole difference between
+     * a trail and a line of stamps: a brush is drawn the way the hand went.
+     */
+    private fun stepTrails(dt: Float) {
+        val w = world ?: return
+        var i = 0
+        while (i < trail.size) {
+            val mark = trail[i]
+            mark.age += dt
+            if (mark.age >= TRAIL_LIFE) trail.removeAt(i) else i++
+        }
+        // Old marks go first when there are too many: a trail is a moment, not a record.
+        while (trail.size > TRAIL_MAX) trail.removeAt(0)
+
+        for (prop in w.live) {
+            val art = trailArt[prop.spec.id] ?: continue
+            if (!prop.held) {
+                lastMark.remove(prop.serial)
+                continue
+            }
+            val previous = lastMark[prop.serial]
+            if (previous != null &&
+                hypot(prop.position.x - previous.x, prop.position.y - previous.y) < TRAIL_SPACING
+            ) {
+                continue
+            }
+            val angle = if (previous == null) 0f else atan2(
+                prop.position.y - previous.y, prop.position.x - previous.x,
+            )
+            trail.add(Mark(art, prop.position, angle, prop.spec.radius * TRAIL_SIZE, 0f))
+            lastMark[prop.serial] = prop.position
+        }
+    }
+
+    /**
+     * The marks, under everything else on the table.
+     *
+     * Drawn first so that the pet walks OVER its own trail: a mark on the table is a fact about
+     * the table, and one drawn on top of a foot would look stuck to the foot.
+     */
+    private fun drawTrails(canvas: Canvas) {
+        if (trail.isEmpty()) return
+        for (mark in trail) {
+            worldPaint.alpha = ((1f - mark.age / TRAIL_LIFE).coerceIn(0f, 1f) * 255f).toInt()
+            trailMatrix.reset()
+            // Turned about its own centre and then carried to where it was made: the picture is
+            // a square, and a square rotated about a corner would swing a whole width away.
+            trailMatrix.postTranslate(-mark.size, -mark.size)
+            trailMatrix.postRotate(Math.toDegrees(mark.angle.toDouble()).toFloat(), 0f, 0f)
+            trailMatrix.postTranslate(mark.at.x, mark.at.y)
+            canvas.drawBitmap(mark.art, trailMatrix, worldPaint)
+        }
+        worldPaint.alpha = 255
+    }
+
     /** The nodes as the world sees them: a place, a size, and the bone behind them. */
     private fun nodePoints(sk: Skeleton): List<NodePoint> {
         if (sk.nodes.isEmpty()) return emptyList()
@@ -2465,6 +2591,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         if (settings.particles) particles.draw(canvas, worldPaint)
 
         if (settings.liquid) drawFluid(canvas)
+        drawTrails(canvas)
         drawCharacter(canvas, sk)
         drawNodes(canvas, sk)
         drawDebris(canvas)
@@ -4180,6 +4307,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val NODE_GRAB_SLACK = 10f
         /** The shortest gap between two 变身. See the morph action. */
         private const val MORPH_PERIOD = 0.5f
+
+        /**
+         * How far a prop has to travel between two marks.
+         *
+         * In world pixels, and it has nothing to do with the FRAME rate on purpose: a trail
+         * stamped per frame would be denser the faster the phone is, so the same drag would
+         * leave two different pictures on two different devices.
+         */
+        private const val TRAIL_SPACING = 26f
+        /** How long a mark lasts before it is gone. */
+        private const val TRAIL_LIFE = 2.6f
+        /** The most marks alive at once, oldest dropped first. */
+        private const val TRAIL_MAX = 220
+        /** How big a mark is, as a multiple of the prop's own radius. */
+        private const val TRAIL_SIZE = 1.6f
         private const val PIECE_PUSH = 10f
         private const val PIECE_PUSH_MAX = 90f
         private const val SHOT_SPEED = 2600f

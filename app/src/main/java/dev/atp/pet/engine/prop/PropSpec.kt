@@ -78,6 +78,14 @@ data class PropSpec(
 
 object PropSpecs {
 
+    /**
+     * The pattern a prop leaves behind it, inside that prop's own folder.
+     *
+     * On the PROP rather than on the character, because the prop is the thing that moves: a
+     * hammer dragged across the table leaves the same mark whoever is holding it.
+     */
+    const val TRAIL_FILE = "trail.png"
+
     fun parse(text: String): List<PropSpec> {
         val arr = JSONArray(text)
         return (0 until arr.length()).map { i ->

@@ -2617,6 +2617,26 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.prop_rope), existing?.ropeLength ?: 420f, 40f, 80f, 2000f,
         ) { it.toInt().toString() }
 
+        // 拖尾：拖着一个「持续使用」的道具走，身后留下的图案。画一个就是画一笔 ——
+        // 用户画的是**一小段图案**，它沿着路径重复贴、渐淡。
+        val trailLabel = label(
+            if (existing?.let { store.propTrail(it.id).isFile } == true) {
+                getString(R.string.prop_trail_edit)
+            } else {
+                getString(R.string.prop_trail_draw)
+            },
+            12f, INK, top = 10,
+        )
+        trailLabel.setPadding(dp(2), dp(8), dp(2), dp(8))
+        trailLabel.setOnClickListener {
+            val id = existing?.id
+            if (id == null) {
+                Toast.makeText(this, R.string.prop_trail_first, Toast.LENGTH_SHORT).show()
+            } else {
+                askPropTrail(id, existing.name)
+            }
+        }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -2655,6 +2675,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(radiusRow)
         box.addView(forceRow)
         box.addView(ropeRow)
+        box.addView(trailLabel)
+        box.addView(label(getString(R.string.prop_trail_hint), 10f, MUTED, bottom = 4))
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.prop_new else R.string.prop_name)
@@ -2684,6 +2706,93 @@ class MainActivity : AppCompatActivity() {
             .show()
         paintChips(chipViews, PropKind.values().map { it.id }, { kind })
         ropeRow.visibility = if (kind == PropKind.ANCHOR.id) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * 画拖尾: the pattern a 持续使用 prop drags behind it.
+     *
+     * The same board as a particle's shape, for the same reason -- a brush mark can only be
+     * reproduced by its own pixels -- and stored beside the prop's own logic.json, because a
+     * prop's rules and a prop's trail are both "what this thing does".
+     */
+    private fun askPropTrail(id: String, name: String) {
+        val board = PaintBoardView(this)
+        board.colour = 0x992B2A33.toInt()
+        board.brushWidth = 8f
+        board.load(store.propTrail(id))
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        board.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(220),
+        )
+        box.addView(board)
+        box.addView(label(getString(R.string.prop_trail_board_hint), 10f, MUTED, top = 8, bottom = 6))
+
+        val widthRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var width = 8f
+        val widthViews = mutableListOf<TextView>()
+        for ((w, text) in listOf("3" to getString(R.string.paint_thin),
+                                 "8" to getString(R.string.paint_mid),
+                                 "16" to getString(R.string.paint_fat))) {
+            val chip = label(text, 11f, INK)
+            chip.setPadding(dp(11), dp(7), dp(11), dp(7))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                width = w.toFloat()
+                board.brushWidth = width
+                paintChips(widthViews, listOf("3", "8", "16"), { width.toInt().toString() })
+            }
+            widthViews.add(chip)
+            widthRow.addView(chip)
+        }
+        box.addView(widthRow)
+        paintChips(widthViews, listOf("3", "8", "16"), { "8" })
+
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val eraserChip = label(getString(R.string.paint_eraser), 11f, INK)
+        eraserChip.setPadding(dp(11), dp(7), dp(11), dp(7))
+        eraserChip.setOnClickListener {
+            board.erasing = !board.erasing
+            eraserChip.alpha = if (board.erasing) 0.45f else 1f
+        }
+        tools.addView(eraserChip)
+        tools.addView(small(getString(R.string.paint_undo)) { board.undo() })
+        tools.addView(small(getString(R.string.paint_clear)) { board.clear() })
+        tools.addView(small(getString(R.string.paint_remove)) {
+            val file = store.propTrail(id)
+            if (!file.exists() || file.delete()) {
+                sandboxView.refreshTrails()
+                Toast.makeText(this, R.string.prop_trail_removed, Toast.LENGTH_SHORT).show()
+            }
+        })
+        box.addView(tools)
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.prop_trail_title) + " · " + name)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                // 空画板 = 没有拖尾，和粒子那边同一个道理：存一张全透明的图等于把这一笔
+                // 变成一个什么都不留下的东西，而那不是"清空画布"的意思。
+                val saved = if (board.isEmpty) {
+                    val file = store.propTrail(id)
+                    !file.exists() || file.delete()
+                } else {
+                    board.saveTo(store.propTrail(id))
+                }
+                if (saved) {
+                    sandboxView.refreshTrails()
+                } else {
+                    Toast.makeText(this, R.string.paint_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
     }
 
     /** The first unused id, so two props can share a display name without sharing a file. */

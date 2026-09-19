@@ -440,6 +440,57 @@ def main():
     report("and a prop that is clear of it is not felt at all",
            w.step(1 / 60, 0.0, [], radius_of, noop, [node]) == [])
 
+    print("\n拖尾：按**距离**留印子，不是按帧")
+    # 这段镜像的是 stepTrails 的那一个判断。它的价值全在"距离不是帧"上：按帧留印子的
+    # 实现，同一个拖动在快的手机上密、在慢的手机上稀 —— 同一段拖尾在两个人手里是两个
+    # 样子，而且没有任何地方会报错。
+    TRAIL_SPACING = 26.0
+    TRAIL_LIFE = 2.6
+    TRAIL_MAX = 220
+
+    def stamps(path, held=True):
+        """走过一串位置，能留下几个印子。"""
+        out, last = [], None
+        for (x, y) in path:
+            if not held:
+                last = None
+                continue
+            if last is not None and math.hypot(x - last[0], y - last[1]) < TRAIL_SPACING:
+                continue
+            out.append((x, y))
+            last = (x, y)
+        return out
+
+    # 520px，每 13px 一个位置（约 60fps 下的一个慢拖）：每隔 26px 留一个印子，是 21 个。
+    straight = [(1000.0 + 13.0 * i, 1000.0) for i in range(41)]
+    report("a 520px drag at 13px a step leaves one mark per spacing",
+           len(stamps(straight)) == 21, "%d marks" % len(stamps(straight)))
+    # 同一段路，步子大一倍（慢手机）：印子数必须一样 —— 这就是"距离不是帧"。
+    coarse = [(1000.0 + 26.0 * i, 1000.0) for i in range(21)]
+    report("and the same drag in coarser steps leaves the same marks",
+           len(stamps(coarse)) == len(stamps(straight)),
+           "%d vs %d" % (len(stamps(coarse)), len(stamps(straight))))
+    report("a prop that is not held leaves nothing at all",
+           stamps(straight, held=False) == [])
+    report("and holding it still leaves one, not one per frame",
+           len(stamps([(1000.0, 1000.0)] * 60)) == 1)
+
+    # 印子会老、会掉，而且太多时先掉最老的。
+    marks = [{"age": 0.0} for _ in range(5)]
+    dt, steps = 1 / 60.0, 0
+    while len(marks) > 0 and steps < 1000:
+        for m in marks:
+            m["age"] += dt
+        marks = [m for m in marks if m["age"] < TRAIL_LIFE]
+        steps += 1
+    report("a mark is gone after its life", steps == int(TRAIL_LIFE * 60) + 1,
+           "%d frames" % steps)
+    overflow = [{"age": 0.0} for _ in range(TRAIL_MAX + 30)]
+    while len(overflow) > TRAIL_MAX:
+        overflow.pop(0)
+    report("too many marks drops the oldest, not the newest",
+           len(overflow) == TRAIL_MAX and overflow[-1] is not None)
+
     print("\nprops against each other")
     noop = lambda *a: None
 

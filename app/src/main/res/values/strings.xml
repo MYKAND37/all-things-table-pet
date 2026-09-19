@@ -147,6 +147,14 @@
     <string name="logic_no_characters">还没有别的角色</string>
     <string name="morph_missing">没有这个角色：%1$s</string>
 
+    <string name="prop_trail_draw">画拖尾</string>
+    <string name="prop_trail_edit">改拖尾</string>
+    <string name="prop_trail_title">拖尾</string>
+    <string name="prop_trail_first">先保存这个道具，再给它画拖尾</string>
+    <string name="prop_trail_hint">画一笔图案，拖这个道具走的时候它会沿着路径重复贴、慢慢淡掉。不画就没有拖尾。</string>
+    <string name="prop_trail_board_hint">画一小段就够了：拖动时它沿着路径反复盖上去，所以别画成一整条。图案会跟着走的方向转。</string>
+    <string name="prop_trail_removed">拖尾去掉了</string>
+
     <string name="particle_draw">画图案</string>
     <string name="particle_draw_hint">画 %1$s 长什么样。不画就还是圆点；画了就按你画的画 —— 默认笔色就是这一种粒子自己的颜色。把画布清空再保存等于「改回圆点」。</string>
     <string name="paint_thin">细</string>

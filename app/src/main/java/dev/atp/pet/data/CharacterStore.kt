@@ -318,6 +318,10 @@ class CharacterStore(private val context: Context) {
         false
     }
 
+    /** Where a prop's own files live: its rules, and the pattern it drags behind it. */
+    fun propTrail(id: String): File =
+        File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.TRAIL_FILE)
+
     fun saveRig(
         id: String,
         bones: List<BoneSpec>,
