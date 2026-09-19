@@ -1,6 +1,8 @@
 package dev.atp.pet.ui
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
@@ -576,6 +578,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         spec = parsed
         skeleton = built
 
+        loadParticleShapes(folder, logic.particles)
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -771,6 +774,31 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     fun setParticles(list: List<ParticleSpec>) {
         particles.setKinds(list)
+        invalidate()
+    }
+
+    /**
+     * Load the shapes the user painted for this character's particle kinds.
+     *
+     * Read once per load rather than per frame: a picture off the disk is a file read, and the
+     * frame loop already does enough of those. A kind nobody drew is simply absent -- see
+     * Particles.shapes, where a miss falls back to the disc every particle used to be.
+     */
+    private fun loadParticleShapes(folder: CharacterFolder, list: List<ParticleSpec>) {
+        val out = HashMap<String, Bitmap>()
+        for (kind in list) {
+            val file = folder.particleArt(kind.id)
+            if (!file.isFile) continue
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+            out[kind.id] = bmp
+        }
+        particles.setShapes(out)
+    }
+
+    /** Re-read the shapes, dropping what is no longer on disk. What the board calls on save. */
+    fun refreshParticleShapes(folder: CharacterFolder) {
+        for (old in particles.shapes.values) old.recycle()
+        loadParticleShapes(folder, particles.kinds())
         invalidate()
     }
 

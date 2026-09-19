@@ -31,7 +31,7 @@ const val VARIANT_SEPARATOR = "__"
 /** One character package on disk. */
 class CharacterFolder(val dir: File) {
     val id: String get() = dir.name
-    val specFile: File get() = File(dir, "character.json")
+    val specFile: File get() = File(dir, CharacterStore.SPEC_FILE)
     val partsDir: File get() = File(dir, "parts")
 
     fun partFile(bone: String): File = File(partsDir, bone + ".png")
@@ -46,6 +46,18 @@ class CharacterFolder(val dir: File) {
 
     /** How many bones actually have artwork on disk. */
     fun partCount(bones: List<String>): Int = bones.count { partFile(it).isFile }
+
+    /** Where a kind of particle keeps its shape and its rules: particles/<粒子>/. */
+    fun particleDir(id: String): File = File(File(dir, PARTICLES_DIR), id)
+
+    /**
+     * The shape the user painted for a kind of particle.
+     *
+     * Beside the kind's logic.json rather than in a folder of its own, because it is the same
+     * thing: everything the app knows about one kind of particle lives in one folder, and a
+     * shape in a second place is a shape that gets left behind when the kind is deleted.
+     */
+    fun particleArt(id: String): File = File(particleDir(id), SHAPE_FILE)
 }
 
 /**
@@ -76,7 +88,7 @@ class CharacterStore(private val context: Context) {
             if (children.isEmpty()) continue
 
             val target = File(root, id)
-            val spec = File(target, "character.json")
+            val spec = File(target, SPEC_FILE)
             val bundledVersion = bundledVersion(assetPath)
 
             if (!spec.isFile) {
@@ -95,7 +107,7 @@ class CharacterStore(private val context: Context) {
 
     fun list(): List<CharacterFolder> {
         val dirs = root.listFiles { f -> f.isDirectory } ?: return emptyList()
-        return dirs.filter { File(it, "character.json").isFile }
+        return dirs.filter { File(it, SPEC_FILE).isFile }
             .sortedBy { it.name }
             .map { CharacterFolder(it) }
     }
@@ -113,7 +125,7 @@ class CharacterStore(private val context: Context) {
 
     fun folder(id: String): CharacterFolder? {
         val dir = File(root, id)
-        return if (File(dir, "character.json").isFile) CharacterFolder(dir) else null
+        return if (File(dir, SPEC_FILE).isFile) CharacterFolder(dir) else null
     }
 
     /**
@@ -269,6 +281,20 @@ class CharacterStore(private val context: Context) {
      * seeding pass — which refreshes the bundled spec whenever the app ships a newer one —
      * leaves these edits alone instead of overwriting them on the next launch.
      */
+    /**
+     * Take a kind of particle's shape off the disk.
+     *
+     * Deleting the file rather than blanking it: "no shape" and "a shape that is entirely
+     * transparent" are the same drawing and different intentions, and the one the user means
+     * when they press 去掉图案 is the first.
+     */
+    fun clearParticleArt(folder: CharacterFolder, id: String): Boolean = try {
+        val file = folder.particleArt(id)
+        !file.exists() || file.delete()
+    } catch (e: Exception) {
+        false
+    }
+
     fun saveRig(
         id: String,
         bones: List<BoneSpec>,
@@ -911,6 +937,17 @@ class CharacterStore(private val context: Context) {
 
         /** The same, one folder per KIND of particle (not per drop). See Subjects. */
         const val PARTICLES_DIR = "particles"
+
+        /**
+         * The user's own drawing of a kind of particle, inside that kind's folder.
+         *
+         * It is a PNG rather than a description of a shape on purpose: what the user draws is a
+         * BRUSH MARK, and the only thing that can reproduce a brush mark is the pixels of it.
+         */
+        const val SHAPE_FILE = "shape.png"
         const val PROPS_FILE = "props.json"
+
+        /** The rig itself, inside a character's folder. Named once: see tools/kotlin_check.py. */
+        const val SPEC_FILE = "character.json"
     }
 }

@@ -212,6 +212,31 @@ def main():
     report("only the ones that reached the floor are reported",
            partial.step(1.0 / 60.0, 3670.0) == ["spark"] and len(partial.particles) == 1)
 
+    print("\n画过图案的粒子按图案画，没画过的还是圆点")
+    # 这一段镜像的是 Particles.draw 的那一个分支，以及 stamp 的方框。它的价值不在"挑一个
+    # 分支"上，而在于**没画过必须是圆点**：一个查不到图案就什么都不画的实现，症状是
+    # "粒子不见了"，而规则照旧在跑、日志照旧有 —— 没有人会想到去看形状。
+    shapes = {"spark": "star.png"}
+    kinds = {"spark": 6.0, "dust": 4.0}
+
+    def what_is_drawn(kind, x, y, size):
+        if kind in shapes:
+            return ("stamp", shapes[kind], (x - size, y - size, x + size, y + size))
+        return ("disc", x, y, size)
+
+    drawn = what_is_drawn("spark", 100.0, 200.0, 6.0)
+    report("a kind with a shape is stamped", drawn[0] == "stamp")
+    report("and the box is square and centred on the drop",
+           drawn[2] == (94.0, 194.0, 106.0, 206.0), str(drawn[2]))
+    report("a kind nobody drew is still a disc",
+           what_is_drawn("dust", 100.0, 200.0, 4.0) == ("disc", 100.0, 200.0, 4.0))
+
+    # 印子跟着**落下的那一滴**的形状：同一种粒子在地上留下的痕迹和它在空中是同一个东西。
+    stain_shape = shapes.get("spark")
+    report("a mark on the floor uses the shape of the drop that made it",
+           stain_shape == "star.png")
+    report("and an unknown kind still leaves a round mark", shapes.get("ash") is None)
+
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

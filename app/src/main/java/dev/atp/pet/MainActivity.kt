@@ -47,6 +47,7 @@ import dev.atp.pet.engine.logic.StateSpec
 import dev.atp.pet.engine.state.StatSpec
 import dev.atp.pet.engine.particle.ParticleKinds
 import dev.atp.pet.engine.particle.ParticleSpec
+import dev.atp.pet.ui.PaintBoardView
 import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.LogicGraphView
 import dev.atp.pet.ui.PhysicsSandboxView
@@ -3801,6 +3802,12 @@ class MainActivity : AppCompatActivity() {
             row.addView(text)
             row.setOnClickListener { askEditParticle(particle) { refreshParticles() } }
 
+            // 画图案：这一种粒子长什么样。画过就用画的那个，没画过就还是原来的圆点。
+            val art = label(getString(R.string.particle_draw), 11f, INK)
+            art.setPadding(dp(8), dp(6), dp(8), dp(6))
+            art.setOnClickListener { askParticleArt(particle) }
+            row.addView(art)
+
             val spray = label(getString(R.string.particle_burst), 11f, INK)
             spray.setPadding(dp(8), dp(6), dp(8), dp(6))
             spray.setOnClickListener {
@@ -4331,6 +4338,138 @@ class MainActivity : AppCompatActivity() {
     /** One node of the flow. Role picks the colour: 0 = 当, 1 = 如果, 2 = 就. */
 
     /** The line between two nodes. It exists so the chain reads as a chain. */
+
+    /**
+     * The board a kind of particle is drawn on.
+     *
+     * Everything the user makes here is 128 pixels wide and used at the size of a spark, so the
+     * board is small on purpose -- and the tools are three brush widths and a row of colours
+     * rather than a colour wheel, because at this size a wheel is a way to spend five minutes
+     * choosing between two browns.
+     */
+    private fun askParticleArt(particle: ParticleSpec) {
+        val folder = summoned ?: return
+        val board = PaintBoardView(this)
+        board.colour = particle.colour
+        board.width = 4f
+        board.load(folder.particleArt(particle.id))
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        board.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(220),
+        )
+        box.addView(board)
+        box.addView(
+            label(
+                getString(R.string.particle_draw_hint, particle.name),
+                10f, MUTED, top = 8, bottom = 6,
+            )
+        )
+
+        // 粗细
+        val widthRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var width = 4f
+        val widthViews = mutableListOf<TextView>()
+        for ((id, text) in listOf("2" to getString(R.string.paint_thin),
+                                  "4" to getString(R.string.paint_mid),
+                                  "10" to getString(R.string.paint_fat))) {
+            val chip = label(text, 11f, INK)
+            chip.setPadding(dp(11), dp(7), dp(11), dp(7))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                width = id.toFloat()
+                board.width = width
+                paintChips(widthViews, listOf("2", "4", "10"), { width.toInt().toString() })
+            }
+            widthViews.add(chip)
+            widthRow.addView(chip)
+        }
+        box.addView(widthRow)
+        box.addView(label(getString(R.string.paint_width), 10f, MUTED, top = 2))
+        paintChips(widthViews, listOf("2", "4", "10"), { "4" })
+
+        // 颜色：粒子自己的颜色排第一，因为「和刚才一样」是最常想要的那个
+        val colourRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var colour = particle.colour
+        val swatches = mutableListOf<TextView>()
+        for (c in listOf(particle.colour) + PAINT_COLOURS) {
+            val swatch = TextView(this)
+            swatch.layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(6) }
+            swatch.setBackgroundColor(c)
+            swatch.setOnClickListener {
+                colour = c
+                board.colour = c
+                board.erasing = false
+                paintSwatches(swatches, listOf(particle.colour) + PAINT_COLOURS, colour)
+            }
+            swatches.add(swatch)
+            colourRow.addView(swatch)
+        }
+        box.addView(colourRow)
+        paintSwatches(swatches, listOf(particle.colour) + PAINT_COLOURS, colour)
+
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val eraserChip = label(getString(R.string.paint_eraser), 11f, INK)
+        eraserChip.setPadding(dp(11), dp(7), dp(11), dp(7))
+        eraserChip.setOnClickListener {
+            board.erasing = !board.erasing
+            // A toggle that looks the same either way is a toggle nobody can read, and this one
+            // changes what the next stroke does.
+            eraserChip.alpha = if (board.erasing) 0.45f else 1f
+        }
+        tools.addView(eraserChip)
+        tools.addView(small(getString(R.string.paint_undo)) { board.undo() })
+        tools.addView(small(getString(R.string.paint_clear)) { board.clear() })
+        tools.addView(small(getString(R.string.paint_remove)) {
+            if (store.clearParticleArt(folder, particle.id)) {
+                sandboxView.refreshParticleShapes(folder)
+                Toast.makeText(this, R.string.paint_removed, Toast.LENGTH_SHORT).show()
+            }
+        })
+        box.addView(tools)
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.particle_draw) + " · " + particle.name)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                // A blank board means "no shape", not "an invisible shape". Saving the
+                // transparent canvas would make every one of these particles disappear, and
+                // that is not what clearing the board is asking for.
+                val saved = if (board.isEmpty) {
+                    store.clearParticleArt(folder, particle.id)
+                } else {
+                    board.saveTo(folder.particleArt(particle.id))
+                }
+                if (saved) {
+                    sandboxView.refreshParticleShapes(folder)
+                } else {
+                    Toast.makeText(this, R.string.paint_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    /** The colours a board offers, after the kind's own. */
+    private val PAINT_COLOURS = listOf(
+        0xFF2B2A33.toInt(), 0xFFE2653C.toInt(), 0xFFF0B429.toInt(),
+        0xFF3E9B4F.toInt(), 0xFF2C7BE5.toInt(), 0xFF8E5AC8.toInt(),
+        0xFFFFFFFF.toInt(),
+    )
+
+    private fun paintSwatches(views: List<TextView>, colours: List<Int>, current: Int) {
+        for ((i, view) in views.withIndex()) {
+            val mine = i < colours.size && colours[i] == current
+            view.alpha = if (mine) 1f else 0.55f
+            view.foreground = if (mine) getDrawable(R.drawable.menu_item_selected) else null
+        }
+    }
 
     private fun small(text: String, onClick: () -> Unit): TextView {
         val view = label(text, 10f, MUTED)

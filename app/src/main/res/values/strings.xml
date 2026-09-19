@@ -147,6 +147,19 @@
     <string name="logic_no_characters">还没有别的角色</string>
     <string name="morph_missing">没有这个角色：%1$s</string>
 
+    <string name="particle_draw">画图案</string>
+    <string name="particle_draw_hint">画 %1$s 长什么样。不画就还是圆点；画了就按你画的画 —— 默认笔色就是这一种粒子自己的颜色。把画布清空再保存等于「改回圆点」。</string>
+    <string name="paint_thin">细</string>
+    <string name="paint_mid">中</string>
+    <string name="paint_fat">粗</string>
+    <string name="paint_width">笔头粗细</string>
+    <string name="paint_eraser">橡皮</string>
+    <string name="paint_undo">撤销</string>
+    <string name="paint_clear">清空</string>
+    <string name="paint_remove">去掉图案</string>
+    <string name="paint_removed">图案去掉了，改回圆点</string>
+    <string name="paint_failed">存不下来</string>
+
     <string name="rig_node_list">节点</string>
     <string name="rig_bone_list_empty">还没有骨骼，先加一根</string>
     <string name="rig_node_hint">节点是骨头上一个点，不占长度。规则可以拿它当部位（被碰到 / 被点一下），绳子可以系在它上面，也能被隐藏/显示。被隐藏的节点不会被碰到。</string>

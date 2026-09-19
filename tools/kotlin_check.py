@@ -347,6 +347,31 @@ def check_view_resources():
     report("a View reads resources through context.*", not bad, "\n         ".join(bad))
 
 
+def check_one_home_for_a_file_name():
+    """
+    A file the app writes and reads has to be named in exactly ONE place.
+
+    The particle shape is written by the board and read by the bench. Two spellings of
+    "shape.png" would not fail to compile, would not fail at run time either -- the write would
+    quietly land somewhere the read does not look, which looks exactly like a drawing that
+    saved and did nothing. It is the same failure CharacterStore keeps its file names in one
+    companion for, so this checks the habit rather than the one file.
+    """
+    bad = []
+    for name in ("shape.png", "logic.json", "character.json"):
+        homes = []
+        for path in kotlin_files():
+            for i, line in enumerate(open(path, encoding="utf-8").read().split("\n"), 1):
+                code = line.split("//")[0]
+                if '"%s"' % name in code:
+                    homes.append("%s:%d" % (os.path.basename(path), i))
+        if len(homes) > 1:
+            bad.append("%s is named in %d places: %s" % (name, len(homes), ", ".join(homes)))
+        elif not homes:
+            bad.append("%s is named nowhere" % name)
+    report("every file name the app writes has one home", not bad, "; ".join(bad))
+
+
 def main():
     if "--self-test" in sys.argv:
         print("the checker's own cases")
@@ -364,6 +389,7 @@ def main():
     check_private_companions()
     check_chip_lists()
     check_view_resources()
+    check_one_home_for_a_file_name()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

@@ -1,7 +1,9 @@
 package dev.atp.pet.render
 
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.RectF
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.particle.ParticleKinds
 import dev.atp.pet.engine.particle.ParticleSpec
@@ -58,6 +60,8 @@ class Particles {
         var r: Float,
         val colour: Int,
         var life: Float,
+        /** The kind that left it, so a stain is the shape of its own drop. See [shapes]. */
+        val kind: String = "",
         val maxLife: Float,
     )
 
@@ -143,7 +147,7 @@ class Particles {
                 continue
             }
             if (p.y >= floor) {
-                if (p.stains) mark(p.x, floor, p.size, p.colour)
+                if (p.stains) mark(p.x, floor, p.size, p.colour, p.kind)
                 landed.add(p.kind)
                 particles.removeAt(i)
                 continue
@@ -168,26 +172,65 @@ class Particles {
     }
 
     /** A mark is left where the drop landed, which is the floor, not where it started. */
-    private fun mark(x: Float, y: Float, size: Float, colour: Int) {
+    private fun mark(x: Float, y: Float, size: Float, colour: Int, kind: String) {
         if (stains.size >= MAX_STAINS) stains.removeAt(0)
         val life = 5f + random.nextFloat() * 4f
-        stains.add(Stain(x, y, size * 0.9f, colour, life, life))
+        stains.add(Stain(x, y, size * 0.9f, colour, life, life, kind))
+    }
+
+    /**
+     * The shapes the user painted, by kind.
+     *
+     * A kind without one is a disc, which is what every particle was until there was a board to
+     * draw on: this is a lookup that can MISS, and a miss has to be the old drawing rather than
+     * nothing at all -- a particle nobody can see is a rule nobody believes.
+     */
+    var shapes: Map<String, Bitmap> = emptyMap()
+
+    fun setShapes(next: Map<String, Bitmap>) {
+        shapes = next
     }
 
     fun draw(canvas: Canvas, paint: Paint) {
         for (s in stains) {
-            paint.style = Paint.Style.FILL
+            // A mark on the floor is the same shape as the thing that made it, faded: that is
+            // what makes a stain look like it belongs to the drop it came from.
+            val shape = shapes[s.kind]
             paint.alpha = ((s.life / s.maxLife).coerceIn(0f, 1f) * 90f).toInt()
-            paint.color = s.colour
-            canvas.drawCircle(s.x, s.y, s.r, paint)
+            if (shape != null) {
+                stamp(canvas, shape, s.x, s.y, s.r, paint)
+            } else {
+                paint.style = Paint.Style.FILL
+                paint.color = s.colour
+                canvas.drawCircle(s.x, s.y, s.r, paint)
+            }
         }
         for (p in particles) {
-            paint.style = Paint.Style.FILL
+            val shape = shapes[p.kind]
             paint.alpha = ((p.life / p.maxLife).coerceIn(0f, 1f) * 255f).toInt()
-            paint.color = p.colour
-            canvas.drawCircle(p.x, p.y, p.size, paint)
+            if (shape != null) {
+                stamp(canvas, shape, p.x, p.y, p.size, paint)
+            } else {
+                paint.style = Paint.Style.FILL
+                paint.color = p.colour
+                canvas.drawCircle(p.x, p.y, p.size, paint)
+            }
         }
         paint.alpha = 255
+    }
+
+    /**
+     * One drawn shape, at a size.
+     *
+     * The drawing wins over the kind's colour: somebody who painted a green leaf means a green
+     * leaf, and tinting it would be the app arguing with its own board. The ALPHA still comes
+     * from the drop, because fading is what a particle does rather than what it looks like.
+     * The rect is square whatever the picture is -- a particle has one size, and squashing a
+     * shape to fit a radius in one direction only is how a star becomes a dash.
+     */
+    private fun stamp(canvas: Canvas, shape: Bitmap, x: Float, y: Float, size: Float, paint: Paint) {
+        val box = RectF(x - size, y - size, x + size, y + size)
+        canvas.drawBitmap(shape, null, box, paint)
     }
 
     companion object {
