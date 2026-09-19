@@ -26,7 +26,7 @@ data class BoneSpec(
     var minAngle: Float,
     var maxAngle: Float,
     val springy: Boolean,
-    val stiffness: Float,
+    var stiffness: Float,
     val damping: Float,
     val gravity: Float,
     /** "capsule" runs along the bone, "circle" sits at its midpoint. */

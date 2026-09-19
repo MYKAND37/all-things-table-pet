@@ -1975,7 +1975,6 @@ class MainActivity : AppCompatActivity() {
     private fun askBoneAttributes(folder: CharacterFolder, bone: BoneSpec) {
         var minAngle = bone.minAngle
         var maxAngle = bone.maxAngle
-        var stiffness = bone.stiffness
         var type = bone.colliderType
         var radius = bone.colliderRadius
         var collides = bone.collides

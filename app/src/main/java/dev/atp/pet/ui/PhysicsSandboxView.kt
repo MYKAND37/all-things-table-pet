@@ -3318,17 +3318,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val JITTER_WINDOW = 2.0f
         private const val JITTER_SAMPLES = 512
 
-        /**
-         * The tuning readout's window, in seconds, and the ring it is kept in.
-         *
-         * Two seconds is the Python's window for the same measurement, so the numbers on the
-         * phone can be read against the numbers in the diagnosis. 512 frames is that window
-         * at 120 Hz and then some; the window itself is enforced by time, not by count, so a
-         * phone that drops to 30 fps still shows two seconds rather than four.
-         */
-        private const val JITTER_WINDOW = 2.0f
-        private const val JITTER_SAMPLES = 512
-
         /** How tall the panel is, so that [tuneTop] can tell whether it fits. See tunePanel. */
         private const val TUNE_PANEL_H = 318f
 
