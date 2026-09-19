@@ -2636,6 +2636,22 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(trail)
 
+        // 画绳子, for a rope: the drawing the app lays along the simulated chain. Same board,
+        // same place on the row, because it is the same kind of thing as a trail -- a picture
+        // this prop wears, in this prop's folder.
+        if (spec.kindOf() == PropKind.ROPE) {
+            val rope = label(
+                if (store.propRope(spec.id).isFile) getString(R.string.prop_rope_edit)
+                else getString(R.string.prop_rope_draw),
+                11f, MUTED,
+            )
+            rope.setPadding(dp(8), dp(6), dp(8), dp(6))
+            rope.setOnClickListener {
+                askPropRope(spec.id, spec.name) { buildPropList() }
+            }
+            card.addView(rope)
+        }
+
         // The way in from this end. 道具管理 is where a prop is made, and "does this one use
         // logic of its own" is a question that comes up here rather than three screens away.
         val logic = label(getString(R.string.menu_logic), 11f, MUTED)
@@ -2856,6 +2872,94 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (saved) {
                     sandboxView.refreshTrails()
+                    after()
+                } else {
+                    Toast.makeText(this, R.string.paint_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+    }
+
+    /**
+     * 画绳子: one short piece of rope, drawn by hand.
+     *
+     * A piece, not a whole rope: the app lays this drawing along the simulated chain one tile
+     * per link, so the same picture makes a rope of any length. Asked for here rather than in a
+     * sandbox dialog because it is a property of the PROP -- the same rope prop always looks
+     * like the same rope.
+     */
+    private fun askPropRope(id: String, name: String, after: () -> Unit = {}) {
+        val board = PaintBoardView(this)
+        board.colour = 0xFF8A6B4A.toInt()
+        board.brushWidth = 12f
+        board.load(store.propRope(id))
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        board.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(220),
+        )
+        box.addView(board)
+        box.addView(label(getString(R.string.prop_rope_hint), 10f, MUTED, top = 8, bottom = 6))
+
+        val widthRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        var width = 12f
+        val widthViews = mutableListOf<TextView>()
+        for ((w, text) in listOf("4" to getString(R.string.paint_thin),
+                                 "12" to getString(R.string.paint_mid),
+                                 "26" to getString(R.string.paint_fat))) {
+            val chip = label(text, 11f, INK)
+            chip.setPadding(dp(11), dp(7), dp(11), dp(7))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                width = w.toFloat()
+                board.brushWidth = width
+                paintChips(widthViews, listOf("4", "12", "26"), { width.toInt().toString() })
+            }
+            widthViews.add(chip)
+            widthRow.addView(chip)
+        }
+        box.addView(widthRow)
+        paintChips(widthViews, listOf("4", "12", "26"), { "12" })
+
+        val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val eraserChip = label(getString(R.string.paint_eraser), 11f, INK)
+        eraserChip.setPadding(dp(11), dp(7), dp(11), dp(7))
+        eraserChip.setOnClickListener {
+            board.erasing = !board.erasing
+            eraserChip.alpha = if (board.erasing) 0.45f else 1f
+        }
+        tools.addView(eraserChip)
+        tools.addView(small(getString(R.string.paint_undo)) { board.undo() })
+        tools.addView(small(getString(R.string.paint_clear)) { board.clear() })
+        tools.addView(small(getString(R.string.paint_remove)) {
+            val file = store.propRope(id)
+            if (!file.exists() || file.delete()) {
+                sandboxView.refreshRopes()
+                after()
+                Toast.makeText(this, R.string.prop_rope_removed, Toast.LENGTH_SHORT).show()
+            }
+        })
+        box.addView(tools)
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.prop_rope_title) + " · " + name)
+            .setView(scrolling(box))
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val saved = if (board.isEmpty) {
+                    val file = store.propRope(id)
+                    !file.exists() || file.delete()
+                } else {
+                    board.saveTo(store.propRope(id))
+                }
+                if (saved) {
+                    sandboxView.refreshRopes()
                     after()
                 } else {
                     Toast.makeText(this, R.string.paint_failed, Toast.LENGTH_SHORT).show()

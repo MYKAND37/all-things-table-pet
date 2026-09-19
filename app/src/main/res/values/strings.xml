@@ -147,6 +147,12 @@
     <string name="logic_no_characters">还没有别的角色</string>
     <string name="morph_missing">没有这个角色：%1$s</string>
 
+    <string name="prop_rope_draw">画绳子</string>
+    <string name="prop_rope_edit">改绳子图案</string>
+    <string name="prop_rope_title">绳子的样子</string>
+    <string name="prop_rope_hint">画一小段绳子就够了（别画整根）：应用会把它沿着绳子一段段接起来，所以同一张图能拉出任意长度。不画就用默认的麻绳样子。</string>
+    <string name="prop_rope_removed">绳子图案去掉了，用默认样子</string>
+
     <string name="prop_trail_draw">画拖尾</string>
     <string name="prop_trail_edit">改拖尾</string>
     <string name="prop_trail_title">拖尾</string>

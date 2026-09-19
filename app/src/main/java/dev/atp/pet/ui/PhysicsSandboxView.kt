@@ -325,25 +325,33 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private class Nail(val prop: Prop, val bone: String?, val offset: Float, val at: Vec2)
 
     /**
-     * A 绳段: a drawn stretch of rope.
+     * 一根有物理的绳子：a chain of points between two anchors.
      *
-     * It is the one thing on this bench that is solid on purpose. Everything else here is
-     * either the body or something the body can throw; a rope you drew is a shape you put in
-     * the world, and standing on it, hanging off it and tripping over it are all the same
-     * feature.
+     * The owner's words for what this has to be: 画一段绳子的样子，点两个地方生成两个锚点，
+     * 自己渲染完整的绳子，然后它要有物理效果. So it is not a distance constraint and it is not
+     * a rigid bar -- it is a rope, simulated: gravity pulls every point down, the links between
+     * them keep them apart, and the two ends are pinned to whatever they were tied to. Everything
+     * visible about a rope -- it sags, it swings, it goes taut and then it pulls -- is those
+     * three rules and nothing else.
      *
-     * [prop] is shared by every piece of one chain: 复制 is how a chain grows, and a chain is
-     * one prop -- so a rule that clears the prop clears the rope it was drawn as.
+     * Verlet rather than forces: the position IS the state, so a link that is too long is fixed
+     * by moving its two ends towards each other, which is exactly what a rope does and needs no
+     * stiffness to tune. [prev] is where each point was last frame, and that difference is the
+     * velocity -- which is how the thing swings without ever storing a speed.
      */
-    private class Segment(val prop: Prop, val a: Vec2, val b: Vec2, val r: Float)
-
-    /** The box a finger is dragging out for a 绳段: the corner it started at, and the finger. */
-    private class Box(val from: Vec2, var to: Vec2)
-
-    /** What a dragged box says: two ends and a thickness. Not a [Segment] yet: a box that is
-     *  still being dragged has no prop behind it, and a preview should not pretend it has. */
-    private class Drawn(val a: Vec2, val b: Vec2, val r: Float)
-
+    private class RopeLine(
+        val prop: Prop,
+        val a: RopeEnd,
+        val b: RopeEnd,
+        /** How long the rope is: the distance between the anchors when it was tied. */
+        val rest: Float,
+        /** How far apart the points sit at rest. Also the length of one tile of the drawing. */
+        val step: Float,
+        val pts: MutableList<Vec2>,
+        val prev: MutableList<Vec2>,
+        /** How stretched the rope was last step, for the pull on a pinned end. */
+        var taut: Float = 0f,
+    )
     /**
      * A 连绳 half placed: the prop, the end the first tap chose, and where the finger is.
      *
@@ -389,10 +397,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** Spawned 连绳 waiting for its two taps. */
     private val waitingRopes = mutableListOf<Prop>()
 
-    /** Spawned 绳段 waiting to be drawn. */
-    private val waitingSegments = mutableListOf<Prop>()
-    private val segments = mutableListOf<Segment>()
-    private var segmentBox: Box? = null
+    /** The ropes being simulated, each owned by the 绳子 prop that was placed for it. */
+    private val lines = mutableListOf<RopeLine>()
+
+    /** The look of a rope, by prop id. See [loadRopeArt]. */
+    private var ropeArt: Map<String, Bitmap> = emptyMap()
     private var ropeDraft: RopeDraft? = null
 
     /** When each peg last reported a contact, so a body resting on one is one event, not sixty. */
@@ -494,6 +503,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val worldPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val ropePath = android.graphics.Path()
     private val trailMatrix = android.graphics.Matrix()
+    private val ropeMatrix = android.graphics.Matrix()
     private val panelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val barPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -609,6 +619,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         loadParticleShapes(folder, logic.particles)
         propsFolder = propsDir
         loadTrails()
+        loadRopeArt()
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -708,9 +719,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         nails.clear()
         waitingPins.clear()
         waitingRopes.clear()
-        waitingSegments.clear()
-        segments.clear()
-        segmentBox = null
+        lines.clear()
         ropeDraft = null
         pegHitAt.clear()
         hiddenNodes.clear()
@@ -857,6 +866,31 @@ class PhysicsSandboxView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * The ropes the user drew, by prop id.
+     *
+     * Same shape as the trail patterns and for the same reasons: a brush mark is only
+     * reproducible by its own pixels, and it lives in the folder of the thing it belongs to.
+     */
+    private fun loadRopeArt() {
+        val out = HashMap<String, Bitmap>()
+        for (folder in propsFolder?.listFiles().orEmpty()) {
+            if (!folder.isDirectory) continue
+            val file = File(folder, PropSpecs.ROPE_FILE)
+            if (!file.isFile) continue
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+            out[folder.name] = bmp
+        }
+        for (old in ropeArt.values) old.recycle()
+        ropeArt = out
+    }
+
+    /** Re-read the rope drawings. What the board calls after 画绳子. */
+    fun refreshRopes() {
+        loadRopeArt()
+        invalidate()
+    }
+
     /** Re-read the shapes, dropping what is no longer on disk. What the board calls on save. */
     fun refreshParticleShapes(folder: CharacterFolder) {
         for (old in particles.shapes.values) old.recycle()
@@ -952,7 +986,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         if (waitingPins.isNotEmpty()) parts.add("点一下钉住")
         if (ropeDraft != null) parts.add("再点一个点")
         if (waitingRopes.isNotEmpty()) parts.add("点两个点连绳")
-        if (waitingSegments.isNotEmpty()) parts.add("拖出一个长方形画绳段")
         return parts.joinToString(" · ")
     }
 
@@ -979,9 +1012,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         nails.clear()
         waitingPins.clear()
         waitingRopes.clear()
-        waitingSegments.clear()
-        segments.clear()
-        segmentBox = null
+        lines.clear()
         ropeDraft = null
         pegHitAt.clear()
         hiddenNodes.clear()
@@ -1283,7 +1314,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             when (s.kindOf()) {
                 PropKind.PIN -> waitingPins.add(prop)
                 PropKind.ROPE -> waitingRopes.add(prop)
-                else -> waitingSegments.add(prop)
+                else -> waitingRopes.add(prop)
             }
         }
         return prop
@@ -1623,7 +1654,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         stepDebris(dt, s)
         attachRopes()
         pegPush()
-        segmentPush()
+        stepRopes(dt)
         wearProps()
         stepTrails(dt)
     }
@@ -2104,7 +2135,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         nails.removeAll { nail -> w.live.none { live -> live === nail.prop } }
         waitingPins.removeAll { p -> w.live.none { live -> live === p } }
         waitingRopes.removeAll { p -> w.live.none { live -> live === p } }
-        waitingSegments.removeAll { p -> w.live.none { live -> live === p } }
         // A chain is one prop: when it goes, every piece of it goes.
         segments.removeAll { seg -> w.live.none { live -> live === seg.prop } }
         if (ropeDraft != null && w.live.none { live -> live === ropeDraft?.prop }) ropeDraft = null
@@ -2154,14 +2184,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // Last of the tools: a tap on the end of a drawn rope adds a piece to it. This is the
         // 复制, and it needs no marker of its own -- the rope that is already there is the
         // thing being copied, so a chain can be grown without going back to the prop list.
-        segmentEndAt(p)?.let { (seg, atFar) ->
-            extendSegment(seg, atFar)
-            return true
-        }
-        if (waitingSegments.isNotEmpty()) {
-            onInfo?.invoke("从空白处拖出一个长方形 · 长边是长度，短边是粗细")
-            return true
-        }
         return false
     }
 
@@ -2219,98 +2241,39 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
         val a = draft.first.point(sk, rag)
         val b = second.point(sk, rag)
-        val length = hypot(b.x - a.x, b.y - a.y)
-        ropes.add(Rope(draft.prop, draft.first, second, length))
+        val span = hypot(b.x - a.x, b.y - a.y)
+        // A rope tied between two points is a bit LONGER than the gap between them, and that is
+        // the whole reason it hangs: a rope exactly as long as the distance is a straight line
+        // with no way to sag, and it would only ever pull. 18% is "obviously a rope" without
+        // being a puddle on the floor.
+        val rest = span * 1.18f + 20f
+        val n = ((rest / ROPE_STEP).toInt() + 2).coerceIn(3, ROPE_MAX_POINTS)
+        val step = rest / (n - 1)
+        val pts = MutableList(n) { i ->
+            val t = i.toFloat() / (n - 1)
+            Vec2(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)
+        }
+        lines.add(RopeLine(draft.prop, draft.first, second, rest, step, pts, pts.toMutableList()))
         draft.prop.position = Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f)
         ropeDraft = null
-        onInfo?.invoke("绳子系好了 · " + length.toInt() + "px · 点绳子取下")
-    }
-
-    /**
-     * The rope a dragged box describes, or null when the box is too small to mean one.
-     *
-     * The rectangle is the rope: its LONG side is the length and its SHORT side is the
-     * thickness. That is what makes the gesture self-explaining -- draw a fat short box and
-     * you get a stub, draw a long thin one and you get a stretch of rope -- and it is why the
-     * ends are the middle of the short sides rather than the corners of the box.
-     */
-    private fun ropeFrom(box: Box): Drawn? {
-        val w = abs(box.to.x - box.from.x)
-        val h = abs(box.to.y - box.from.y)
-        // Only the LONG side has to be big enough to mean a rope. A finger dragging
-        // sideways does not also draw a height -- it draws a line a few pixels thick --
-        // and a rule that threw those away would throw away every rope anybody drew.
-        if (max(w, h) < SEGMENT_MIN) return null
-        val r = (min(w, h) / 2f).coerceIn(SEGMENT_MIN_R, SEGMENT_MAX_R)
-        val midX = (box.from.x + box.to.x) / 2f
-        val midY = (box.from.y + box.to.y) / 2f
-        return if (w >= h) {
-            Drawn(Vec2(min(box.from.x, box.to.x), midY), Vec2(max(box.from.x, box.to.x), midY), r)
-        } else {
-            Drawn(Vec2(midX, min(box.from.y, box.to.y)), Vec2(midX, max(box.from.y, box.to.y)), r)
-        }
-    }
-
-    /** The box was let go: keep it if it is a rope, forget it if it was just a tap. */
-    private fun commitSegment(box: Box) {
-        val drawn = ropeFrom(box)
-        if (drawn == null) {
-            onInfo?.invoke("从空白处拖出一个长方形 · 长边是长度，短边是粗细")
-            return
-        }
-        // The waiting marker has done its job. A chain that is already drawn does not need
-        // one: 复制 keeps extending the prop that is already there.
-        val prop = waitingSegments.firstOrNull() ?: return
-        waitingSegments.removeAt(0)
-        segments.add(Segment(prop, drawn.a, drawn.b, drawn.r))
-        prop.position = Vec2((drawn.a.x + drawn.b.x) / 2f, (drawn.a.y + drawn.b.y) / 2f)
-        onInfo?.invoke("画好一截 · 点端头再接一截")
-    }
-
-    /**
-     * 复制: another piece exactly like this one, joined on at the end that was tapped.
-     *
-     * Same length, same angle, starting where the last one stopped -- which is what makes a
-     * row of taps a long rope, and what makes a rope LADDER when the boxes are drawn by hand
-     * at an angle. The tap chooses the end, so the same gesture can grow a rope either way.
-     */
-    private fun extendSegment(seg: Segment, fromB: Boolean) {
-        val dx = seg.b.x - seg.a.x
-        val dy = seg.b.y - seg.a.y
-        if (hypot(dx, dy) < 1e-3f) return
-        val (from, to) = if (fromB) {
-            seg.b to Vec2(seg.b.x + dx, seg.b.y + dy)
-        } else {
-            seg.a to Vec2(seg.a.x - dx, seg.a.y - dy)
-        }
-        segments.add(Segment(seg.prop, from, to, seg.r))
-        seg.prop.position = Vec2((from.x + to.x) / 2f, (from.y + to.y) / 2f)
-        val n = segments.count { it.prop === seg.prop }
-        onInfo?.invoke("接了一截 · 这条绳子现在 " + n + " 截 · 点另一头可以往另一边接")
-    }
-
-    /** The 绳段 end under a finger, if there is one. */
-    private fun segmentEndAt(p: Vec2): Pair<Segment, Boolean>? {
-        var best: Pair<Segment, Boolean>? = null
-        var bestD = Float.MAX_VALUE
-        for (seg in segments) {
-            val da = hypot(p.x - seg.a.x, p.y - seg.a.y)
-            val db = hypot(p.x - seg.b.x, p.y - seg.b.y)
-            val reach = seg.r + SEGMENT_END_REACH
-            if (da <= reach && da < bestD) {
-                bestD = da
-                best = seg to false
-            }
-            if (db <= reach && db < bestD) {
-                bestD = db
-                best = seg to true
-            }
-        }
-        return best
+        onInfo?.invoke("绳子系好了 · " + rest.toInt() + "px · 点绳子取下")
     }
 
     /** The 连绳 under a finger, if there is one. 锚点 ropes are not taken off this way. */
     private fun ropeAt(p: Vec2, sk: Skeleton, rag: Ragdoll): Rope? {
+        // The simulated ones first: a 绳子 is a chain of points and its shape is whatever the
+        // simulation made it, so "the rope under the finger" is a distance to the nearest point
+        // of it rather than to a line between two ends.
+        for (line in lines.toList()) {
+            var near = Float.MAX_VALUE
+            for (q in line.pts) near = min(near, hypot(p.x - q.x, p.y - q.y))
+            if (near > 30f) continue
+            lines.remove(line)
+            world?.remove(line.prop)
+            onInfo?.invoke("绳子取下了")
+            invalidate()
+            return null
+        }
         var best: Rope? = null
         var bestD = 30f
         for (rope in ropes) {
@@ -2417,6 +2380,64 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /**
+     * The ropes, drawn by laying the user's drawing along the chain.
+     *
+     * One tile per link, turned to the direction of that link and stretched to its length: that
+     * is the whole of "自己渲染完整的绳子", and it is why the drawing is asked to be a SHORT piece
+     * rather than a whole rope -- a rope that has to be drawn in one piece is a rope that only
+     * fits one length.
+     *
+     * Without a drawing, a rope is still drawn as a rope: a thick line with the twists showing.
+     * A feature that only works after somebody has painted something is a feature that looks
+     * broken the first time it is used.
+     */
+    private fun drawRopes2(canvas: Canvas) {
+        if (lines.isEmpty()) return
+        for (line in lines) {
+            val art = ropeArt[line.prop.spec.id]
+            val w = (line.prop.spec.radius * 0.5f).coerceAtLeast(6f)
+            val n = line.pts.size
+            for (i in 0 until n - 1) {
+                val p1 = line.pts[i]
+                val p2 = line.pts[i + 1]
+                val dx = p2.x - p1.x
+                val dy = p2.y - p1.y
+                val d = hypot(dx, dy)
+                if (d < 1e-3f) continue
+                val midX = (p1.x + p2.x) / 2f
+                val midY = (p1.y + p2.y) / 2f
+                if (art != null) {
+                    ropeMatrix.reset()
+                    ropeMatrix.postTranslate(-PaintBoardView.SIZE / 2f, -PaintBoardView.SIZE / 2f)
+                    ropeMatrix.postScale(d / PaintBoardView.SIZE, w / PaintBoardView.SIZE)
+                    ropeMatrix.postRotate(Math.toDegrees(atan2(dy, dx).toDouble()).toFloat())
+                    ropeMatrix.postTranslate(midX, midY)
+                    canvas.drawBitmap(art, ropeMatrix, worldPaint)
+                    continue
+                }
+                worldPaint.style = Paint.Style.STROKE
+                worldPaint.strokeCap = Paint.Cap.ROUND
+                worldPaint.strokeWidth = w
+                worldPaint.color = 0xCC6B5B45.toInt()
+                canvas.drawLine(p1.x, p1.y, p2.x, p2.y, worldPaint)
+                // The twists: one short stroke across each link, which is what makes a thick
+                // line read as rope rather than as a pipe.
+                val nx = -dy / d
+                val ny = dx / d
+                worldPaint.strokeWidth = 2f
+                worldPaint.color = 0x997E6A50.toInt()
+                canvas.drawLine(
+                    midX - nx * w * 0.35f, midY - ny * w * 0.35f,
+                    midX + nx * w * 0.35f, midY + ny * w * 0.35f,
+                    worldPaint,
+                )
+                worldPaint.style = Paint.Style.FILL
+            }
+        }
+        worldPaint.alpha = 255
+    }
+
+    /**
      * The marks, under everything else on the table.
      *
      * Drawn first so that the pet walks OVER its own trail: a mark on the table is a fact about
@@ -2437,6 +2458,99 @@ class PhysicsSandboxView @JvmOverloads constructor(
         worldPaint.alpha = 255
     }
 
+    /**
+     * The ropes, stepped.
+     *
+     * Verlet, in four passes that have to happen in this order: gravity moves every point, the
+     * links pull their neighbours back to the right distance, the floor and the walls stop what
+     * has arrived, and the two ends are put back on their anchors. Pinning LAST is the point --
+     * the anchors are a fact about the world (a bone moved, a stake is where it is), and a rope
+     * cannot argue with it, only hang from it.
+     *
+     * The pull is measured against the rope's own LENGTH rather than against the links: a chain
+     * with slack in it is not pulling anything, however stretched any one link looks, and a rope
+     * that pulled while it was lying in a heap would be a rope possessed.
+     */
+    private fun stepRopes(dt: Float) {
+        if (lines.isEmpty() || dt <= 1e-5f) return
+        val sk = skeleton ?: return
+        val rag = ragdoll ?: return
+        val s = spec ?: return
+        val g = s.gravity * settings.gravityScale
+        val maxX = s.worldWidth
+        for (line in lines) {
+            val n = line.pts.size
+            if (n < 2) continue
+            val pa = line.a.point(sk, rag)
+            val pb = line.b.point(sk, rag)
+            for (i in 0 until n) {
+                val p = line.pts[i]
+                val moved = (p - line.prev[i]) * ROPE_DAMP
+                line.prev[i] = p
+                line.pts[i] = Vec2(p.x + moved.x, p.y + moved.y + g * dt * dt)
+            }
+            for (pass in 0 until ROPE_PASSES) {
+                for (i in 0 until n - 1) {
+                    val p1 = line.pts[i]
+                    val p2 = line.pts[i + 1]
+                    val dx = p2.x - p1.x
+                    val dy = p2.y - p1.y
+                    val d = hypot(dx, dy)
+                    if (d < 1e-4f) continue
+                    // The ends are pinned, so a link that touches one gives the whole correction
+                    // to the point that is free -- otherwise half of every fix is thrown away
+                    // and the rope stretches under its own weight.
+                    val share0 = if (i == 0) 0f else 0.5f
+                    val share1 = if (i + 1 == n - 1) 0f else 0.5f
+                    val total = share0 + share1
+                    if (total <= 0f) continue
+                    val fix = (d - line.step) / d
+                    line.pts[i] = Vec2(
+                        p1.x + dx * fix * (share0 / total), p1.y + dy * fix * (share0 / total),
+                    )
+                    line.pts[i + 1] = Vec2(
+                        p2.x - dx * fix * (share1 / total), p2.y - dy * fix * (share1 / total),
+                    )
+                }
+                line.pts[0] = pa
+                line.pts[n - 1] = pb
+            }
+            for (i in 0 until n) {
+                val p = line.pts[i]
+                var y = p.y
+                if (y > s.floorY) y = s.floorY
+                val x = p.x.coerceIn(0f, maxX)
+                if (x != p.x || y != p.y) line.pts[i] = Vec2(x, y)
+            }
+            line.pts[0] = pa
+            line.pts[n - 1] = pb
+
+            // How much further apart the anchors are than the rope is long.
+            val span = hypot(pb.x - pa.x, pb.y - pa.y)
+            val stretch = max(0f, span - line.rest)
+            line.taut = stretch
+            if (stretch > 0.5f) {
+                val pull = min(stretch * ROPE_PULL * dt, ROPE_PULL_MAX)
+                pullEnd(rag, line.a, line.pts[0], line.pts[1], pull)
+                pullEnd(rag, line.b, line.pts[n - 1], line.pts[n - 2], pull)
+            }
+            line.prop.position = line.pts[n / 2]
+        }
+    }
+
+    /** One end of a taut rope, hauling on whatever it is tied to. */
+    private fun pullEnd(rag: Ragdoll, end: RopeEnd, at: Vec2, next: Vec2, pull: Float) {
+        val name = end.bone ?: return
+        val bone = skeleton?.find(name) ?: return
+        val dx = next.x - at.x
+        val dy = next.y - at.y
+        val d = hypot(dx, dy)
+        if (d < 1e-4f) return
+        // Towards the rope's own body: the first link points at where the rest of the rope is,
+        // and that is the direction a rope hauls in.
+        rag.impulse(bone, Vec2(dx / d, dy / d), pull)
+    }
+
     /** The nodes as the world sees them: a place, a size, and the bone behind them. */
     private fun nodePoints(sk: Skeleton): List<NodePoint> {
         if (sk.nodes.isEmpty()) return emptyList()
@@ -2452,60 +2566,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Is the bench in the middle of being told where something goes? */
     private fun toolArmed(): Boolean =
-        waitingPins.isNotEmpty() || waitingRopes.isNotEmpty() || waitingSegments.isNotEmpty() ||
-            ropeDraft != null
-
-    /**
-     * The drawn ropes, as something the body cannot walk through.
-     *
-     * A segment is a static capsule, so unlike a prop there is nothing to resolve: the whole
-     * overlap comes out of the body. It is the same per-frame impulse the loose pieces use,
-     * and the same cap, because this is the same kind of contact -- shape against shape --
-     * and two different feels for it would be a bug neither of them could explain.
-     *
-     * Bones are tested end by end rather than as capsules against the rope. That is the same
-     * approximation [bodyPushOut] makes in the other direction, and it is the right one to
-     * repeat: a limb is a handful of short capsules, and its ends are what sticks out.
-     */
-    private fun segmentPush() {
-        val sk = skeleton ?: return
-        val rag = ragdoll ?: return
-        if (segments.isEmpty()) return
-        for (seg in segments) {
-            for (b in sk.bones) {
-                if (!rag.isSolid(b.name)) continue
-                val r = seg.r + rag.colliderRadius(b)
-                var touching = false
-                for (end in listOf(b.worldPosition, b.tipPosition())) {
-                    val c = closestOnSegment(end, seg.a, seg.b)
-                    val dx = end.x - c.x
-                    val dy = end.y - c.y
-                    val dist = hypot(dx, dy)
-                    if (dist >= r || dist < 1e-4f) continue
-                    touching = true
-                    val slide = r - dist
-                    rag.impulse(b, Vec2(dx / dist, dy / dist), min(slide * PIECE_PUSH, PIECE_PUSH_MAX))
-                }
-                if (!touching) continue
-                val key = seg.prop.serial.toString() + "|" + b.name
-                val last = pegHitAt[key]
-                if (last == null || clock - last >= 0.25f) {
-                    pegHitAt[key] = clock
-                    fire(GameEvent(EventType.PROP_HIT, part = b.name, value = 220f, prop = seg.prop.spec.id))
-                }
-            }
-        }
-    }
-
-    /** The point of the segment a-b nearest to [p]. Shared by the push and the aim. */
-    private fun closestOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
-        val abx = b.x - a.x
-        val aby = b.y - a.y
-        val lenSq = abx * abx + aby * aby
-        if (lenSq < 1e-6f) return a
-        val t = (((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
-        return Vec2(a.x + abx * t, a.y + aby * t)
-    }
+        waitingPins.isNotEmpty() || waitingRopes.isNotEmpty() || ropeDraft != null
 
     private fun lowestBone(): Bone? {
         val sk = skeleton ?: return null
@@ -2593,12 +2654,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         if (settings.liquid) drawFluid(canvas)
         drawTrails(canvas)
+        drawRopes2(canvas)
         drawCharacter(canvas, sk)
         drawNodes(canvas, sk)
         drawDebris(canvas)
         drawProps(canvas)
         drawRopes(canvas, sk)
-        drawSegments(canvas)
         drawNails(canvas)
         drawWaiting(canvas)
         if (settings.showBalance) drawBalance(canvas, sk)
@@ -2733,66 +2794,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /**
-     * The drawn ropes, and the box being dragged out for the next one.
-     *
-     * Drawn as a thick line with the twists showing, because a rope segment that looks like a
-     * plank is a plank: the thing the finger is deciding here has a WIDTH, and which side of
-     * the rectangle became the width and which became the length is the whole content of the
-     * gesture. The two ends get a dot each -- they are what 复制 is aimed at.
-     */
-    private fun drawSegments(canvas: Canvas) {
-        if (segments.isEmpty() && segmentBox == null) return
-        worldPaint.style = Paint.Style.STROKE
-        worldPaint.strokeCap = Paint.Cap.ROUND
-        for (seg in segments) {
-            worldPaint.strokeWidth = seg.r * 2f
-            worldPaint.color = 0xCC6B5B45.toInt()
-            canvas.drawLine(seg.a.x, seg.a.y, seg.b.x, seg.b.y, worldPaint)
-            val dx = seg.b.x - seg.a.x
-            val dy = seg.b.y - seg.a.y
-            val len = hypot(dx, dy)
-            if (len > 1e-3f) {
-                // The twists: short strokes across the rope, the way a real rope is drawn.
-                val nx = -dy / len
-                val ny = dx / len
-                val step = (seg.r * 1.5f).coerceAtLeast(8f)
-                val count = (len / step).toInt().coerceIn(1, 60)
-                worldPaint.strokeWidth = 2.5f
-                worldPaint.color = 0x997E6A50.toInt()
-                for (i in 1..count) {
-                    val t = i * step
-                    if (t >= len) break
-                    val x = seg.a.x + dx / len * t
-                    val y = seg.a.y + dy / len * t
-                    canvas.drawLine(
-                        x - nx * seg.r * 0.7f, y - ny * seg.r * 0.7f,
-                        x + nx * seg.r * 0.7f, y + ny * seg.r * 0.7f,
-                        worldPaint,
-                    )
-                }
-            }
-            worldPaint.strokeWidth = 5f
-            worldPaint.color = 0xCC8A5A2B.toInt()
-            for (end in listOf(seg.a, seg.b)) canvas.drawCircle(end.x, end.y, 7f, worldPaint)
-        }
-        // What the finger is drawing right now: the box, and the rope it is about to become.
-        segmentBox?.let { box ->
-            val a = box.from
-            val b = box.to
-            worldPaint.strokeWidth = 3f
-            worldPaint.color = 0x998A5A2B.toInt()
-            canvas.drawRect(min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y), worldPaint)
-            ropeFrom(box)?.let { d ->
-                worldPaint.strokeWidth = d.r * 2f
-                worldPaint.color = 0x88CC6B5B.toInt()
-                canvas.drawLine(d.a.x, d.a.y, d.b.x, d.b.y, worldPaint)
-            }
-        }
-        worldPaint.style = Paint.Style.FILL
-        worldPaint.strokeWidth = 0f
-    }
-
-    /**
      * The 钉子 and 连绳 that have been spawned but not yet pointed at anything.
      *
      * They sit where they landed with a pulsing ring, because a prop that is waiting for a
@@ -2800,11 +2801,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * the same thing in words; this says it where the finger is looking.
      */
     private fun drawWaiting(canvas: Canvas) {
-        if (waitingPins.isEmpty() && waitingRopes.isEmpty() && waitingSegments.isEmpty()) return
+        if (waitingPins.isEmpty() && waitingRopes.isEmpty()) return
         worldPaint.style = Paint.Style.STROKE
         worldPaint.strokeWidth = 3f
         val pulse = 1f + 0.25f * kotlin.math.sin(clock * 4f)
-        for (p in waitingPins + waitingRopes + waitingSegments) {
+        for (p in waitingPins + waitingRopes) {
             worldPaint.color = 0x996E6A62.toInt()
             canvas.drawCircle(p.position.x, p.position.y, p.spec.radius * 0.7f * pulse, worldPaint)
             canvas.drawCircle(p.position.x, p.position.y, p.spec.radius * 1.1f, worldPaint)
@@ -3929,13 +3930,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     // Nothing under the finger. With a 绳段 waiting, the drag is drawing that
                     // rope rather than moving the window -- the tool is the reason the finger
                     // came down, and the camera can still be moved with two fingers.
-                    if (waitingSegments.isNotEmpty()) {
-                        segmentBox = Box(toWorld(event.x, event.y), toWorld(event.x, event.y))
-                    } else {
-                        panning = true
-                        lastPanX = event.x
-                        lastPanY = event.y
-                    }
+                    panning = true
+                    lastPanX = event.x
+                    lastPanY = event.y
                 }
                 lastFrameNs = System.nanoTime()
                 postInvalidateOnAnimation()
@@ -3979,7 +3976,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // The rope that is being aimed: the half-tied line follows the finger, so the
                 // length being chosen is visible while there is still time to change it.
                 ropeDraft?.let { it.follow = toWorld(event.getX(0), event.getY(0)) }
-                segmentBox?.let { it.to = toWorld(event.getX(0), event.getY(0)) }
                 for (i in 0 until event.pointerCount) {
                     val id = event.getPointerId(i)
                     // The panel's finger, handled inside the loop rather than by leaving it
@@ -4086,14 +4082,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 debrisPointer = -1
                 twistPointer = -1
                 fingerOnDebris = null
-
-                // A dragged box becomes a rope here, before anything is asked whether it was
-                // a tap: what the finger was drawing is decided by where it went, not by how
-                // long it was down.
-                segmentBox?.let { box ->
-                    commitSegment(box)
-                    segmentBox = null
-                }
 
                 val tapped = tapBone
                 val wasHolding = heldBones.isNotEmpty()
@@ -4298,12 +4286,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
          * height makes it flinch. Both numbers are a feel, not a measurement -- there is no
          * test that can say what a severed arm landing on a pet should do.
          */
-        /** The smallest box that means a rope rather than a finger that twitched. */
-        private const val SEGMENT_MIN = 26f
-        private const val SEGMENT_MIN_R = 5f
-        private const val SEGMENT_MAX_R = 48f
-        /** How near an end a tap has to be to mean 复制. */
-        private const val SEGMENT_END_REACH = 26f
+        /** How far apart a rope's points sit, and therefore how big one tile of it is. */
+        private const val ROPE_STEP = 22f
+        /** Rounds of "these two points are too far apart" per frame. Six is a stiff rope. */
+        private const val ROPE_PASSES = 6
+        /** How much of last frame's movement a point keeps: a rope in air, not in honey. */
+        private const val ROPE_DAMP = 0.98f
+        /** px/s of pull per pixel of stretch, and the cap on it. */
+        private const val ROPE_PULL = 26f
+        private const val ROPE_PULL_MAX = 900f
+        /** The most points one rope may have, so a very long rope cannot eat the frame. */
+        private const val ROPE_MAX_POINTS = 90
         /** A finger is fatter than a node: how much wider than one the grab is. */
         private const val NODE_GRAB_SLACK = 10f
         /** The shortest gap between two 变身. See the morph action. */

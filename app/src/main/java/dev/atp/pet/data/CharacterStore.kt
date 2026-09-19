@@ -322,6 +322,10 @@ class CharacterStore(private val context: Context) {
     fun propTrail(id: String): File =
         File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.TRAIL_FILE)
 
+    /** The drawing of one piece of a rope prop. See PropSpecs.ROPE_FILE. */
+    fun propRope(id: String): File =
+        File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.ROPE_FILE)
+
     fun saveRig(
         id: String,
         bones: List<BoneSpec>,

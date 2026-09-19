@@ -22,11 +22,16 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
     SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地"),
     ANCHOR("anchor", "锚点", "放在桌上不动，角色的部位碰到就被拴住；把锚点拿起来就松开"),
     PIN("pin", "钉子", "点一下钉住：点空白处钉在桌上，点部位就把部位钉在那儿；再点一下拔掉"),
-    ROPE("rope", "连绳", "点两个点连起来：可以把部位拴在桌上，也能把两个部位系在一起；点绳子取下"),
-    SEGMENT("segment", "绳段", "拖出一个长方形画一截绳子，点端头再接一截；绳子是实体，能站能撞");
+    ROPE("rope", "绳子", "先画一段绳子的样子，再点两个点：点空白处=锚在桌上，点部位=系在那根骨头上。绳子会垂、会摆，拉直了拽得动身体；点绳子取下");
 
     companion object {
-        fun of(id: String): PropKind = values().firstOrNull { it.id == id } ?: THROW
+        fun of(id: String): PropKind = when (id) {
+            // The old 绳段 was a rigid bar dragged out as a rectangle. It is gone, and a prop
+            // saved as one is a rope now rather than a hammer: the file said "rope", and 1.11.7
+            // changed what a rope is, not what the prop was for.
+            "segment" -> ROPE
+            else -> values().firstOrNull { it.id == id } ?: THROW
+        }
 
         /**
          * Kinds that are placed by POINTING, not thrown: the world never moves them.
@@ -37,7 +42,7 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
          * circle the rest of the props collide with would be a lie. Both are therefore
          * spawned [Prop.planted] and handled by the bench instead of the prop physics.
          */
-        fun isPointed(kind: PropKind): Boolean = kind == PIN || kind == ROPE || kind == SEGMENT
+        fun isPointed(kind: PropKind): Boolean = kind == PIN || kind == ROPE
     }
 }
 
@@ -85,6 +90,14 @@ object PropSpecs {
      * hammer dragged across the table leaves the same mark whoever is holding it.
      */
     const val TRAIL_FILE = "trail.png"
+
+    /**
+     * The drawing of one SHORT piece of rope, inside that rope prop's own folder.
+     *
+     * A piece rather than a whole rope: the app lays it along the simulated chain, one tile per
+     * link, so the same drawing makes a short rope and a long one. See PhysicsSandboxView.
+     */
+    const val ROPE_FILE = "rope.png"
 
     fun parse(text: String): List<PropSpec> {
         val arr = JSONArray(text)
