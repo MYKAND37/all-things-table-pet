@@ -2135,8 +2135,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         nails.removeAll { nail -> w.live.none { live -> live === nail.prop } }
         waitingPins.removeAll { p -> w.live.none { live -> live === p } }
         waitingRopes.removeAll { p -> w.live.none { live -> live === p } }
-        // A chain is one prop: when it goes, every piece of it goes.
-        segments.removeAll { seg -> w.live.none { live -> live === seg.prop } }
+        // A rope is one prop: when the prop goes, the rope it was tied as goes with it.
+        lines.removeAll { line -> w.live.none { live -> live === line.prop } }
         if (ropeDraft != null && w.live.none { live -> live === ropeDraft?.prop }) ropeDraft = null
     }
 
