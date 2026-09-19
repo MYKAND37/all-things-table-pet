@@ -131,6 +131,7 @@ def main():
     ids = layout_ids()
     files = kotlin_text()
     joined = "\n".join(files.values())
+    activity = "".join(t for p, t in files.items() if p.endswith("MainActivity.kt"))
 
     print("== controls the layout defines and no Kotlin names ==")
     dead_controls = 0
@@ -195,6 +196,37 @@ def main():
         report("%s 主体有人给它送事件" % kind, by_name or by_loop,
                "" if (by_name or by_loop) else
                "没有任何 fireTo(Subjects.%s(...))：写在它上面的规则永远不跑" % maker)
+
+    print("== 每个功能都有一个人能找到的入口 ==")
+    # 「以后写功能一定要写对应入口」——这句话得是一条断言，不然它只是我下次又会忘的
+    # 一句话。每一条给一个**功能名**和它入口上必须出现的那句文案；检查两件事：这句话
+    # 在 MainActivity 里真的被用到，而且它附近挂上了点击（setOnClickListener / onClick /
+    # setPositiveButton）。一条做出来却点不到的入口，从外面看和没做出来一模一样。
+    ENTRIES = [
+        ("骨骼节点", "rig_node_list"),
+        ("节点的加按钮", "rig_node_add"),
+        ("拖尾", "prop_trail_draw"),
+        ("粒子图案", "particle_draw"),
+        ("并行组", "logic_group"),
+        ("沙盒放道具", "sandbox_props"),
+        ("加骨骼", "rig_add_bone"),
+        ("骨骼列表", "rig_bone_list"),
+        ("画板的撤销", "paint_undo"),
+    ]
+    missing = []
+    for name, key in ENTRIES:
+        at = activity.find("R.string." + key)
+        if at < 0:
+            missing.append(name + "（文案根本没被用到：" + key + "）")
+            continue
+        window = activity[at:at + 900]
+        # 四种挂法：setOnClickListener（普通按钮）、row(...) { }（规则卡片里那种一行一个
+        # 入口的写法，闭包直接传进去）、对话框的确定/取消键。
+        if not re.search(
+            r"setOnClickListener|onClick|setPositiveButton|setNegativeButton|\)\s*\{", window
+        ):
+            missing.append(name + "（用了 " + key + " 但附近没有挂点击）")
+    report("每个功能都有一个挂上点击的入口", not missing, "; ".join(missing))
 
     print("== 变身的两个机制：延到下一帧做，而且有速度上限 ==")
     # 「A 出现时变成 B、B 出现时变成 A」是两行就能写出来的东西。没有限速它就是每帧重新

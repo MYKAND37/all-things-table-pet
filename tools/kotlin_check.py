@@ -372,6 +372,38 @@ def check_one_home_for_a_file_name():
     report("every file name the app writes has one home", not bad, "; ".join(bad))
 
 
+def check_dialog_bodies_scroll():
+    """
+    A dialog body longer than the screen has to scroll, or its last rows do not exist.
+
+    AlertDialog does NOT scroll its own view. Every dialog in this app is a column of rows, and
+    several of them are longer than a phone: the bone list has nineteen bones before it reaches
+    the node section, the prop editor has the trail under five other rows, and pickList shows
+    twenty-odd bones and nodes. Two of those buttons were reported as MISSING by the person
+    using the app -- they were built, laid out, and sitting below the bottom edge of the screen
+    with no way to reach them, which from the outside is a feature that was never written.
+
+    The rule is mechanical, so it is checked mechanically: a dialog body goes through
+    scrolling(...), or it is a one-line input that cannot grow.
+    """
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        if ".setView(" not in text:
+            continue
+        for i, line in enumerate(text.split("\n"), 1):
+            code = line.split("//")[0]
+            m = re.search(r"\.setView\(([^)]*)\)", code)
+            if not m:
+                continue
+            what = m.group(1).strip()
+            if what.startswith("scrolling(") or what in ("input", "board", "view"):
+                continue
+            bad.append("%s:%d  .setView(%s)" % (os.path.basename(path), i, what))
+    report("every dialog body scrolls (or is a single line)", not bad,
+           "\n         ".join(bad))
+
+
 def main():
     if "--self-test" in sys.argv:
         print("the checker's own cases")
@@ -390,6 +422,7 @@ def main():
     check_chip_lists()
     check_view_resources()
     check_one_home_for_a_file_name()
+    check_dialog_bodies_scroll()
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

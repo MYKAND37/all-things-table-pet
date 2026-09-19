@@ -683,7 +683,7 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.action_list_title))
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .setOnDismissListener { actionDialog = null }
             .create()
@@ -950,15 +950,29 @@ class MainActivity : AppCompatActivity() {
         header.addView(label("  " + folder.id, 15f, INK))
         partList.addView(header)
 
+        // 节点 one button from the parts, not four screens deep inside the bone list: this is
+        // where somebody is thinking about parts, and "a name for a place on a bone" is a
+        // thought that belongs next to them. The bone list still has the same section.
+        val nodes = label(
+            getString(R.string.rig_node_list) + " (" + skeletonView.rigNodes().size + ")", 12f, INK,
+        )
+        nodes.setPadding(dp(12), dp(8), dp(12), dp(8))
+        nodes.background = getDrawable(R.drawable.menu_item_idle)
+        nodes.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = dp(8) }
+        nodes.setOnClickListener { askNodeList(folder) }
+
+        val entries = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        entries.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(10) }
+
         val rig = label(getString(R.string.pet_edit_rig), 12f, INK)
         rig.setPadding(dp(12), dp(8), dp(12), dp(8))
         rig.background = getDrawable(R.drawable.menu_item_selected)
-        val rp = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        )
-        rp.topMargin = dp(10)
-        rig.layoutParams = rp
         rig.setOnClickListener {
             skeletonView.load(folder)
             rigBoneMode = false
@@ -967,7 +981,9 @@ class MainActivity : AppCompatActivity() {
             buildRigBonePanel()
             show(Pane.PET_RIG)
         }
-        partList.addView(rig)
+        entries.addView(rig)
+        entries.addView(nodes)
+        partList.addView(entries)
 
         val depth = label(getString(R.string.depth_entry), 12f, INK)
         depth.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -1883,7 +1899,7 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.rig_bone_list))
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .setOnDismissListener { boneDialog = null }
             .create()
@@ -1938,7 +1954,11 @@ class MainActivity : AppCompatActivity() {
      * They belong here rather than behind their own button: "这一节的指尖" is one thought, and a
      * rig where the points are somewhere else is a rig where nobody remembers they exist.
      */
-    private fun fillNodeList(box: LinearLayout, bones: List<BoneSpec>) {
+    private fun fillNodeList(
+        box: LinearLayout,
+        bones: List<BoneSpec>,
+        refresh: () -> Unit = { refreshBoneList() },
+    ) {
         val nodes = skeletonView.rigNodes()
         box.addView(
             label(getString(R.string.rig_node_list) + " (" + nodes.size + ")", 12f, INK, top = 16)
@@ -1990,7 +2010,7 @@ class MainActivity : AppCompatActivity() {
             remove.setPadding(dp(8), dp(6), dp(8), dp(6))
             remove.setOnClickListener {
                 skeletonView.deleteNode(n.name)
-                refreshBoneList()
+                refresh()
             }
             row.addView(remove)
             box.addView(row)
@@ -2001,6 +2021,38 @@ class MainActivity : AppCompatActivity() {
         add.background = getDrawable(R.drawable.menu_item_selected)
         add.setOnClickListener { askNode(null) }
         box.addView(add)
+    }
+
+    /**
+     * 节点: the names for places on the bones, on their own screen.
+     *
+     * The bones are left out on purpose. They are already a list of their own with their own
+     * button, and the question this screen answers is "where can a rule point at a PLACE" --
+     * nineteen bones in front of that answer is what made the button unreachable in the first
+     * place, before the scrolling was fixed.
+     */
+    private fun askNodeList(folder: CharacterFolder) {
+        // The editor's own copy of the rig, because that is what saves the nodes: the part list
+        // can be opened without ever having gone through 看骨架.
+        skeletonView.load(folder)
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.rig_node_list))
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+        fun fill() {
+            box.removeAllViews()
+            fillNodeList(box, skeletonView.rigBones()) {
+                fill()
+                buildPartList(folder)
+            }
+        }
+        fill()
+        dialog.show()
     }
 
     /**
@@ -2107,7 +2159,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.rig_node_new else R.string.rig_node_edit)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val boneSpec = bones.firstOrNull { it.name == bone } ?: return@setPositiveButton
                 val name = nameInput.text.toString().trim()
@@ -2310,7 +2362,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.rig_attributes) + " · " + bone.name)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 fun degrees(text: String, fallback: Float): Float =
                     text.trim().toFloatOrNull()?.coerceIn(-360f, 360f) ?: fallback
@@ -2437,7 +2489,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(title)
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.depth_cancel, null)
             .create()
 
@@ -2570,6 +2622,20 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(picture)
 
+        // 拖尾, on the row rather than only inside the editor: it needs the prop to EXIST (the
+        // pattern is a file beside the prop's own), so it belongs where the prop already does.
+        // Inside the editor it was one "save, close, find the prop, open it again" too far.
+        val trail = label(
+            if (store.propTrail(spec.id).isFile) getString(R.string.prop_trail_edit)
+            else getString(R.string.prop_trail_draw),
+            11f, MUTED,
+        )
+        trail.setPadding(dp(8), dp(6), dp(8), dp(6))
+        trail.setOnClickListener {
+            askPropTrail(spec.id, spec.name) { buildPropList() }
+        }
+        card.addView(trail)
+
         // The way in from this end. 道具管理 is where a prop is made, and "does this one use
         // logic of its own" is a question that comes up here rather than three screens away.
         val logic = label(getString(R.string.menu_logic), 11f, MUTED)
@@ -2675,12 +2741,14 @@ class MainActivity : AppCompatActivity() {
         box.addView(radiusRow)
         box.addView(forceRow)
         box.addView(ropeRow)
+        // Moved up next to the kind for the same reason: at the bottom of a form it was off the
+        // screen, and a New prop has no id yet -- the row in 道具管理 is the one that always works.
         box.addView(trailLabel)
         box.addView(label(getString(R.string.prop_trail_hint), 10f, MUTED, bottom = 4))
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.prop_new else R.string.prop_name)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val name = nameInput.text.toString().trim().ifEmpty { "道具" }
                 val id = existing?.id ?: freePropId(name)
@@ -2715,7 +2783,7 @@ class MainActivity : AppCompatActivity() {
      * reproduced by its own pixels -- and stored beside the prop's own logic.json, because a
      * prop's rules and a prop's trail are both "what this thing does".
      */
-    private fun askPropTrail(id: String, name: String) {
+    private fun askPropTrail(id: String, name: String, after: () -> Unit = {}) {
         val board = PaintBoardView(this)
         board.colour = 0x992B2A33.toInt()
         board.brushWidth = 8f
@@ -2768,6 +2836,7 @@ class MainActivity : AppCompatActivity() {
             val file = store.propTrail(id)
             if (!file.exists() || file.delete()) {
                 sandboxView.refreshTrails()
+                after()
                 Toast.makeText(this, R.string.prop_trail_removed, Toast.LENGTH_SHORT).show()
             }
         })
@@ -2775,7 +2844,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.prop_trail_title) + " · " + name)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 // 空画板 = 没有拖尾，和粒子那边同一个道理：存一张全透明的图等于把这一笔
                 // 变成一个什么都不留下的东西，而那不是"清空画布"的意思。
@@ -2787,6 +2856,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 if (saved) {
                     sandboxView.refreshTrails()
+                    after()
                 } else {
                     Toast.makeText(this, R.string.paint_failed, Toast.LENGTH_SHORT).show()
                 }
@@ -3288,7 +3358,7 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.logic_rule_settings) + " " + (index + 1))
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
 
@@ -3369,7 +3439,7 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.logic_stats)
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
         fun fill() {
@@ -3395,7 +3465,7 @@ class MainActivity : AppCompatActivity() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(R.string.logic_states)
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
         fun fill() {
@@ -3786,7 +3856,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.logic_add_liquid else R.string.logic_liquids)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextLiquidId() }
                 val name = nameInput.text.toString().trim().ifEmpty { id }
@@ -4046,7 +4116,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.particle_add else R.string.menu_particles)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextParticleId() }
                 val name = nameInput.text.toString().trim().ifEmpty { id }
@@ -4320,7 +4390,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.logic_add_state else R.string.logic_states)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextStateId() }
                 val name = nameInput.text.toString().trim().ifEmpty { id }
@@ -4413,7 +4483,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.logic_add_stat else R.string.logic_stats)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val id = RigEdit.sanitise(idInput.text.toString()).ifEmpty { nextStatId() }
                 val name = nameInput.text.toString().trim().ifEmpty { id }
@@ -4547,7 +4617,7 @@ class MainActivity : AppCompatActivity() {
 
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.particle_draw) + " · " + particle.name)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 // A blank board means "no shape", not "an invisible shape". Saving the
                 // transparent canvas would make every one of these particles disappear, and
@@ -4944,7 +5014,7 @@ class MainActivity : AppCompatActivity() {
 
         val builder = AlertDialog.Builder(this)
             .setTitle(R.string.logic_cond_kind)
-            .setView(box)
+            .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val conditions = rule.conditions.toMutableList()
                 val spec = when (kind) {
@@ -5343,7 +5413,7 @@ class MainActivity : AppCompatActivity() {
 
         val dialog = AlertDialog.Builder(this)
             .setTitle(title)
-            .setView(box)
+            .setView(scrolling(box))
             .setNegativeButton(R.string.depth_cancel, null)
             .create()
         if (onDelete != null) {
@@ -5465,6 +5535,24 @@ class MainActivity : AppCompatActivity() {
     /** The nodes of the summoned character, for the places that need them by themselves. */
     private fun nodeNames(folder: CharacterFolder): List<String> =
         CharacterSpec.parseOrNull(folder.specText())?.nodes?.map { it.name }.orEmpty()
+
+    /**
+     * A dialog body that scrolls.
+     *
+     * Every dialog in this app is a column of rows and several of them are longer than a phone:
+     * the bone list has nineteen bones before it reaches the nodes, and the prop editor has the
+     * trail under five other rows. An AlertDialog does NOT scroll its own view, so what happens
+     * without this is not "the dialog is cramped" -- it is a button that CANNOT BE REACHED, and
+     * from the outside that is a feature that was never written. Two of them were reported as
+     * missing for exactly this reason.
+     */
+    private fun scrolling(view: View): View {
+        val scroll = android.widget.ScrollView(this).apply {
+            addView(view)
+            setPadding(0, 0, 0, dp(4))
+        }
+        return scroll
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 
