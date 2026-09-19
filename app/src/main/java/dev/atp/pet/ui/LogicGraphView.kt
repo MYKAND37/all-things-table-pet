@@ -410,5 +410,8 @@ class LogicGraphView @JvmOverloads constructor(
         private const val GAP = 30f
         private const val ROW_GAP = 26f
         private const val MAX_W = 300f
+
+        /** How far left of the first node a 随机组 bracket stands, in dp. */
+        const val BRACKET = 16f
     }
 }

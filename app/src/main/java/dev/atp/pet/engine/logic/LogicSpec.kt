@@ -297,6 +297,19 @@ data class RuleSpec(
      * thing.
      */
     val about: String = "",
+    /**
+     * A 随机组: rules that share a name here take ONE turn between them per event.
+     *
+     * Empty is "on my own", which is every rule that has ever been written. A group is for
+     * saying "either it says A or it says B" -- two rules with a 50% chance each are NOT
+     * that: each rolls its own dice, so a quarter of the time both speak and the pet says
+     * two things at once. A group rolls once, among the rules whose own conditions hold, and
+     * the winner is the group's answer.
+     *
+     * The name is the user's ("话", "受伤的样子"), not a number, because it is read on the
+     * graph and in the file it is the only thing that says which rules belong together.
+     */
+    val group: String = "",
 )
 
 /** What a rule can do, with the parameter the editor has to ask for. */
@@ -524,6 +537,7 @@ class LogicSpec(
                     // A file that says nothing gets "any of them", which is what every rule
                     // meant before this existed.
                     about = r.optString("about", ""),
+                    group = r.optString("group", ""),
                     conditions = (0 until (condArr?.length() ?: 0)).map { j ->
                         val c = condArr!!.getJSONObject(j)
                         ConditionSpec(
@@ -665,6 +679,7 @@ class LogicSpec(
                         // Only when it was chosen: a rule that is about anything does not
                         // grow a key that says "anything".
                         .apply { if (r.about.isNotEmpty()) put("about", r.about) }
+                        .apply { if (r.group.isNotEmpty()) put("group", r.group) }
                 )
             }
             root.put("rules", rules)

@@ -2591,9 +2591,11 @@ class MainActivity : AppCompatActivity() {
             val row = mutableListOf<LogicGraphView.Node>()
             val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
             val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
+            val with = if (rule.group.isEmpty()) "" else " · 随机「" + rule.group + "」"
             row.add(
                 LogicGraphView.Node(
-                    LogicGraphView.Node.WHEN, listOf(EventType.of(rule.on).label + who + where), ri,
+                    LogicGraphView.Node.WHEN,
+                    listOf(EventType.of(rule.on).label + who + with + where), ri,
                 )
             )
 
@@ -2656,7 +2658,8 @@ class MainActivity : AppCompatActivity() {
             }
             graph.add(row)
         }
-        logicGraph.setRules(graph)
+        // 每一行的随机组：图用它把同组的行括起来（并行分支）。
+        logicGraph.setRules(graph, logicRules.map { it.group })
         buildLiquidBar()
 
         logicBar.removeAllViews()
@@ -2897,6 +2900,44 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 随机组：这一条跟哪些规则抢同一次机会。
+     *
+     * The picker lists the names already in the file plus "leave the group", and "a new one"
+     * asks for a name -- a group is a name a person reads on the graph, not a number the
+     * editor hands out.
+     */
+    private fun askRuleGroup(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val names = logicRules.map { it.group }.filter { it.isNotEmpty() }.distinct()
+        val options = mutableListOf("" to getString(R.string.logic_group_none))
+        options.addAll(names.map { it to it })
+        options.add(NEW_GROUP to getString(R.string.logic_group_new))
+        pickList(
+            getString(R.string.logic_group),
+            options,
+            getString(R.string.logic_group_hint),
+            rule.group,
+            onDelete = null,
+        ) { id ->
+            if (id == NEW_GROUP) {
+                askText(getString(R.string.logic_group_new), "") { name ->
+                    setGroup(index, rule, RigEdit.sanitise(name))
+                }
+                true
+            } else {
+                setGroup(index, rule, id)
+                true
+            }
+        }
+    }
+
+    private fun setGroup(index: Int, rule: RuleSpec, name: String) {
+        logicRules[index] = rule.copy(group = name)
+        saveLogic()
+        buildLogicPane()
+    }
+
     private fun askRuleSettings(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -2945,6 +2986,11 @@ class MainActivity : AppCompatActivity() {
                     else aboutText(rule.about)
             ) { askRuleAbout(index) }
         }
+        // 「两个触发器可以设定为随机触发，它们的逻辑线条并行」：一组规则每次事件只响一条。
+        row(
+            getString(R.string.logic_group) + "：" +
+                if (rule.group.isEmpty()) getString(R.string.logic_group_none) else rule.group
+        ) { askRuleGroup(index) }
         row(getString(R.string.logic_cooldown, trim(rule.cooldown))) { askCooldown(index) }
         row((if (rule.once) "✓ " else "") + getString(R.string.logic_once)) {
             logicRules[index] = rule.copy(once = !rule.once)
@@ -4971,4 +5017,13 @@ class MainActivity : AppCompatActivity() {
             "thigh_R" to "右大腿", "shin_R" to "右小腿", "foot_R" to "右脚",
         )
     }
+
+/**
+ * 随机组那个选择器里「新建一组」那一项的代号。
+ *
+ * A sentinel rather than a null: an empty id already means "leave the group", and a picker
+ * whose two special rows are null and null is a picker nobody can read.
+ */
+private const val NEW_GROUP = "\u0000new-group"
+
 }

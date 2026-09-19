@@ -337,6 +337,8 @@ class Engine:
         out = []
         # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
         ran = set()
+        # 随机组：同一组里每次事件只响一条。见 RuleSpec.group。
+        groups_done = set()
         for index, rule in enumerate(self.spec["rules"]):
             if rule.get("on") != event.get("type"):
                 continue
@@ -344,7 +346,24 @@ class Engine:
                 continue
             if not self.about_is(event, rule.get("about", "")):
                 continue
-            out.extend(self.fire(index, rule, ran))
+            group = rule.get("group", "")
+            if not group:
+                out.extend(self.fire(index, rule, ran))
+                continue
+            if group in groups_done:
+                continue
+            groups_done.add(group)
+            # 组在**第一条成员写下**的位置结算，所以规则的先后顺序照旧是文件里的顺序。
+            # 组里凡是听得到这次事件的都在池子里，池子打乱，第一条真的开火的就是这一组的答案。
+            members = [i for i, r in enumerate(self.spec["rules"])
+                       if r.get("group", "") == group and r.get("on") == event.get("type")
+                       and self.touches(event, r.get("part", ""))
+                       and self.about_is(event, r.get("about", ""))]
+            self.rng.shuffle(members)
+            for i in members:
+                out.extend(self.fire(i, self.spec["rules"][i], ran))
+                if i in ran:
+                    break
         return out
 
     def handle(self, etype, part="", value=0.0, prop=""):
@@ -998,6 +1017,51 @@ def main():
              "then": [{"kind": "say", "text": "啪"}]},
         ],
     }).resolve({"type": "landed", "particle": "dust"}) == [], "")
+
+    print("\n一组规则每次事件只响一条")
+    # 「两个触发器（A话/B话）可以设定为随机触发，它们的逻辑线条应该是并行的」。
+    # 两条各带一个 50% 的「概率」不是这件事：各自掷自己的骰子，四次里有一次两条都响，
+    # 宠物同时说两句话。组是掷一次，在够条件的成员里挑一条。
+    def group_engine(members):
+        rules = []
+        for i, g in enumerate(members):
+            rules.append({"on": "tick", "part": "", "group": g, "if": [],
+                          "then": [{"kind": "say", "text": "第%d句" % i}]})
+        return Engine({"stats": [], "states": [], "rules": rules})
+
+    both = group_engine(["话", "话"])
+    spoken = []
+    for _ in range(40):
+        spoken.append(len(both.handle("tick")))
+    report("同一组每次只响一条", set(spoken) == {1}, "每次响 %s 条" % sorted(set(spoken)))
+
+    # 而且两条都真的有机会响：只响一条也可能是"永远只响第一条"那个假货。
+    first = group_engine(["话", "话"])
+    picked = set()
+    for _ in range(60):
+        acts = first.handle("tick")
+        if acts:
+            picked.add(acts[0].get("text"))
+    report("组里两条都有机会被挑中", len(picked) == 2, str(sorted(picked)))
+
+    apart = group_engine(["", ""])
+    counts = [len(apart.handle("tick")) for _ in range(10)]
+    report("不分组还是各响各的", set(counts) == {2}, "每次响 %s 条" % sorted(set(counts)))
+
+    # 组里没有一条够条件：全都不响，而且不会因为"这一组今天轮过了"就吃掉别人。
+    blocked = Engine({"stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
+                      "states": [], "rules": [
+        {"on": "tick", "part": "", "group": "话",
+         "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+         "then": [{"kind": "say", "text": "A"}]},
+        {"on": "tick", "part": "", "group": "话",
+         "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 90}],
+         "then": [{"kind": "say", "text": "B"}]},
+        {"on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "总是"}]},
+    ]})
+    out = blocked.handle("tick")
+    report("组里一条都不够条件时整组安静，别的照响",
+           [a.get("text") for a in out] == ["总是"], str([a.get("text") for a in out]))
 
     print("")
     if FAILURES:

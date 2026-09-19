@@ -110,13 +110,33 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         // The rules that have FIRED during this one event. See fire() for why it is filled in
         // there and not when a rule is considered.
         val ran = mutableSetOf<Int>()
+        // 随机组 whose one turn has been taken. See RuleSpec.group.
+        val groupsDone = mutableSetOf<String>()
         for ((index, rule) in spec.rules.withIndex()) {
             if (rule.on != event.type.id) continue
             if (!event.touches(rule.part)) continue
             // WHICH prop or particle. Two rules can otherwise be identical on the screen and
             // behave differently for reasons nobody can see. See RuleSpec.about.
             if (!event.aboutIs(rule.about)) continue
-            out.addAll(fire(index, rule, ran))
+            if (rule.group.isEmpty()) {
+                out.addAll(fire(index, rule, ran))
+                continue
+            }
+            // A group is resolved where its FIRST member is written, so the rules still run
+            // in the order the file has them -- which is the one thing about rule order
+            // anybody can rely on. Everyone who could hear this event is in the pool, the
+            // pool is shuffled, and the first one that actually fires is the group's answer:
+            // one of them speaks, or (if none of them can) none does.
+            if (!groupsDone.add(rule.group)) continue
+            val members = spec.rules.indices.filter { i ->
+                val r = spec.rules[i]
+                r.group == rule.group && r.on == event.type.id &&
+                    event.touches(r.part) && event.aboutIs(r.about)
+            }
+            for (id in members.shuffled(random)) {
+                out.addAll(fire(id, spec.rules[id], ran))
+                if (id in ran) break
+            }
         }
         return out
     }
