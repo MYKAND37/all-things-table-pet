@@ -287,6 +287,16 @@ data class RuleSpec(
      * ran -- otherwise "if hurt, whimper, else stay quiet" would whimper on every tick.
      */
     val elseActions: List<ActionSpec> = emptyList(),
+    /**
+     * WHICH prop or particle this rule is about, or empty for "any of them".
+     *
+     * The event already carried it ([GameEvent.prop] and [GameEvent.particle]) and the log
+     * says it out loud as of 1.10.2; what was missing was a rule being able to SAY it, so
+     * "被道具碰到 → 说 哎哟" could not be told apart from "被锤子碰到 → 说 哎哟". A field of
+     * its own rather than a second meaning for [part], because `part` is a bone and this is a
+     * thing.
+     */
+    val about: String = "",
 )
 
 /** What a rule can do, with the parameter the editor has to ask for. */
@@ -511,6 +521,9 @@ class LogicSpec(
                 RuleSpec(
                     on = r.optString("on", "tick"),
                     part = r.optString("part", ""),
+                    // A file that says nothing gets "any of them", which is what every rule
+                    // meant before this existed.
+                    about = r.optString("about", ""),
                     conditions = (0 until (condArr?.length() ?: 0)).map { j ->
                         val c = condArr!!.getJSONObject(j)
                         ConditionSpec(
