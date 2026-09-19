@@ -113,6 +113,9 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         for ((index, rule) in spec.rules.withIndex()) {
             if (rule.on != event.type.id) continue
             if (!event.touches(rule.part)) continue
+            // WHICH prop or particle. Two rules can otherwise be identical on the screen and
+            // behave differently for reasons nobody can see. See RuleSpec.about.
+            if (!event.aboutIs(rule.about)) continue
             out.addAll(fire(index, rule, ran))
         }
         return out

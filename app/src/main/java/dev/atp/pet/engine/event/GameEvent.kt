@@ -79,7 +79,23 @@ data class GameEvent(
 
     fun describe(): String {
         val where = if (part.isEmpty()) "" else " · " + part
+        // WHICH prop, said out loud. "被道具碰到" on its own is the one line in the log that
+        // cannot answer the question the rule was written to ask -- a rule about the hammer
+        // and a rule about the ball read identically without this.
+        val who = when {
+            prop.isNotEmpty() -> " · " + prop
+            particle.isNotEmpty() -> " · " + particle
+            else -> ""
+        }
         val how = if (value <= 0f) "" else " " + value.toInt()
-        return type.label + where + how
+        return type.label + where + who + how
     }
+
+    /**
+     * Does this event come from the thing a rule asked about?
+     *
+     * A prop event names its prop and a particle event names its kind; a rule may ask for
+     * either by name, and an empty answer means "from anything". See RuleSpec.about.
+     */
+    fun aboutIs(who: String): Boolean = who.isEmpty() || who == prop || who == particle
 }

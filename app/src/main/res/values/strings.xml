@@ -359,6 +359,9 @@
     <string name="logic_stat_value">初值</string>
     <string name="logic_stat_max">上限</string>
     <string name="logic_pick_event">发生什么事</string>
+    <string name="logic_about">关于谁</string>
+    <string name="logic_about_any">任何东西</string>
+    <string name="logic_about_hint">只有这一条：被道具碰到时会说是哪个道具，粒子的落地会说是哪种粒子。"任何东西"就是不挑。</string>
     <string name="logic_pick_part">对哪个部位</string>
     <string name="logic_pick_any_part">任何部位</string>
     <string name="logic_pick_stat">哪个数值</string>

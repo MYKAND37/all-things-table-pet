@@ -649,6 +649,9 @@ class LogicSpec(
                         .put("on", r.on).put("part", r.part)
                         .put("cooldown", r.cooldown.toDouble()).put("once", r.once)
                         .put("if", conds).put("then", acts).put("else", elses)
+                        // Only when it was chosen: a rule that is about anything does not
+                        // grow a key that says "anything".
+                        .apply { if (r.about.isNotEmpty()) put("about", r.about) }
                 )
             }
             root.put("rules", rules)

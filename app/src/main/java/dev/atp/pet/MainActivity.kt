@@ -2590,7 +2590,12 @@ class MainActivity : AppCompatActivity() {
         for ((ri, rule) in logicRules.withIndex()) {
             val row = mutableListOf<LogicGraphView.Node>()
             val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
-            row.add(LogicGraphView.Node(LogicGraphView.Node.WHEN, listOf(EventType.of(rule.on).label + where), ri))
+            val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
+            row.add(
+                LogicGraphView.Node(
+                    LogicGraphView.Node.WHEN, listOf(EventType.of(rule.on).label + who + where), ri,
+                )
+            )
 
             // 如果 is a list of MODULES: each clause is a box, and the connector between two
             // of them is a box of its own that can be flipped. A rule with no clause at all
@@ -2860,6 +2865,38 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** The 当 box: everything about the rule that is not a node of its own. */
+    /** What a prop or a particle is called, for the rows that have to say one out loud. */
+    private fun aboutText(id: String): String =
+        props.firstOrNull { it.id == id }?.name
+            ?: logicParticles.firstOrNull { it.id == id }?.name
+            ?: id
+
+    /**
+     * 关于哪个：任何东西，或者某一件道具 / 某一种粒子。
+     *
+     * One picker for both registries rather than two, because a rule's event carries one or
+     * the other and never both -- 被道具碰到 names a prop, a particle's 落地 names a kind.
+     */
+    private fun askRuleAbout(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val options = mutableListOf("" to getString(R.string.logic_about_any))
+        options.addAll(props.map { it.id to getString(R.string.logic_subject_prop, it.name) })
+        options.addAll(
+            logicParticles.map { it.id to getString(R.string.logic_subject_particle, it.name) }
+        )
+        pickList(
+            getString(R.string.logic_about),
+            options,
+            getString(R.string.logic_about_hint),
+            rule.about,
+        ) { id ->
+            logicRules[index] = rule.copy(about = id)
+            saveLogic()
+            buildLogicPane()
+            true
+        }
+    }
+
     private fun askRuleSettings(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -2896,6 +2933,17 @@ class MainActivity : AppCompatActivity() {
                     if (rule.part.isEmpty()) getString(R.string.logic_pick_any_part)
                     else partText(rule.part)
             ) { askRulePart(index) }
+        }
+        // 「事件侦测器：应能选取主体」——事件里一直带着是哪个道具/哪种粒子（日志现在也写出来了），
+        // 这一行是让规则能**点名**它。只在真能带着主语的几种事件上出现，别的时候是噪音。
+        if (rule.on == EventType.PROP_HIT.id || rule.on == EventType.IMPACT.id ||
+            rule.on == EventType.LANDED.id
+        ) {
+            row(
+                getString(R.string.logic_about) + "：" +
+                    if (rule.about.isEmpty()) getString(R.string.logic_about_any)
+                    else aboutText(rule.about)
+            ) { askRuleAbout(index) }
         }
         row(getString(R.string.logic_cooldown, trim(rule.cooldown))) { askCooldown(index) }
         row((if (rule.once) "✓ " else "") + getString(R.string.logic_once)) {

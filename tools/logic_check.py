@@ -192,6 +192,11 @@ class Engine:
     def set(self, sid, v):
         return self.add(sid, v - self.value.get(sid, 0.0))
 
+    def about_is(self, event, who):
+        """事件是不是来自规则点名的那样东西。空 = 任何东西。镜像 GameEvent.aboutIs。"""
+        return (who == "" or who == event.get("prop", "")
+                or who == event.get("particle", ""))
+
     def touches(self, event, rule_part):
         return (rule_part == "" or event.get("part", "") == rule_part
                 or event.get("part", "").startswith(rule_part))
@@ -336,6 +341,8 @@ class Engine:
             if rule.get("on") != event.get("type"):
                 continue
             if not self.touches(event, rule.get("part", "")):
+                continue
+            if not self.about_is(event, rule.get("about", "")):
                 continue
             out.extend(self.fire(index, rule, ran))
         return out
@@ -960,6 +967,37 @@ def main():
     got = says(late.handle("click"))
     report("a rule that was jumped to and SKIPPED can still fire later in the same event",
            got == ["high"], str(got))
+
+    print("\n一条规则可以只对某一样东西有反应")
+    # 「事件侦测器：应能选取主体，比如检测是否被道具碰到，并记录是哪个道具」。
+    # 事件里一直带着 prop / particle，日志在 1.10.2 之后也会写出来；缺的是规则能不能**点名**。
+    def hit(about):
+        eng = Engine({
+            "stats": [], "states": [], "rules": [
+                {"on": "propHit", "part": "", "about": about, "if": [],
+                 "then": [{"kind": "say", "text": "哎哟"}]},
+            ],
+        })
+        with_prop = eng.resolve({"type": "propHit", "part": "hand_L", "prop": "hammer"})
+        with_other = eng.resolve({"type": "propHit", "part": "hand_L", "prop": "ball"})
+        return bool(with_prop), bool(with_other)
+
+    any_a, any_b = hit("")
+    one_a, one_b = hit("hammer")
+    report("空 = 任何道具都能触发", any_a and any_b, "%s / %s" % (any_a, any_b))
+    report("点名之后只认那一个", one_a and not one_b, "锤子 %s / 球 %s" % (one_a, one_b))
+    report("点名的粒子也一样", Engine({
+        "stats": [], "states": [], "rules": [
+            {"on": "landed", "part": "", "about": "spark", "if": [],
+             "then": [{"kind": "say", "text": "啪"}]},
+        ],
+    }).resolve({"type": "landed", "particle": "spark"}) != [], "")
+    report("别的粒子不会误触发", Engine({
+        "stats": [], "states": [], "rules": [
+            {"on": "landed", "part": "", "about": "spark", "if": [],
+             "then": [{"kind": "say", "text": "啪"}]},
+        ],
+    }).resolve({"type": "landed", "particle": "dust"}) == [], "")
 
     print("")
     if FAILURES:
