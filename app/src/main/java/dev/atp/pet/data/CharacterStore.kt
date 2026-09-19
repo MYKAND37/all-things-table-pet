@@ -31,12 +31,35 @@ const val VARIANT_SEPARATOR = "__"
 /** One character package on disk. */
 class CharacterFolder(val dir: File) {
     val id: String get() = dir.name
-    val specFile: File get() = File(dir, CharacterStore.SPEC_FILE)
+    val specFile: File get() = File(dir, SPEC_FILE)
     val partsDir: File get() = File(dir, "parts")
 
     fun partFile(bone: String): File = File(partsDir, bone + ".png")
 
     fun specText(): String = specFile.readText()
+
+    /**
+     * The names of the files INSIDE a character's folder.
+     *
+     * They live here rather than on CharacterStore because a folder that cannot say what it
+     * contains is a folder whose layout is written down in the places that read it -- and the
+     * store's own companion is private, so a file name over there is a name a folder cannot
+     * even see.
+     */
+    companion object {
+        val SPEC_FILE = "character.json"
+
+        /** One folder per KIND of particle (not per drop). See Subjects. */
+        val PARTICLES_DIR = "particles"
+
+        /**
+         * The user's own drawing of a kind of particle, inside that kind's folder.
+         *
+         * It is a PNG rather than a description of a shape on purpose: what the user draws is a
+         * BRUSH MARK, and the only thing that can reproduce a brush mark is the pixels of it.
+         */
+        val SHAPE_FILE = "shape.png"
+    }
 
     fun version(): Int = try {
         JSONObject(specText()).optInt("version", 0)
@@ -88,7 +111,7 @@ class CharacterStore(private val context: Context) {
             if (children.isEmpty()) continue
 
             val target = File(root, id)
-            val spec = File(target, SPEC_FILE)
+            val spec = File(target, CharacterFolder.SPEC_FILE)
             val bundledVersion = bundledVersion(assetPath)
 
             if (!spec.isFile) {
@@ -107,7 +130,7 @@ class CharacterStore(private val context: Context) {
 
     fun list(): List<CharacterFolder> {
         val dirs = root.listFiles { f -> f.isDirectory } ?: return emptyList()
-        return dirs.filter { File(it, SPEC_FILE).isFile }
+        return dirs.filter { File(it, CharacterFolder.SPEC_FILE).isFile }
             .sortedBy { it.name }
             .map { CharacterFolder(it) }
     }
@@ -125,7 +148,7 @@ class CharacterStore(private val context: Context) {
 
     fun folder(id: String): CharacterFolder? {
         val dir = File(root, id)
-        return if (File(dir, SPEC_FILE).isFile) CharacterFolder(dir) else null
+        return if (File(dir, CharacterFolder.SPEC_FILE).isFile) CharacterFolder(dir) else null
     }
 
     /**
@@ -670,7 +693,10 @@ class CharacterStore(private val context: Context) {
         // Same shape as a liquid's: the character DECLARES the particle in its own logic.json,
         // and the kind's rules live in a folder of their own beside the other kinds'.
         Subjects.isParticle(subject) && folder != null ->
-            File(File(File(folder.dir, PARTICLES_DIR), Subjects.particleId(subject)), LOGIC_FILE)
+            File(
+                File(File(folder.dir, CharacterFolder.PARTICLES_DIR), Subjects.particleId(subject)),
+                LOGIC_FILE,
+            )
         else -> null
     }
 
@@ -705,7 +731,7 @@ class CharacterStore(private val context: Context) {
                 val id = file.parentFile?.name ?: continue
                 out[Subjects.part(id)] = readOneObjectLogic(file) ?: continue
             }
-            for (file in walkLogicFiles(File(folder.dir, PARTICLES_DIR))) {
+            for (file in walkLogicFiles(File(folder.dir, CharacterFolder.PARTICLES_DIR))) {
                 val id = file.parentFile?.name ?: continue
                 out[Subjects.particle(id)] = readOneObjectLogic(file) ?: continue
             }
@@ -935,19 +961,6 @@ class CharacterStore(private val context: Context) {
         /** One folder per thing that holds logic: characters/<角色>/liquids/<液体>/logic.json. */
         const val LIQUIDS_DIR = "liquids"
 
-        /** The same, one folder per KIND of particle (not per drop). See Subjects. */
-        const val PARTICLES_DIR = "particles"
-
-        /**
-         * The user's own drawing of a kind of particle, inside that kind's folder.
-         *
-         * It is a PNG rather than a description of a shape on purpose: what the user draws is a
-         * BRUSH MARK, and the only thing that can reproduce a brush mark is the pixels of it.
-         */
-        const val SHAPE_FILE = "shape.png"
         const val PROPS_FILE = "props.json"
-
-        /** The rig itself, inside a character's folder. Named once: see tools/kotlin_check.py. */
-        const val SPEC_FILE = "character.json"
     }
 }

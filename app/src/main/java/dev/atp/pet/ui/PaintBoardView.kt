@@ -58,8 +58,13 @@ class PaintBoardView(context: Context, attrs: AttributeSet? = null) : View(conte
             invalidate()
         }
 
-    /** Radius in BITMAP pixels, so a brush is the same size whatever the view is scaled to. */
-    var width: Float = 6f
+    /**
+     * Brush thickness in BITMAP pixels, so a stroke is the same size however the view is scaled.
+     *
+     * Deliberately not called `width`: a View already has one of those, it is an Int, and it is
+     * the number this file needs for laying the square out.
+     */
+    var brushWidth: Float = 6f
         set(value) {
             field = value
             invalidate()
@@ -180,7 +185,7 @@ class PaintBoardView(context: Context, attrs: AttributeSet? = null) : View(conte
     private fun brushFor(erase: Boolean): Paint {
         val p = if (erase) brush else stroke
         p.color = if (erase) 0 else colour
-        p.strokeWidth = width
+        p.strokeWidth = brushWidth
         p.xfermode = if (erase) PorterDuffXfermode(PorterDuff.Mode.CLEAR) else null
         return p
     }
@@ -188,7 +193,7 @@ class PaintBoardView(context: Context, attrs: AttributeSet? = null) : View(conte
     private fun dot(x: Float, y: Float) {
         val p = brushFor(erasing)
         p.style = Paint.Style.FILL
-        Canvas(bitmap).drawCircle(x, y, width / 2f, p)
+        Canvas(bitmap).drawCircle(x, y, brushWidth / 2f, p)
         p.style = Paint.Style.STROKE
         drewAnything = drewAnything || !erasing
     }

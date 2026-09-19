@@ -4351,7 +4351,7 @@ class MainActivity : AppCompatActivity() {
         val folder = summoned ?: return
         val board = PaintBoardView(this)
         board.colour = particle.colour
-        board.width = 4f
+        board.brushWidth = 4f
         board.load(folder.particleArt(particle.id))
 
         val box = LinearLayout(this).apply {
@@ -4384,7 +4384,7 @@ class MainActivity : AppCompatActivity() {
             ).apply { marginEnd = dp(5) }
             chip.setOnClickListener {
                 width = id.toFloat()
-                board.width = width
+                board.brushWidth = width
                 paintChips(widthViews, listOf("2", "4", "10"), { width.toInt().toString() })
             }
             widthViews.add(chip)

@@ -60,9 +60,9 @@ class Particles {
         var r: Float,
         val colour: Int,
         var life: Float,
+        val maxLife: Float,
         /** The kind that left it, so a stain is the shape of its own drop. See [shapes]. */
         val kind: String = "",
-        val maxLife: Float,
     )
 
     private val particles = ArrayList<Particle>()
