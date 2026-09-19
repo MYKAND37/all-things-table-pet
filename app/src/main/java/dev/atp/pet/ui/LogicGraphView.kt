@@ -90,7 +90,19 @@ class LogicGraphView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
+    private var groups: List<String> = emptyList()
+    private val groupRuns = mutableListOf<Run>()
+
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val bracket = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+        color = 0x886C4CE0.toInt()
+    }
+    private val bracketText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 11f * density
+        color = 0xFF6C4CE0.toInt()
+    }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val wire = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -115,9 +127,17 @@ class LogicGraphView @JvmOverloads constructor(
     private val wirePath = Path()
 
     /** Replace the model. Layout is recomputed; the pan and zoom are kept. */
-    fun setRules(next: List<List<Node>>) {
+    /**
+     * The rows, plus which 随机组 each one belongs to (empty for "on its own").
+     *
+     * A group is drawn as a bracket down the left of its rows: the rows stay where the file
+     * put them, and the bracket is what says "these are parallel -- one of them answers".
+     */
+    fun setRules(next: List<List<Node>>, nextGroups: List<String> = emptyList()) {
         rules = next
+        groups = nextGroups
         layout()
+        layoutGroups()
         if (!fitted) fit()
         invalidate()
     }
@@ -193,8 +213,49 @@ class LogicGraphView @JvmOverloads constructor(
     private fun contentBounds(): RectF {
         val box = RectF(0f, 0f, 1f, 1f)
         for (p in placed) box.union(p.rect)
+        // The 随机组 brackets stand to the LEFT of the first node, so the fit has to know
+        // about them or they are the first thing to be cropped.
+        for (run in groupRuns) {
+            box.union(run.first - BRACKET * density - 8f * density, run.top - 24f * density)
+            box.union(run.first, run.bottom)
+        }
         return box
     }
+
+    /**
+     * One bracket per run of ADJACENT rows that share a group.
+     *
+     * Adjacent runs rather than "every row with this name", because the rows are in the order
+     * the file has the rules, and gathering a group by reordering them would change what the
+     * rules do: rule order is the one thing about this list anybody can rely on. Members
+     * written apart get a bracket each -- and each row's own 当 box names its group, so
+     * nothing is hidden.
+     */
+    private fun layoutGroups() {
+        groupRuns.clear()
+        var i = 0
+        while (i < rows.size) {
+            val name = groups.getOrNull(i) ?: ""
+            if (name.isEmpty() || rows[i].isEmpty()) {
+                i++
+                continue
+            }
+            var j = i
+            while (j + 1 < rows.size && (groups.getOrNull(j + 1) ?: "") == name &&
+                rows[j + 1].isNotEmpty()
+            ) {
+                j++
+            }
+            groupRuns.add(
+                Run(name, rows[i].first().rect.top, rows[j].first().rect.bottom,
+                    rows[i].first().rect.left)
+            )
+            i = j + 1
+        }
+    }
+
+    /** One 随机组 bracket: the name, and the span of rows it gathers. */
+    private class Run(val name: String, val top: Float, val bottom: Float, val first: Float)
 
     /** Fit the graph into the view, but never magnify past 1:1 — big text is not a goal. */
     private fun fit() {
@@ -266,6 +327,17 @@ class LogicGraphView @JvmOverloads constructor(
 
         for (p in placed) {
             drawNode(canvas, p)
+        }
+        // The brackets last, on top: a line the boxes hide under is a line nobody sees.
+        for (run in groupRuns) {
+            val x = run.first - BRACKET * density
+            val head = run.top - 8f * density
+            canvas.drawLine(x, head, x, run.bottom, bracket)
+            canvas.drawLine(x, head, run.first, head, bracket)
+            canvas.drawLine(x, run.bottom, run.first, run.bottom, bracket)
+            canvas.drawText(
+                "随机「" + run.name + "」", x - 6f * density, head - 6f * density, bracketText,
+            )
         }
         canvas.restore()
     }
