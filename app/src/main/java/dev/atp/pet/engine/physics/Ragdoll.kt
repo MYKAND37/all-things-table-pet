@@ -33,9 +33,9 @@ import kotlin.random.Random
  *  * [gravityScale], a multiplier on the character's own gravity;
  *  * the four-phase probe the bench's tuning panel reads -- it watches `rotation` between
  *    the phases and cannot move anything;
- *  * and two knobs that are deliberately inert: [PIN_JOINT_GAIN] and [MAX_IK_RATE] do not
- *    exist in this solver, so the panel's two sliders move numbers and change nothing.
- *    That is not a bug to fix; it is the honest state of a solver that has neither.
+ *  * and (until 1.10.0) two knobs the panel could move and this solver ignored. They are
+ *    gone: a slider that changes nothing is worse than no slider, and the panel now shows
+ *    only what this solver can actually be asked about.
  *
  * The measurements that argued against this file are real and still in the history (a
  * scripted straight-line drag reads worse sign-flip rates here than in 1.9.0's solver). The
@@ -445,7 +445,10 @@ class Ragdoll(
                 // lying — a kick, not a give.
                 a += theta * give
             }
-            val k = stiffness * K_MAX
+            // Two stiffnesses multiply: the character's (the bench's slider, or the
+            // settings screen's default) and this JOINT's own, which is what makes one arm
+            // stiff and the other limp. See BoneSpec.stiffness.
+            val k = stiffness * b.stiffness * K_MAX
             if (k > 0f) {
                 val c = 2f * sqrt(k) * SPRING_ZETA
                 a += -k * (theta - (target[name] ?: 0f)) - c * (omega / dt)
@@ -783,24 +786,6 @@ class Ragdoll(
 
         /** How many phases there are. See [probeTurn]. */
         private const val PROBE_PHASES = 4
-
-        /**
-         * Knobs the tuning panel moves and this solver ignores, kept so the panel compiles.
-         *
-         * There is no rate cap here -- the whole aim is applied every iteration -- and nothing
-         * multiplies it, so neither number has anywhere to go. The panel's two sliders will
-         * move and change nothing; the rows are still drawn because the panel is also where
-         * the four-phase probe, the timing row and the CSV export live, and those all work.
-         */
-        var PIN_JOINT_GAIN = 1.0f
-        var MAX_IK_RATE = 9.0f
-
-        /** 1.0 is "use the finger as it is", which is what 0.18.0 did. */
-        var PIN_TARGET_ALPHA = 1.0f
-
-        /** No low pass: 0.18.0 asked the solver for exactly where the finger was. */
-        fun smoothTarget(previous: Vec2, target: Vec2, alpha: Float = PIN_TARGET_ALPHA): Vec2 =
-            target
 
         /**
          * How much a hit off centre spins the figure. A hit 300px from the root at 500px/s

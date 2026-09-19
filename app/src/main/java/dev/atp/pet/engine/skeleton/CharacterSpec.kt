@@ -297,7 +297,14 @@ class CharacterSpec(
                     minAngle = num(lim, 0, -180f),
                     maxAngle = num(lim, 1, 180f),
                     springy = b.optBoolean("spring", false),
-                    stiffness = num(phys, "stiffness", 0.35f),
+                    // THIS joint's spring, as a multiple of the character's stiffness: 1.0
+                    // is "as stiff as the slider says", 0 is limp whatever the slider says.
+                    //
+                    // It defaults to 1.0 because the field is finally read (see
+                    // Ragdoll.step): until 1.10.0 the number was parsed and then ignored, so
+                    // a file that wrote 0.35 got a joint that behaved exactly like a joint
+                    // that wrote nothing. A hand-edited 0.35 now really is 35%.
+                    stiffness = num(phys, "stiffness", 1f),
                     damping = num(phys, "damping", 0.86f),
                     gravity = num(phys, "gravity", 0f),
                     colliderType = col?.optString("type", "capsule") ?: "capsule",

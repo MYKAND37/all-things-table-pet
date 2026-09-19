@@ -276,16 +276,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val heldOffsets = HashMap<Int, Float>()
     private val heldTargets = HashMap<Int, Vec2>()
 
-    /**
-     * The same targets after the low pass, one per finger, kept between frames.
-     *
-     * Separate from heldTargets rather than written over it: heldTargets is what the FINGER
-     * said and is what the panel and the recorder report, and this is what the SOLVER was
-     * given. Two numbers, because "the finger moved 40 px this frame" and "the pet was asked
-     * to move 40 px this frame" are different questions and only the second one is physics.
-     */
-    private val smoothedTargets = HashMap<Int, Vec2>()
-    /**
+   /**
      * Ropes. A rope is not a physics object: it is a pin whose target only exists while it
      * is taut, worked out fresh every frame from how far the body has got. Everything the
      * pin already does right -- joint limits, the root slide, gravity -- the rope inherits.
@@ -503,7 +494,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         heldBones.clear()
         heldTargets.clear()
-        smoothedTargets.clear()
         emitters.clear()
         debris.clear()
         heldDebris = null
@@ -549,7 +539,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propLanded.clear()
         heldBones.clear()
         heldTargets.clear()
-        smoothedTargets.clear()
         emitters.clear()
         debris.clear()
         heldDebris = null
@@ -736,7 +725,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         rag.reset()
         heldBones.clear()
         heldTargets.clear()
-        smoothedTargets.clear()
         emitters.clear()
         debris.clear()
         heldDebris = null
@@ -1219,20 +1207,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         renderer?.states = mergedStates()
 
         val pins = heldBones.entries.mapNotNull { entry ->
-            heldTargets[entry.key]?.let { raw ->
-                // The finger goes through a low pass before the solver ever sees it. What a
-                // thumb on glass does between two frames is jump a few px, and the solver is
-                // asked for a real POSITION: fed the raw number it reproduces the jump, and
-                // what that looks like on a mid-bone grab is the pet buzzing at 6.29 px per
-                // frame. See Ragdoll.PIN_TARGET_ALPHA for the measurement and the price.
-                //
-                // The filter is seeded with the RAW target on the frame the finger lands
-                // (the first time through, there is nothing to smooth from), so taking hold
-                // of the pet does not itself move it, and it is dropped with the finger.
-                val target = smoothedTargets[entry.key]
-                    ?.let { Ragdoll.smoothTarget(it, raw) } ?: raw
-                smoothedTargets[entry.key] = target
-                Ragdoll.Pin(entry.value, target, heldOffsets[entry.key] ?: 0f)
+            // Handed over as it is. The low pass that used to be here went with the solver
+            // that needed it: 0.18.0 takes the finger as it finds it.
+            heldTargets[entry.key]?.let {
+                Ragdoll.Pin(entry.value, it, heldOffsets[entry.key] ?: 0f)
             }
         }.toMutableList()
         pins.addAll(ropePins(sk))
@@ -2160,7 +2138,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
     // ── the IK tuning panel ─────────────────────────────────────────────────
 
     /**
-     * A bench for the one number that cannot be settled by reading the code: PIN_JOINT_GAIN.
+     * A bench for the one number that can be read off it: how much the drag is reversing.
+     *
+     * What is on it, and what is not: the two numbers, the four rows that say which phase of
+     * the step is doing the reversing, the timing row, and the raw record. The two sliders
+     * that used to be here set knobs the 0.18.0 solver does not have -- a slider that moves a
+     * number nothing reads is worse than no slider, so they went with the knobs.
      *
      * The buzz a drag turns into is a relay between the exact aim and the per-frame rate
      * limit, and the gain is what decides how hard the solver pushes into that limit.
@@ -2180,10 +2163,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var tunePointer = -1
 
     /**
-     * What that finger is dragging: TUNE_DRAG_*, or none while it is on one of the two
-     * switches. A mode rather than one flag per slider, because there is exactly one finger
-     * here and what it is on decides what its movement means -- see tuneDown and the move
-     * case, which read the same flag.
+     * Whether that finger is on the panel at all.
+     *
+     * It used to be a mode -- which of the two sliders it had taken hold of -- and both of
+     * those sliders are gone with the two knobs the 0.18.0 solver does not have. What is left
+     * is still worth keeping: a finger that lands on the panel must not also drag the pet.
      */
     private var tuneDrag = TUNE_DRAG_NONE
 
@@ -2232,10 +2216,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * The ragdoll cannot know either: it is given whatever this view's frame took. That is
      * the point of printing them -- tools/ragdoll.py is stepped at a fixed 1/60 and this is
      * stepped at the frame's own delta, and a reading taken on the phone only compares with
-     * a reading taken in Python if the difference is on the screen. MAX_IK_RATE is a RATE,
-     * so the budget one frame gets is proportional to this number: a 120 Hz phone allows
-     * half of what a 60 Hz one does, and a hitched frame allows three times as much, which
-     * is why the peak is printed beside it rather than the current value alone.
+     * a reading taken in Python if the difference is on the screen. Everything the solver
+     * does per frame scales with this number -- a 120 Hz phone steps half as far as a 60 Hz
+     * one, and a hitched frame steps three times as far -- which is why the peak is printed
+     * beside it rather than the current value alone.
      *
      * The count is one today and is printed rather than assumed: this view has no fixed-step
      * accumulator, [Ragdoll.step] is called once with the frame's own delta, and a substep
@@ -2252,7 +2236,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * What is compared is `bone.rotation` at the end of one frame against the end of the
      * last: the joint's own LOCAL angle, after the solver, the integrator and the ground have
      * all had their say. The difference is therefore how far that joint actually turned, and
-     * not how far the IK asked it to turn -- the asking is what MAX_IK_RATE already caps, and
+     * not how far the IK asked it to turn -- the asking is what the solver's aim decides, and
      * the gap between asking and turning is the bug this panel exists to tune out. Note that
      * it is a local angle: world angles are what the eye sees, and they are this plus every
      * joint above it, which is why a chain of small flips reads as one big shake at the end.
@@ -2331,7 +2315,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *   turn_total_deg      the held joint's net turn this frame, signed (measureJitter)
      *   integ/ground/pins/carry_deg
      *                       the four phase contributions to that same turn, signed
-     *   max_ik_rate, pin_joint_gain
+     *   (the two knob columns went with the knobs -- this solver has neither)
      *                       the two constants the solver ran with, both live-adjustable
      *   stiffness, gravity_scale
      *                       what the integrator ran with
@@ -2372,8 +2356,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         row.append(if (bone == null) "" else fixed(offset, 3)).append(',')
         row.append(degrees(turn)).append(',')
         for (p in 0 until PHASE_COUNT) row.append(degrees(phaseNow[p])).append(',')
-        row.append(fixed(Ragdoll.MAX_IK_RATE, 3)).append(',')
-        row.append(fixed(Ragdoll.PIN_JOINT_GAIN, 3)).append(',')
         row.append(fixed(rag.stiffness, 4)).append(',')
         row.append(fixed(rag.gravityScale, 3)).append(',')
         row.append(low).append(',')
@@ -2551,47 +2533,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
         return RectF(left, top, right, top + TUNE_PANEL_H * density)
     }
 
-    /** The gain slider's hit area: taller than the track it draws, because a finger is not 6 px. */
-    private fun tuneSlider(): RectF {
-        val box = tunePanel()
-        val cy = box.top + 230f * density
-        return RectF(
-            box.left + 14f * density, cy - 16f * density,
-            box.right - 14f * density, cy + 16f * density,
-        )
-    }
-
-    private fun tuneReset(): RectF {
-        val box = tunePanel()
-        return RectF(
-            box.left + 12f * density, box.top + 260f * density,
-            box.left + 100f * density, box.top + 286f * density,
-        )
-    }
-
-    /** The rate limit's slider, the same shape as the gain's, 112dp further down the panel. */
-    private fun tuneRateSlider(): RectF {
-        val box = tunePanel()
-        val cy = box.top + 342f * density
-        return RectF(
-            box.left + 14f * density, cy - 16f * density,
-            box.right - 14f * density, cy + 16f * density,
-        )
-    }
-
-    /**
-     * 关掉限速, on the rate's own row and clear of both sliders: 5dp above the rate slider's
-     * hit area and 9dp below 回 1.0's. A press here is the whole regression test -- see
-     * toggleRateLimit -- so it is a target a finger can find without looking.
-     */
-    private fun tuneRateOff(): RectF {
-        val box = tunePanel()
-        return RectF(
-            box.right - tunePad - 76f * density, box.top + 295f * density,
-            box.right - tunePad, box.top + 321f * density,
-        )
-    }
-
     /**
      * 开始记录 / 停止并导出, on its own row under the rate slider.
      *
@@ -2604,8 +2545,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val box = tunePanel()
         val w = diagButtonW()
         return RectF(
-            box.right - tunePad - w, box.top + 375f * density,
-            box.right - tunePad, box.top + 401f * density,
+            box.right - tunePad - w, box.top + 228f * density,
+            box.right - tunePad, box.top + 254f * density,
         )
     }
 
@@ -2737,96 +2678,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * same argument holds twice as hard -- 9.0 to 1000 linearly would put everything above
      * 100 in the last 9% of the track.
      */
-    private fun logTrack(value: Float, lo: Float, hi: Float): Float {
-        val v = value.coerceIn(lo, hi)
-        return (ln(v / lo) / ln(hi / lo)).coerceIn(0f, 1f)
-    }
-
-    private fun logValue(t: Float, lo: Float, hi: Float): Float {
-        val span = hi / lo
-        return lo * span.pow(t.coerceIn(0f, 1f))
-    }
-
-    private fun gainToSlider(gain: Float): Float = logTrack(gain, TUNE_GAIN_MIN, TUNE_GAIN_MAX)
-
-    private fun sliderToGain(t: Float): Float = logValue(t, TUNE_GAIN_MIN, TUNE_GAIN_MAX)
-
-    private fun rateToSlider(rate: Float): Float = logTrack(rate, TUNE_RATE_MIN, TUNE_RATE_MAX)
-
-    private fun sliderToRate(t: Float): Float = logValue(t, TUNE_RATE_MIN, TUNE_RATE_MAX)
-
-    /** Written straight through: there is one of these, and the solver reads it next frame. */
-    private fun setTuneFromSlider(x: Float) {
-        val slider = tuneSlider()
-        if (slider.width() <= 0f) return
-        Ragdoll.PIN_JOINT_GAIN = sliderToGain((x - slider.left) / slider.width())
-        invalidate()
-    }
-
-    /** The same, for the other rate number: MAX_IK_RATE is what the slider writes. */
-    private fun setRateFromSlider(x: Float) {
-        val slider = tuneRateSlider()
-        if (slider.width() <= 0f) return
-        Ragdoll.MAX_IK_RATE = sliderToRate((x - slider.left) / slider.width())
-        invalidate()
-    }
-
-    /**
-     * What "there is no limit" means here: a number MAX_IK_RATE can never reach on its own.
-     *
-     * Above the slider's top by construction, so the switch is the only thing that can put
-     * the value there -- which is what makes [rateLimitOff] an answer about the switch rather
-     * than a guess about a number. Off is a real removal and not a bigger cap on purpose:
-     * 1e6 rad/s is 5.7 degrees per NANOsecond, so no joint in a frame of any length can ever
-     * spend that budget, and the aim goes back to being applied in full, which is what it was
-     * before the cap existed.
-     */
-    private fun toggleRateLimit() {
-        Ragdoll.MAX_IK_RATE = if (rateLimitOff()) TUNE_RATE_DEFAULT else TUNE_RATE_OFF
-        invalidate()
-    }
-
-    private fun rateLimitOff(): Boolean = Ragdoll.MAX_IK_RATE > TUNE_RATE_MAX
-
-    /**
-     * "关" rather than a number when it is off: the value is 1000000 and printing that in a
-     * column built for "9.0" answers no question anybody asked.
-     */
-    private fun rateLimitText(): String =
-        if (rateLimitOff()) context.getString(R.string.sandbox_tune_rate_none)
-        else "%.1f".format(Ragdoll.MAX_IK_RATE)
-
-    /** The switch says what pressing it will do, like 回 1.0 does. */
-    private fun rateLimitSwitchText(): String =
-        context.getString(
-            if (rateLimitOff()) R.string.sandbox_tune_rate_default
-            else R.string.sandbox_tune_rate_off
-        )
-
-    private fun rateText(): String =
-        if (jitterBone == null) "--" else "%.0f%%".format(jitterRate)
-
-    /** Degrees, because that is the unit the diagnosis was done in: 8.5944, not 0.15. */
-    private fun ampText(): String =
-        if (jitterBone == null) "--" else "%.2f°".format(Math.toDegrees(jitterAmp.toDouble()))
-
-    private fun gainText(): String = "%.2f".format(Ragdoll.PIN_JOINT_GAIN)
-
-    /** One phase's contribution this frame, signed, in degrees like every other number here. */
-    private fun phaseText(now: Float): String =
-        if (jitterBone == null) "--" else "%+.2f°".format(Math.toDegrees(now.toDouble()))
-
-    /** The same phase's sign change rate over the window, a percentage like the header's. */
-    private fun phaseRateText(rate: Float): String =
-        if (jitterBone == null) "--" else "%.0f%%".format(rate)
-
-    /**
-     * One line of the panel: what the number is on the left, the number itself on the right.
-     *
-     * The right edge is a parameter because the rate's row ends in a switch rather than at
-     * the panel's edge: its number is right-aligned against the switch, and a row that went
-     * to the edge anyway would print the two on top of each other.
-     */
     private fun tuneRow(
         canvas: Canvas, box: RectF, y: Float, label: String, value: String,
         right: Float = box.right - tunePad,
@@ -2948,10 +2799,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         // What the physics is being fed, which is the first difference between this panel and
         // the reference the same numbers were first read in: tools/ragdoll.py is stepped at
-        // exactly 1/60, this is stepped at whatever the frame took. MAX_IK_RATE is a RATE, so
-        // the budget one frame gets is that rate times this number -- a 120 Hz phone halves
-        // it, a hitched frame multiplies it, and the peak is printed beside the current value
-        // because that one frame is where the relay gets its biggest kick.
+        // exactly 1/60, this is stepped at whatever the frame took. The peak is printed beside
+        // the current value because one hitched frame is where a figure gets its biggest kick.
         var stepPeak = 0f
         for (v in stepMsRing) stepPeak = max(stepPeak, v)
         tuneText.color = 0x66FFFFFF
@@ -2960,66 +2809,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
             box.left + tunePad, box.top + 188f * density, tuneText,
         )
 
-        tuneRow(
-            canvas, box, box.top + 212f * density,
-            context.getString(R.string.sandbox_tune_gain), gainText(),
-        )
-        tuneSliderDraw(
-            canvas, tuneSlider(), gainToSlider(Ragdoll.PIN_JOINT_GAIN),
-            TUNE_GAIN_MIN.toString(), TUNE_GAIN_MAX.toString(),
-        )
-
-        // 回 1.0 on the left, and what the two numbers are about on the right -- the bone and
-        // how many frame pairs are behind them, which is how you know the window has filled.
-        val reset = tuneReset()
-        tunePaint.color = 0x26FFFFFF
-        canvas.drawRoundRect(reset, reset.height() / 2f, reset.height() / 2f, tunePaint)
-        tuneText.color = 0xFF8FA8FF.toInt()
-        canvas.drawText(
-            context.getString(R.string.sandbox_tune_reset),
-            reset.left + 12f * density, reset.centerY() + 4f * density, tuneText,
-        )
-        tuneText.color = 0x66FFFFFF
+        // Which bone the two numbers are about, and how many frame pairs are behind them --
+        // how you know the window has filled. It shares the timing row now: the rows under it
+        // were the two knobs this solver does not have (see the class comment on the panel).
         tuneText.textAlign = Paint.Align.RIGHT
         canvas.drawText(
             jitterBone?.let { context.getString(R.string.sandbox_tune_bone, it, jitterPairs) }
                 ?: context.getString(R.string.sandbox_tune_idle),
-            box.right - tunePad, reset.centerY() + 4f * density, tuneText,
+            box.right - tunePad, box.top + 188f * density, tuneText,
         )
         tuneText.textAlign = Paint.Align.LEFT
-
-        // The rate limit, and the switch that takes it away.
-        //
-        // The buzz arrived in the commit whose whole content was this cap (8440471, first
-        // shipped in v1.0.1), and that commit's own measurement -- 13.2 -> 4.6 degrees -- is
-        // the shape of the thing: smaller, not gone, and the panel's mean has read about 5.5
-        // ever since. So the cap is not a suspicion, it is the suspect, and the way to price
-        // it is to take it away while the pet is being dragged. 关掉限速 writes MAX_IK_RATE
-        // above anything the solver can spend, and the two numbers at the top of this panel
-        // then answer whether the relay was the cap or something underneath it. The slider
-        // beside it is for the step after that: a cap high enough not to relay is the cure
-        // being looked for, and finding it should not need a rebuild either. The timing row
-        // above is the third reading of the same experiment -- the cap is a RATE, so what it
-        // allows one frame depends on the dt that row prints.
-        val off = tuneRateOff()
-        val unlimited = rateLimitOff()
-        tuneRow(
-            canvas, box, box.top + 316f * density,
-            context.getString(R.string.sandbox_tune_rate_limit), rateLimitText(),
-            off.left - 10f * density,
-        )
-        tunePaint.color = if (unlimited) 0x33FF8A8A.toInt() else 0x26FFFFFF
-        canvas.drawRoundRect(off, off.height() / 2f, off.height() / 2f, tunePaint)
-        tuneText.color = if (unlimited) 0xFFFF8A8A.toInt() else 0xFF8FA8FF.toInt()
-        tuneText.textAlign = Paint.Align.CENTER
-        canvas.drawText(
-            rateLimitSwitchText(), off.centerX(), off.centerY() + 4f * density, tuneText,
-        )
-        tuneText.textAlign = Paint.Align.LEFT
-        tuneSliderDraw(
-            canvas, tuneRateSlider(), rateToSlider(Ragdoll.MAX_IK_RATE),
-            TUNE_RATE_MIN.toString(), TUNE_RATE_MAX.toString(),
-        )
 
         // ── 导出诊断: the raw record, and the two things that get it off the phone ──
         //
@@ -3094,37 +2893,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
     }
 
     /**
-     * One slider: the track, the part of it behind the knob, the knob, and both ends named.
-     *
-     * A function rather than two copies because the two sliders have to LOOK like one kind of
-     * control. A rate slider drawn a shade differently would read as a different sort of
-     * thing, and where a value sits between the ends is the whole question this panel asks.
-     */
-    private fun tuneSliderDraw(
-        canvas: Canvas, slider: RectF, t: Float, minLabel: String, maxLabel: String,
-    ) {
-        val cy = slider.centerY()
-        val knob = slider.left + slider.width() * t
-        tunePaint.color = 0x3DFFFFFF
-        canvas.drawRoundRect(
-            RectF(slider.left, cy - 3f * density, slider.right, cy + 3f * density),
-            3f * density, 3f * density, tunePaint,
-        )
-        tunePaint.color = 0xFF8FA8FF.toInt()
-        canvas.drawRoundRect(
-            RectF(slider.left, cy - 3f * density, knob, cy + 3f * density),
-            3f * density, 3f * density, tunePaint,
-        )
-        tunePaint.color = 0xFFF4F2FB.toInt()
-        canvas.drawCircle(knob, cy, 7f * density, tunePaint)
-        tuneText.color = 0x66FFFFFF
-        canvas.drawText(minLabel, slider.left, cy + 22f * density, tuneText)
-        tuneText.textAlign = Paint.Align.RIGHT
-        canvas.drawText(maxLabel, slider.right, cy + 22f * density, tuneText)
-        tuneText.textAlign = Paint.Align.LEFT
-    }
-
-    /**
      * A finger landing on the panel, which takes it before the bench does.
      *
      * The panel is drawn on top of the pet, so it has to win the finger the same way a prop
@@ -3144,22 +2912,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         tunePointer = id
         tuneDrag = TUNE_DRAG_NONE
         when {
-            tuneSlider().contains(x, y) -> {
-                tuneDrag = TUNE_DRAG_GAIN
-                setTuneFromSlider(x)
-            }
-            tuneRateSlider().contains(x, y) -> {
-                tuneDrag = TUNE_DRAG_RATE
-                setRateFromSlider(x)
-            }
-            // On the press rather than on the lift, both of them: they are one number each,
-            // and the readout they move is the thing the finger is already watching.
-            tuneReset().contains(x, y) -> {
-                Ragdoll.PIN_JOINT_GAIN = TUNE_GAIN_DEFAULT
-                invalidate()
-            }
-            tuneRateOff().contains(x, y) -> toggleRateLimit()
-            // The recorder's two, also on the press: starting a record has to happen on the
+          // The recorder's two, also on the press: starting a record has to happen on the
             // frame the finger meant it, and stopping it and opening a share sheet is a
             // thing the user is waiting for rather than dragging.
             tuneDiagSwitch().contains(x, y) -> toggleDiagnostics()
@@ -3262,12 +3015,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     // early: a second finger has to be able to keep dragging the pet while
                     // the first one holds the slider. That is what tuning looks like.
                     if (id == tunePointer) {
-                        // Whichever slider that finger took hold of, and nothing if it landed
-                        // on one of the two switches. See tuneDown.
-                        when (tuneDrag) {
-                            TUNE_DRAG_GAIN -> setTuneFromSlider(event.getX(i))
-                            TUNE_DRAG_RATE -> setRateFromSlider(event.getX(i))
-                        }
+                        // The panel's finger: it has nothing to drag any more (the sliders it
+                        // used to work are gone with the knobs they set), but it still must
+                        // not move the pet or the camera.
                         grabbing = true
                         continue
                     }
@@ -3465,7 +3215,6 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun endGrab(rag: Ragdoll, id: Int) {
         if (heldBones.remove(id) == null) return
         heldTargets.remove(id)
-        smoothedTargets.remove(id)
         heldOffsets.remove(id)
         if (heldBones.isEmpty()) rag.release()
     }
@@ -3569,28 +3318,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val JITTER_WINDOW = 2.0f
         private const val JITTER_SAMPLES = 512
 
-        /** The slider's ends, and where 回 1.0 goes back to. See gainToSlider. */
-        private const val TUNE_GAIN_MIN = 0.02f
-        private const val TUNE_GAIN_MAX = 1.0f
-        private const val TUNE_GAIN_DEFAULT = 1.0f
-
         /**
-         * The rate slider's ends, where the switch puts the value, and what it restores.
+         * The tuning readout's window, in seconds, and the ring it is kept in.
          *
-         * The bottom is the declaration's own default, and the top is where a cap stops being
-         * a plausible cure and starts being "off, but with a number": a joint may turn at most
-         * pi radians toward the finger in a frame, so 1000 rad/s already outruns the aim at
-         * 60 Hz. MAX_IK_RATE is a `var` in Ragdoll's companion -- the same one the mirror
-         * check reads as 9.0f against tools/ragdoll.py -- and nothing here writes it until a
-         * finger does.
+         * Two seconds is the Python's window for the same measurement, so the numbers on the
+         * phone can be read against the numbers in the diagnosis. 512 frames is that window
+         * at 120 Hz and then some; the window itself is enforced by time, not by count, so a
+         * phone that drops to 30 fps still shows two seconds rather than four.
          */
-        private const val TUNE_RATE_MIN = 9.0f
-        private const val TUNE_RATE_MAX = 1000.0f
-        private const val TUNE_RATE_DEFAULT = 9.0f
-        private const val TUNE_RATE_OFF = 1.0e6f
+        private const val JITTER_WINDOW = 2.0f
+        private const val JITTER_SAMPLES = 512
 
         /** How tall the panel is, so that [tuneTop] can tell whether it fits. See tunePanel. */
-        private const val TUNE_PANEL_H = 465f
+        private const val TUNE_PANEL_H = 318f
 
         /**
          * The raw record's own block, in dp below the panel's top. See the drawing in
@@ -3601,7 +3341,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
          * the narrowest bench this panel fits on. It shrinks rather than runs over: this is
          * the line the user reads the file's location off, so it has to be all there.
          */
-        private const val DIAG_PATH_TOP = 417f
+        private const val DIAG_PATH_TOP = 270f
         private const val DIAG_LINE_H = 12f
         private const val DIAG_PATH_LINES = 3
 
@@ -3623,12 +3363,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val DIAG_HEADER =
             "frame,t,dt_ms,steps_this_frame,target_x,target_y,grip_x,grip_y,pin_bone," +
                 "held_offset,turn_total_deg,integ_deg,ground_deg,pins_deg,carry_deg," +
-                "max_ik_rate,pin_joint_gain,stiffness,gravity_scale,bones_touching_floor,hanging"
+                "stiffness,gravity_scale,bones_touching_floor,hanging"
 
         /** What the panel's finger is on: the gain slider, the rate slider, or a switch. */
         private const val TUNE_DRAG_NONE = 0
-        private const val TUNE_DRAG_GAIN = 1
-        private const val TUNE_DRAG_RATE = 2
 
         /**
          * How many frames of step time the peak beside the current value is taken over.

@@ -196,8 +196,6 @@
     <string name="sandbox_tune_title">拖动抖动 · IK 增益</string>
     <string name="sandbox_tune_rate">变号率</string>
     <string name="sandbox_tune_amp">平均幅度</string>
-    <string name="sandbox_tune_gain">IK 增益</string>
-    <string name="sandbox_tune_reset">回 1.0</string>
     <string name="sandbox_tune_idle">拖住一根骨头才有读数</string>
     <string name="sandbox_tune_bone">量的 %1$s · %2$d 帧</string>
     <!-- 按阶段拆开：四行分别是积分器 / 地面 / IK / carryFloor 对被拖骨头这一帧的贡献。 -->
@@ -211,10 +209,6 @@
     <!-- 时间读数：本帧 physics 收到的步长（ms）、最近一秒的峰值、一帧里 step 跑了几次。 -->
     <string name="sandbox_tune_timing">步进 %1$.1fms 峰值 %2$.1fms · 每帧 %3$d 步</string>
     <!-- IK 限速：一个滑杆 + 一个「关掉限速」开关（关掉时数值显示「关」）。 -->
-    <string name="sandbox_tune_rate_limit">IK 限速</string>
-    <string name="sandbox_tune_rate_off">关掉限速</string>
-    <string name="sandbox_tune_rate_default">恢复 9.0</string>
-    <string name="sandbox_tune_rate_none">关</string>
     <!--
         导出诊断：每帧一行的原始 CSV。开关自己会说下一步是什么（开始记录 / 停止并导出），
         面板上还要有文件的全路径和已记录行数 —— 分享失败时那是用户唯一能照着找的东西。
@@ -319,6 +313,8 @@
     <string name="rig_limits_hint">「%1$s」这个关节能转多少度。角度是相对父骨骼的，正负号跟编辑器里显示的一致。</string>
     <string name="rig_limit_from">最小角度（度）</string>
     <string name="rig_limit_to">最大角度（度）</string>
+    <string name="rig_stiffness">刚度 ×</string>
+    <string name="rig_stiffness_hint">这个关节自己的弹簧，乘在全局刚度上。0 = 完全松垮（不管测试场那个滑杆），1 = 跟别的关节一样，2 = 硬一倍。</string>
     <string name="rig_collider">碰撞体</string>
     <string name="rig_collider_capsule">沿骨骼的胶囊</string>
     <string name="rig_collider_circle">中点的圆</string>

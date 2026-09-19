@@ -1975,6 +1975,7 @@ class MainActivity : AppCompatActivity() {
     private fun askBoneAttributes(folder: CharacterFolder, bone: BoneSpec) {
         var minAngle = bone.minAngle
         var maxAngle = bone.maxAngle
+        var stiffness = bone.stiffness
         var type = bone.colliderType
         var radius = bone.colliderRadius
         var collides = bone.collides
@@ -2005,6 +2006,14 @@ class MainActivity : AppCompatActivity() {
         }
         box.addView(fromInput)
         box.addView(toInput)
+
+        // 刚度：这个关节自己的弹簧，乘在全局那个上面。全局还留在测试场上（"松垮/僵硬"），
+        // 所以这里是"这一节比别的节硬多少倍"。
+        val (stiffRow, stiffnessOf) = stepperRow(
+            getString(R.string.rig_stiffness), bone.stiffness, 0.1f, 0f, 3f,
+        ) { "%.1f×".format(it) }
+        box.addView(stiffRow)
+        box.addView(label(getString(R.string.rig_stiffness_hint), 10f, MUTED, top = 2))
 
         box.addView(label(getString(R.string.rig_collider), 11f, MUTED, top = 12, bottom = 6))
         val typeChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -2090,6 +2099,7 @@ class MainActivity : AppCompatActivity() {
                 bone.colliderType = if (type == "circle") "circle" else "capsule"
                 bone.colliderRadius =
                     radiusInput.text.toString().trim().toFloatOrNull()?.coerceIn(0f, 400f) ?: 0f
+                bone.stiffness = stiffnessOf()
                 bone.collides = collides
                 bone.grabbable = grabbable
                 saveBones()
