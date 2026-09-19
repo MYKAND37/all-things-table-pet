@@ -425,6 +425,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private var tapLive = false
 
+    /** When the last 变身 happened, so a pair of rules cannot reload the bench every frame. */
+    private var lastMorphAt = -999f
+
+    /** The 变身 that has been asked for and not done yet. See the morph action. */
+    private var pendingMorph: String? = null
+
     private var panning = false
     private var lastPanX = 0f
     private var lastPanY = 0f
@@ -517,6 +523,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val culpritStrip = 42f * density
 
     var onInfo: ((String) -> Unit)? = null
+
+    /**
+     * 变身：换一套角色。宿主来做，因为角色是文件夹、图画和几个文件。
+     *
+     * 收到的是一句"变成这个"，不是一个已经发生的事实：测试场不知道有哪些角色、也不知道
+     * 它们能不能读，所以它把请求交出去，然后被整个重新装载一次。
+     */
+    var onMorph: ((String) -> Unit)? = null
 
     /**
      * Hand a finished CSV to the activity, which owns the share sheet. See MainActivity.
@@ -968,6 +982,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     bubbleAt = subjectPoint(acting)
                 }
                 "pose" -> applyPose(poseByName[a.text], home = false)
+                "morph" -> {
+                    // 一次变身之后世界会被整个换掉，所以这个动作本身要有个限速：一套「A 出现
+                    // 时变成 B、B 出现时变成 A」的规则是两行就能写出来的东西，而没有限速的
+                    // 话它就是每帧重新装载一次。0.5 秒是"人看得出来发生过"，也是这种环跑不出
+                    // 可见效果的时长。
+                    if (a.text.isEmpty() || a.text == spec?.id) {
+                        // 变成自己不是变身，是把世界清空一次 —— 那看起来像惩罚。
+                    } else if (clock - lastMorphAt < MORPH_PERIOD) {
+                        onInfo?.invoke("变身太快了，等一下")
+                    } else {
+                        lastMorphAt = clock
+                        particles.burst("spark", pointOf(event), 24)
+                        onInfo?.invoke("变身 · " + a.text)
+                        // Asked for here, done at the top of the next frame: the host replaces
+                        // the whole bench, and doing that from inside the action list that asked
+                        // for it leaves the rest of the frame running against a world that has
+                        // been swapped out from under it.
+                        pendingMorph = a.text
+                    }
+                }
                 "clearPose" -> applyPose(null)
                 "spawn" -> propSpecs.firstOrNull { it.id == a.prop }?.let {
                     // From an object's own rules the new prop appears where that object is:
@@ -1347,6 +1381,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val s = spec ?: return
         val sk = skeleton ?: return
         val rag = ragdoll ?: return
+
+        // A 变身 asked for by a rule. Done first, before anything of this frame has been
+        // computed, because it replaces everything this frame would have been about.
+        pendingMorph?.let { id ->
+            pendingMorph = null
+            onMorph?.invoke(id)
+            return
+        }
 
         clock += dt
         if (bubbleLeft > 0f) bubbleLeft -= dt
@@ -4108,6 +4150,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val SEGMENT_END_REACH = 26f
         /** A finger is fatter than a node: how much wider than one the grab is. */
         private const val NODE_GRAB_SLACK = 10f
+        /** The shortest gap between two 变身. See the morph action. */
+        private const val MORPH_PERIOD = 0.5f
         private const val PIECE_PUSH = 10f
         private const val PIECE_PUSH_MAX = 90f
         private const val SHOT_SPEED = 2600f

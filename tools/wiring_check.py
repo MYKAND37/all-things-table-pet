@@ -196,6 +196,13 @@ def main():
                "" if (by_name or by_loop) else
                "没有任何 fireTo(Subjects.%s(...))：写在它上面的规则永远不跑" % maker)
 
+    print("== 变身的两个机制：延到下一帧做，而且有速度上限 ==")
+    # 「A 出现时变成 B、B 出现时变成 A」是两行就能写出来的东西。没有限速它就是每帧重新
+    # 装载一次；在动作表中间直接换世界，则会让这一帧剩下的部分跑在一个已经被换掉的世界
+    # 上。两条都不是类型错，编译器一句话都不会说。
+    report("变身先记账，帧首再做", "pendingMorph" in bench)
+    report("而且两次变身之间有最短间隔", "MORPH_PERIOD" in bench)
+
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
     decl = re.compile(

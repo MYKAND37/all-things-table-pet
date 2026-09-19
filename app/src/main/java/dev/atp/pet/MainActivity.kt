@@ -288,6 +288,26 @@ class MainActivity : AppCompatActivity() {
         // activity's job, because a share sheet is started from an Activity and not from a
         // View. See shareFile.
         sandboxView.onShareFile = { shareFile(it) }
+        // 变身：规则说"变成谁"，这里去把它找出来换上去。找不到就说出来 —— 一个改了 id 或
+        // 删掉了角色的规则，否则表现成"这个规则什么都不做"，而那是最难查的一种。
+        sandboxView.onMorph = { id ->
+            val folder = characters.firstOrNull { it.id == id }
+            if (folder == null) {
+                Toast.makeText(this, getString(R.string.morph_missing, id), Toast.LENGTH_LONG)
+                    .show()
+            } else {
+                // Only move if the new character can actually be read. A 变身 into a folder
+                // whose JSON is broken would leave an empty bench where a pet used to be, and
+                // "my pet disappeared" is a worse outcome than "that rule did nothing".
+                val previous = summoned
+                summoned = folder
+                if (!reloadSandbox(folder) && previous != null) {
+                    summoned = previous
+                    reloadSandbox(previous)
+                }
+                buildPetChooser()
+            }
+        }
 
         // ── 这份清单就是「哪些项能点」。列进来的才会挂上 setOnClickListener，也只有它们
         //    才走得到 select()。布局里多一项、这里少一项，就是一个点了没反应的按钮 ——
@@ -337,7 +357,7 @@ class MainActivity : AppCompatActivity() {
      * and the files are the single source of truth. A second in-memory copy of the
      * character is a second thing that can disagree with itself.
      */
-    private fun reloadSandbox(folder: CharacterFolder) {
+    private fun reloadSandbox(folder: CharacterFolder): Boolean {
         sandboxView.setPoseNames(store.loadPoses(folder.id).associate { it.name to it.angles })
         // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
         // match: two places that say what the stiffness is would otherwise disagree the moment
@@ -358,6 +378,7 @@ class MainActivity : AppCompatActivity() {
         }
         sandboxView.applySettings(settings)
         buildPetChooser()
+        return loaded
     }
 
     /** Reload the bench, but only if that is the character currently on it. */
@@ -4356,6 +4377,7 @@ class MainActivity : AppCompatActivity() {
         "random" -> statName(a.stat) + " 随机 " +
             trim(minOf(a.value, a.value2)) + ".." + trim(maxOf(a.value, a.value2))
         "pose" -> "摆动作 " + a.text
+        "morph" -> "变身 " + a.text
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
         "burst" -> "喷" + ParticleKinds.of(a.text, logicParticles).name
@@ -4766,6 +4788,15 @@ class MainActivity : AppCompatActivity() {
                             )
                         }
                     }
+                }
+                "character" -> pickList(
+                    getString(R.string.logic_pick_character),
+                    characters.map { it.id to it.id },
+                    getString(R.string.logic_no_characters),
+                    existing?.text,
+                ) { id ->
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    true
                 }
                 "pose" -> pickList(
                     getString(R.string.logic_pick_pose),

@@ -143,6 +143,10 @@
     <string name="rig_add_bone">＋ 加骨骼</string>
 
     <!-- 骨骼节点：一根骨头上可以被规则叫出名字的一个点 -->
+    <string name="logic_pick_character">变成哪个角色</string>
+    <string name="logic_no_characters">还没有别的角色</string>
+    <string name="morph_missing">没有这个角色：%1$s</string>
+
     <string name="rig_node_list">节点</string>
     <string name="rig_bone_list_empty">还没有骨骼，先加一根</string>
     <string name="rig_node_hint">节点是骨头上一个点，不占长度。规则可以拿它当部位（被碰到 / 被点一下），绳子可以系在它上面，也能被隐藏/显示。被隐藏的节点不会被碰到。</string>

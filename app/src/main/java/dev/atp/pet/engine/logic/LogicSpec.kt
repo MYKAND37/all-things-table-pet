@@ -368,6 +368,19 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
 
     /** 接回部位：把 [DETACH] 掉下去的那一节接回来（图重新画上，地上的那块收走）。 */
     REJOIN("rejoin", "接回部位", "bone"),
+
+    /**
+     * 变身：换成另一个角色。
+     *
+     * 换的是**一整套**：骨架、图画、道具、以及那个角色自己的逻辑。这是「增删骨骼」的另一半
+     * ——一节一节地加骨头只能得到同一只宠物，换一套骨骼才叫变身，而换骨骼必然要连图画一起
+     * 换（没有图画的骨头是看不见的）。所以这个动作的目标写在 [ActionSpec.text] 里，是一个
+     * 角色的 id。
+     *
+     * 它由宿主动手而不是测试场：角色是文件夹、图画和几个文件，只有 Activity 知道它们在
+     * 哪儿。测试场只说"变成这个"，然后被整个重新装载一次。
+     */
+    MORPH("morph", "变身", "character"),
     WAIT("wait", "等一会儿", "seconds"),
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),
