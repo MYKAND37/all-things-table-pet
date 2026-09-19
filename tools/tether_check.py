@@ -26,6 +26,10 @@ PIECE_PUSH_MAX = 90.0    # 一次推多少封顶
 CONTACT_PERIOD = 0.25    # 同一个桩对同一根骨头的接触事件间隔
 ROPE_GRAB = 30.0         # 点绳子取下时的容差，世界像素
 PIN_HEAD = 1.2           # 点钉子拔出来时，判定半径 = 道具半径 * 这个 + 24
+SEGMENT_MIN = 26.0       # 小于这个的框是手指抖了一下，不是绳子
+SEGMENT_MIN_R = 5.0      # 绳子的粗细上下限
+SEGMENT_MAX_R = 48.0
+SEGMENT_END_REACH = 26.0  # 点端头算「再接一截」的容差
 
 
 class End:
@@ -166,6 +170,69 @@ def tool_tap(point, state, bones, head_height):
             state["ropes"].remove(rope)
             return "untie"
     return None
+
+
+def rope_from(frm, to):
+    """一个拖出来的长方形变成什么：长边是长度，短边是粗细。
+
+    两端在短边的**中点**，不是框的角 —— 角上的绳子比画出来的框长一截，而且贴着
+    边走，画一个胖框就会得到一根斜的绳子。
+    """
+    w, h = abs(to[0] - frm[0]), abs(to[1] - frm[1])
+    # 只有**长边**要够大。横着拖的手指不会顺便画出一个高度，它画的是一条几像素
+    # 厚的线；把这种框扔掉的规矩会把所有人画的绳子都扔掉。
+    if max(w, h) < SEGMENT_MIN:
+        return None
+    r = max(SEGMENT_MIN_R, min(SEGMENT_MAX_R, min(w, h) / 2.0))
+    mid_x, mid_y = (frm[0] + to[0]) / 2.0, (frm[1] + to[1]) / 2.0
+    if w >= h:
+        return ((min(frm[0], to[0]), mid_y), (max(frm[0], to[0]), mid_y), r)
+    return ((mid_x, min(frm[1], to[1])), (mid_x, max(frm[1], to[1])), r)
+
+
+def extend(seg, from_b):
+    """复制：一模一样的一截，接在被点中的那头。"""
+    a, b, r = seg
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    if math.hypot(dx, dy) < 1e-3:
+        return None
+    if from_b:
+        return (b, (b[0] + dx, b[1] + dy), r)
+    return ((a[0] - dx, a[1] - dy), a, r)
+
+
+def segment_end_at(p, segments):
+    best, best_d = None, None
+    for seg in segments:
+        for from_b, end in ((False, seg[0]), (True, seg[1])):
+            d = math.hypot(p[0] - end[0], p[1] - end[1])
+            if d <= seg[2] + SEGMENT_END_REACH and (best_d is None or d < best_d):
+                best, best_d = (seg, from_b), d
+    return best
+
+
+def segment_push(seg, bone, radius_of):
+    """骨头**端点**对绳子的重叠，和碎块用的是同一套近似和同一个上限。"""
+    a, b, r = seg
+    out = []
+    for end in (bone["head"], bone["tip"]):
+        c = closest_on_segment(end, a, b)
+        dx, dy = end[0] - c[0], end[1] - c[1]
+        dist = math.hypot(dx, dy)
+        gap = r + radius_of + bone["r"]
+        if dist >= gap or dist < 1e-4:
+            continue
+        out.append(((dx / dist, dy / dist), min((gap - dist) * PIECE_PUSH, PIECE_PUSH_MAX)))
+    return out
+
+
+def closest_on_segment(p, a, b):
+    abx, aby = b[0] - a[0], b[1] - a[1]
+    len_sq = abx * abx + aby * aby
+    if len_sq < 1e-6:
+        return a
+    t = max(0.0, min(1.0, ((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / len_sq))
+    return (a[0] + abx * t, a[1] + aby * t)
 
 
 def tool_armed(state):
@@ -309,6 +376,57 @@ def main():
     state = {"nails": [], "waiting_pins": [], "waiting_ropes": [], "draft": None, "ropes": []}
     report("and a tap on nothing at all is still a poke",
            tool_tap((5000.0, 5000.0), state, bones, 200.0) is None)
+
+    # ---- 画出来的绳段 ----
+    print("\n拖出来的长方形变成一截绳子")
+    drawn = rope_from((1000.0, 1000.0), (1400.0, 1080.0))
+    report("a wide box makes a horizontal rope", drawn is not None)
+    a, b, r = drawn
+    report("running the whole length of the long side",
+           a[0] == 1000.0 and b[0] == 1400.0, "%.0f..%.0f" % (a[0], b[0]))
+    report("at the middle of the short side, not the corner",
+           a[1] == 1040.0 and b[1] == 1040.0, "y=%.0f" % a[1])
+    report("and the short side is the thickness", abs(r - 40.0) < 1e-6, "r=%.1f" % r)
+
+    drawn = rope_from((1000.0, 1000.0), (1080.0, 1400.0))
+    a, b, r = drawn
+    report("a tall box makes a vertical one",
+           a[0] == 1040.0 and a[1] == 1000.0 and b[1] == 1400.0, "x=%.0f" % a[0])
+    report("a twitch is not a rope", rope_from((1000.0, 1000.0), (1010.0, 1005.0)) is None)
+    thin = rope_from((1000.0, 1000.0), (1400.0, 1002.0))
+    report("a sideways drag with no height is still a rope, at the minimum thickness",
+           thin is not None and thin[0] == (1000.0, 1001.0) and thin[2] == SEGMENT_MIN_R,
+           "r=%.1f" % (thin[2] if thin else -1))
+    report("and a very fat one is capped", rope_from((0.0, 0.0), (400.0, 400.0))[2] == SEGMENT_MAX_R)
+
+    print("\n复制：接在被点中的那一头")
+    seg = rope_from((1000.0, 1000.0), (1400.0, 1080.0))
+    nxt = extend(seg, True)
+    report("the far end grows the rope the way it was going",
+           nxt[0] == (1400.0, 1040.0) and nxt[1] == (1800.0, 1040.0), str(nxt[1]))
+    report("same length, same angle", abs(math.dist(nxt[0], nxt[1]) - math.dist(seg[0], seg[1])) < 1e-6)
+    back = extend(seg, False)
+    report("the near end grows it the other way",
+           back[0] == (600.0, 1040.0) and back[1] == (1000.0, 1040.0), str(back[0]))
+    report("a chain of taps is a longer rope, one segment at a time",
+           extend(extend(seg, True), True)[1] == (2200.0, 1040.0))
+
+    print("\n端头才是「再接一截」的靶子")
+    segments = [seg]
+    report("the end answers", segment_end_at((1405.0, 1045.0), segments) == (seg, True))
+    report("the middle does not", segment_end_at((1200.0, 1040.0), segments) is None)
+    report("and 26px past the end is already too far", segment_end_at((1470.0, 1040.0), segments) is None)
+
+    print("\n绳段是实体：骨头被推出去，不是拉进去")
+    bones = {"foot_L": bone()}
+    bones["foot_L"]["head"] = (1200.0, 1000.0)
+    bones["foot_L"]["tip"] = (1200.0, 1040.0)
+    pushes = segment_push(seg, bones["foot_L"], 50.0)
+    report("a bone end inside the rope is pushed", len(pushes) == 1, "%d end(s)" % len(pushes))
+    report("away from the rope, not into it", pushes[0][0][1] < -0.99, str(pushes[0][0]))
+    bones["foot_L"]["head"] = (1200.0, 1200.0)
+    bones["foot_L"]["tip"] = (1200.0, 1240.0)
+    report("standing clear of it is not a push", segment_push(seg, bones["foot_L"], 50.0) == [])
 
     print("")
     if FAILURES:

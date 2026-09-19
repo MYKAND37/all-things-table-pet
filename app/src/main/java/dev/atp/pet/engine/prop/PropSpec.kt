@@ -22,7 +22,8 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
     SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地"),
     ANCHOR("anchor", "锚点", "放在桌上不动，角色的部位碰到就被拴住；把锚点拿起来就松开"),
     PIN("pin", "钉子", "点一下钉住：点空白处钉在桌上，点部位就把部位钉在那儿；再点一下拔掉"),
-    ROPE("rope", "连绳", "点两个点连起来：可以把部位拴在桌上，也能把两个部位系在一起；点绳子取下");
+    ROPE("rope", "连绳", "点两个点连起来：可以把部位拴在桌上，也能把两个部位系在一起；点绳子取下"),
+    SEGMENT("segment", "绳段", "拖出一个长方形画一截绳子，点端头再接一截；绳子是实体，能站能撞");
 
     companion object {
         fun of(id: String): PropKind = values().firstOrNull { it.id == id } ?: THROW
@@ -36,7 +37,7 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
          * circle the rest of the props collide with would be a lie. Both are therefore
          * spawned [Prop.planted] and handled by the bench instead of the prop physics.
          */
-        fun isPointed(kind: PropKind): Boolean = kind == PIN || kind == ROPE
+        fun isPointed(kind: PropKind): Boolean = kind == PIN || kind == ROPE || kind == SEGMENT
     }
 }
 
