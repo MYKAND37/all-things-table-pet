@@ -4394,25 +4394,27 @@ class MainActivity : AppCompatActivity() {
         box.addView(label(getString(R.string.paint_width), 10f, MUTED, top = 2))
         paintChips(widthViews, listOf("2", "4", "10"), { "4" })
 
-        // 颜色：粒子自己的颜色排第一，因为「和刚才一样」是最常想要的那个
-        val colourRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // 颜色：粒子自己的颜色排第一，因为「和刚才一样」是最常想要的那个。用的是液体
+        // 那排色块的同两个帮手（swatch + paintSwatches），所以"选中"的样子在这里和
+        // 在液体那边是同一种笔画，而不是两套。
+        val boardColours = listOf(particle.colour) + PAINT_COLOURS
         var colour = particle.colour
-        val swatches = mutableListOf<TextView>()
-        for (c in listOf(particle.colour) + PAINT_COLOURS) {
-            val swatch = TextView(this)
-            swatch.layoutParams = LinearLayout.LayoutParams(dp(30), dp(30)).apply { marginEnd = dp(6) }
-            swatch.setBackgroundColor(c)
-            swatch.setOnClickListener {
+        val colourRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val swatchViews = mutableListOf<View>()
+        for (c in boardColours) {
+            val view = swatch(c, 30)
+            view.setOnClickListener {
                 colour = c
                 board.colour = c
+                // 挑了颜色就是离开橡皮：一个还在擦的笔刷配一个新颜色，什么都不会发生。
                 board.erasing = false
-                paintSwatches(swatches, listOf(particle.colour) + PAINT_COLOURS, colour)
+                paintSwatches(swatchViews, boardColours, colour)
             }
-            swatches.add(swatch)
-            colourRow.addView(swatch)
+            swatchViews.add(view)
+            colourRow.addView(view)
         }
         box.addView(colourRow)
-        paintSwatches(swatches, listOf(particle.colour) + PAINT_COLOURS, colour)
+        paintSwatches(swatchViews, boardColours, colour)
 
         val tools = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val eraserChip = label(getString(R.string.paint_eraser), 11f, INK)
@@ -4462,14 +4464,6 @@ class MainActivity : AppCompatActivity() {
         0xFF3E9B4F.toInt(), 0xFF2C7BE5.toInt(), 0xFF8E5AC8.toInt(),
         0xFFFFFFFF.toInt(),
     )
-
-    private fun paintSwatches(views: List<TextView>, colours: List<Int>, current: Int) {
-        for ((i, view) in views.withIndex()) {
-            val mine = i < colours.size && colours[i] == current
-            view.alpha = if (mine) 1f else 0.55f
-            view.foreground = if (mine) getDrawable(R.drawable.menu_item_selected) else null
-        }
-    }
 
     private fun small(text: String, onClick: () -> Unit): TextView {
         val view = label(text, 10f, MUTED)

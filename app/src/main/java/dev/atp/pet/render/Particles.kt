@@ -187,10 +187,6 @@ class Particles {
      */
     var shapes: Map<String, Bitmap> = emptyMap()
 
-    fun setShapes(next: Map<String, Bitmap>) {
-        shapes = next
-    }
-
     fun draw(canvas: Canvas, paint: Paint) {
         for (s in stains) {
             // A mark on the floor is the same shape as the thing that made it, faded: that is

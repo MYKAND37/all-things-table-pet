@@ -792,7 +792,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
             out[kind.id] = bmp
         }
-        particles.setShapes(out)
+        particles.shapes = out
     }
 
     /** Re-read the shapes, dropping what is no longer on disk. What the board calls on save. */
