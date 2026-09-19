@@ -2405,28 +2405,33 @@ class MainActivity : AppCompatActivity() {
         box.addView(nameInput)
         box.addView(label(getString(R.string.prop_kind), 11f, MUTED, top = 10, bottom = 6))
 
-        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        // Wrapped by hand, three to a row: the list outgrew one row when the anchor family
+        // arrived, and a chip that is off the edge of the dialog is a kind nobody can pick.
         val chipViews = mutableListOf<TextView>()
         val hintView = label(PropKind.of(kind).hint, 10f, MUTED, top = 6, bottom = 4)
-        for (option in PropKind.values()) {
-            val chip = label(option.label, 11f, INK)
-            chip.setPadding(dp(9), dp(7), dp(9), dp(7))
-            chip.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginEnd = dp(5) }
-            chip.setOnClickListener {
-                kind = option.id
-                hintView.text = option.hint
-                // The rope length only means anything for a stake, and a row that is
-                // always there but usually ignored is a row people stop reading.
-                ropeRow.visibility = if (option == PropKind.ANCHOR) View.VISIBLE else View.GONE
-                paintChips(chipViews, PropKind.values().map { it.id }, { kind })
+        for (row in PropKind.values().toList().chunked(3)) {
+            val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            for (option in row) {
+                val chip = label(option.label, 11f, INK)
+                chip.setPadding(dp(9), dp(7), dp(9), dp(7))
+                chip.layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { marginEnd = dp(5) }
+                chip.setOnClickListener {
+                    kind = option.id
+                    hintView.text = option.hint
+                    // The rope length only means anything for a stake, and a row that is
+                    // always there but usually ignored is a row people stop reading.
+                    ropeRow.visibility =
+                        if (option == PropKind.ANCHOR) View.VISIBLE else View.GONE
+                    paintChips(chipViews, PropKind.values().map { it.id }, { kind })
+                }
+                chipViews.add(chip)
+                chips.addView(chip)
             }
-            chipViews.add(chip)
-            chips.addView(chip)
+            box.addView(chips)
         }
-        box.addView(chips)
         box.addView(hintView)
         box.addView(radiusRow)
         box.addView(forceRow)

@@ -45,6 +45,8 @@ class Prop:
         self.serial, self.spec = serial, spec
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.held = False
+        # 钉住的道具：世界一个像素都不动它，连重力也不算。见 PropKind.isPointed。
+        self.planted = False
         self.age = 0.0
         self.still = 0.0
         self.on_floor = False
@@ -93,6 +95,10 @@ class World:
     def grab_at(self, point):
         best, best_d = None, GRAB_SLACK
         for p in self.live:
+            # 钉子是用点的拔出来的，不是拖出来的：拖动一个钉住的道具只能意味着
+            # 「把被它钉住的东西一起拖走」，而对一根绳子来说那东西根本不存在。
+            if p.planted:
+                continue
             d = math.dist((p.x, p.y), point) - p.spec.radius
             if d < best_d:
                 best_d, best = d, p
@@ -103,6 +109,10 @@ class World:
         hits, gone = [], []
         for p in self.live:
             p.age += dt
+            # 钉住的道具整个跳过：没有重力、没有接触、没有边界。年龄照样走，
+            # 因为 TRANSIENT_LIFE 是按年龄算的。
+            if p.planted:
+                continue
             if not p.held:
                 if not p.on_floor:
                     p.vy += gravity * p.spec.gravity * dt
@@ -208,7 +218,10 @@ class World:
                 # 两根手指把两个道具按在一起：谁也不让。
                 if a.held and b.held:
                     continue
-                share_a = 0.0 if a.held else (1.0 if b.held else 0.5)
+                # 钉住的道具同样不让：有别的东西把它按住了，和手指按住是一个道理。
+                if a.planted and b.planted:
+                    continue
+                share_a = 0.0 if a.held or a.planted else (1.0 if b.held or b.planted else 0.5)
                 if share_a > 0:
                     a.x -= nx * overlap * share_a
                     a.y -= ny * overlap * share_a
@@ -385,6 +398,38 @@ def main():
     w.step(1 / 60, 0.0, [], radius_of, noop)
     report("two fingers pressing two props together move neither",
            a.x == 1000.0 and b.x == 1080.0, "a=%.1f b=%.1f" % (a.x, b.x))
+
+    # 钉住的道具：世界不动它，手指也抓不动它 —— 钉子是用点拔出来的。
+    print("\na planted prop is not the world's business")
+    w = World(2000.0, 3000.0)
+    nailed = w.spawn(Spec("nail", kind="pin", radius=40.0), (1000.0, 500.0))
+    nailed.planted = True
+    loose = w.spawn(Spec("hammer", radius=60.0), (1000.0, 860.0))
+    for _ in range(120):
+        w.step(1 / 60, 1200.0, [], radius_of, noop)
+    report("a planted prop does not fall", nailed.y == 500.0, "y=%.4f" % nailed.y)
+    report("and one that is not planted does", loose.y > 860.0, "y=%.1f" % loose.y)
+    report("a planted prop cannot be grabbed", w.grab_at((1000.0, 500.0)) is not loose)
+
+    # 钉住的钉子挡在锤子前面：锤子整份让开，钉子一个像素都不动。
+    w = World(2000.0, 3000.0)
+    peg = w.spawn(Spec("nail", kind="pin", radius=40.0), (1000.0, 1000.0))
+    peg.planted = True
+    hit = w.spawn(Spec("hammer", radius=60.0), (1080.0, 1000.0))
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("a planted prop does not give way", peg.x == 1000.0, "x=%.4f" % peg.x)
+    report("so the other one takes the whole separation",
+           abs(hit.x - 1100.0) < 1e-6, "x=%.4f" % hit.x)
+
+    # 两根都钉住：谁也不让，重叠就留在那里 —— 两个桩之间不该互相推。
+    w = World(2000.0, 3000.0)
+    p1 = w.spawn(Spec("a", kind="pin", radius=40.0), (1000.0, 1000.0))
+    p2 = w.spawn(Spec("b", kind="pin", radius=40.0), (1050.0, 1000.0))
+    p1.planted = True
+    p2.planted = True
+    w.step(1 / 60, 0.0, [], radius_of, noop)
+    report("two planted props move neither", p1.x == 1000.0 and p2.x == 1050.0,
+           "a=%.1f b=%.1f" % (p1.x, p2.x))
 
     # 一个飞过来的撞上一个静止的：相对法向速度按 RESTITUTION 反向。
     w = World(2000.0, 3000.0)

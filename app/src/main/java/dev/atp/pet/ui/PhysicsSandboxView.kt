@@ -278,10 +278,58 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
    /**
      * Ropes. A rope is not a physics object: it is a pin whose target only exists while it
-     * is taut, worked out fresh every frame from how far the body has got. Everything the
-     * pin already does right -- joint limits, the root slide, gravity -- the rope inherits.
+     * is taut, worked out fresh every frame from how far its two ends have got. Everything
+     * the pin already does right -- joint limits, the root slide, gravity -- the rope
+     * inherits, and that is the whole reason there is one rope type and not three.
+     *
+     * An end is one of three things, which are the three ways anything on this bench can be
+     * held: a spot on a bone (a limb), a prop (the stake an 锚点 is, which is how a stake
+     * comes off -- pick it up), or a point in the world (a nail head, or a spot somebody
+     * tapped that nothing owns yet).
      */
-    private class Rope(val anchor: Prop, val bone: String, val length: Float)
+    private class RopeEnd(
+        val bone: String? = null,
+        /** Signed distance along the bone, in canvas pixels: where the tap landed on it. */
+        val offset: Float = 0f,
+        /** A prop this end follows. The stake of an 锚点, and nothing else so far. */
+        val prop: Prop? = null,
+        val at: Vec2 = Vec2.ZERO,
+    ) {
+        fun point(sk: Skeleton, rag: Ragdoll): Vec2 = when {
+            prop != null -> prop.position
+            bone != null -> sk.find(bone)?.let { rag.gripPoint(it, offset) } ?: at
+            else -> at
+        }
+    }
+
+    private class Rope(
+        /** The prop that owns it: when this leaves the world, so does the rope. */
+        val owner: Prop,
+        val a: RopeEnd,
+        val b: RopeEnd,
+        val length: Float,
+    )
+
+    /**
+     * A nail, driven where the finger said.
+     *
+     * [bone] null means it went into the table: it is a peg, a fixed point the body bumps
+     * into and can stand on. Otherwise the nail holds a spot on a limb at the world point it
+     * was at when it was driven, and the limb cannot leave -- the joint above it takes the
+     * load, the same way it does for a finger, because a pin is a pin.
+     */
+    private class Nail(val prop: Prop, val bone: String?, val offset: Float, val at: Vec2)
+
+    /**
+     * A 连绳 half placed: the prop, the end the first tap chose, and where the finger is.
+     *
+     * [follow] is what makes the second tap a decision instead of a gamble: the length of a
+     * rope is the distance between its ends, and the only moment that distance can still be
+     * chosen is before the second end exists.
+     */
+    private class RopeDraft(val prop: Prop, val first: RopeEnd) {
+        var follow: Vec2? = null
+    }
 
     /**
      * A rule that asked for a STREAM instead of a splash: 流液体 / 持续喷粒子.
@@ -309,6 +357,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val emitters = mutableListOf<Emitter>()
 
     private val ropes = mutableListOf<Rope>()
+    private val nails = mutableListOf<Nail>()
+
+    /** Spawned 钉子 waiting for the tap that drives one, oldest first. */
+    private val waitingPins = mutableListOf<Prop>()
+
+    /** Spawned 连绳 waiting for its two taps. */
+    private val waitingRopes = mutableListOf<Prop>()
+    private var ropeDraft: RopeDraft? = null
+
+    /** When each peg last reported a contact, so a body resting on one is one event, not sixty. */
+    private val pegHitAt = HashMap<String, Float>()
 
     private var heldProp: Prop? = null
     /** Which finger is carrying the prop, so it follows that one and not the first. */
@@ -319,6 +378,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private var tapX = 0f
     private var tapY = 0f
     private var tapAt = 0L
+
+    /**
+     * A press that landed on the bench rather than on the panel, and has not ended yet.
+     *
+     * [tapBone] above cannot answer this: it is only set when the press took hold of a BONE,
+     * and the whole point of the nails and the ropes is that they are placed on empty table
+     * as often as on a limb.
+     */
+    private var tapLive = false
 
     private var panning = false
     private var lastPanX = 0f
@@ -553,6 +621,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldProp = null
         propPointer = -1
         ropes.clear()
+        nails.clear()
+        waitingPins.clear()
+        waitingRopes.clear()
+        ropeDraft = null
+        pegHitAt.clear()
         broken.clear()
         signals.clear()
         particles.clear()
@@ -716,8 +789,24 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     fun spawnProp(id: String) {
         val s = propSpecs.firstOrNull { it.id == id } ?: return
-        spawn(s, Vec2(homeX() + 260f, homeY() - 700f), Vec2(0f, 200f))
+        val prop = if (PropKind.isPointed(s.kindOf())) {
+            // On the table, where the finger is: a tool that has to be looked for is a tool
+            // nobody finds. See drawWaiting for the ring that marks it as not-yet-placed.
+            spawn(s, Vec2(homeX() + 220f, (spec?.floorY ?: homeY()) - 60f), Vec2.ZERO)
+        } else {
+            spawn(s, Vec2(homeX() + 260f, homeY() - 700f), Vec2(0f, 200f))
+        }
+        if (prop?.planted == true) onInfo?.invoke(waitingHint())
         invalidate()
+    }
+
+    /** What the bench is waiting for, in the words the finger needs. */
+    private fun waitingHint(): String {
+        val parts = mutableListOf<String>()
+        if (waitingPins.isNotEmpty()) parts.add("点一下钉住")
+        if (ropeDraft != null) parts.add("再点一个点")
+        if (waitingRopes.isNotEmpty()) parts.add("点两个点连绳")
+        return parts.joinToString(" · ")
     }
 
     fun resetWorld() {
@@ -740,6 +829,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         signals.clear()
         world?.clear()
         ropes.clear()
+        nails.clear()
+        waitingPins.clear()
+        waitingRopes.clear()
+        ropeDraft = null
+        pegHitAt.clear()
         particles.clear()
         fluid?.clear()
         broken.clear()
@@ -996,8 +1090,22 @@ class PhysicsSandboxView @JvmOverloads constructor(
         return Vec2(homeX(), homeY() - 400f)
     }
 
-    private fun spawn(s: PropSpec, at: Vec2, velocity: Vec2) {
-        world?.spawn(s, at, velocity)
+    /**
+     * Put a prop in the world.
+     *
+     * A prop that is placed by pointing arrives as a MARKER: immovable, not a disc, and
+     * waiting in [waitingPins] or [waitingRopes] for the tap that says what it means. This is
+     * the only door props come in through, rules included, so a 钉子 that a rule spawns is
+     * the same waiting nail a finger gets from the picker.
+     */
+    private fun spawn(s: PropSpec, at: Vec2, velocity: Vec2): Prop? {
+        val w = world ?: return null
+        val prop = w.spawn(s, at, velocity)
+        if (PropKind.isPointed(s.kindOf())) {
+            prop.planted = true
+            if (s.kindOf() == PropKind.PIN) waitingPins.add(prop) else waitingRopes.add(prop)
+        }
+        return prop
     }
 
     // -- viewport -----------------------------------------------------------
@@ -1217,6 +1325,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }.toMutableList()
         pins.addAll(ropePins(sk))
+        pins.addAll(nailPins())
         // The bone the tuning panel is about, named BEFORE the step rather than after it:
         // the four phase boundaries only exist inside the step, so the bone has to be handed
         // in first and the pieces read back out once it has run. The same name goes to
@@ -1323,6 +1432,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         rememberBones(sk)
         stepDebris(dt, s)
         attachRopes()
+        pegPush()
     }
 
     /**
@@ -1671,23 +1781,78 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private fun ropePins(sk: Skeleton): List<Ragdoll.Pin> {
         if (ropes.isEmpty()) return emptyList()
+        val rag = ragdoll ?: return emptyList()
         val out = mutableListOf<Ragdoll.Pin>()
         for (rope in ropes) {
-            val bone = sk.find(rope.bone) ?: continue
-            val p = bone.worldPosition
-            val dx = p.x - rope.anchor.position.x
-            val dy = p.y - rope.anchor.position.y
+            val pa = rope.a.point(sk, rag)
+            val pb = rope.b.point(sk, rag)
+            val dx = pb.x - pa.x
+            val dy = pb.y - pa.y
             val d = hypot(dx, dy)
-            if (d <= rope.length) continue
+            if (d <= rope.length || d < 1e-4f) continue
+            // Both ends can be on the body -- that is a rope tying two limbs together -- and
+            // then both get a pin, each pulled towards the other's circle. The root slide in
+            // holdPins averages whatever they disagree about, which is what stops a pair of
+            // tied limbs from dragging the whole figure to whichever end was solved last.
             val t = rope.length / d
-            out.add(
-                Ragdoll.Pin(
-                    rope.bone,
-                    Vec2(rope.anchor.position.x + dx * t, rope.anchor.position.y + dy * t),
-                )
-            )
+            rope.b.bone?.let { out.add(Ragdoll.Pin(it, Vec2(pa.x + dx * t, pa.y + dy * t), rope.b.offset)) }
+            rope.a.bone?.let { out.add(Ragdoll.Pin(it, Vec2(pb.x - dx * t, pb.y - dy * t), rope.a.offset)) }
         }
         return out
+    }
+
+    /**
+     * The nails, as pins.
+     *
+     * A nail through a limb is a pin whose target never moves: the spot that was tapped stays
+     * exactly where it was when the hammer came down. That is all "定住" is -- the rope with
+     * no slack, written once instead of worked out every frame.
+     */
+    private fun nailPins(): List<Ragdoll.Pin> =
+        nails.mapNotNull { nail -> nail.bone?.let { Ragdoll.Pin(it, nail.at, nail.offset) } }
+
+    /**
+     * The nails that went into the TABLE, as something the body can hit and stand on.
+     *
+     * A peg is the one solid thing on this bench that nothing can move, so the overlap has to
+     * be taken out on the body: the pin route above would drag the whole figure to the peg
+     * instead, which is right for a limb that was nailed and wrong for a peg in the way. The
+     * push is the same per-frame impulse the loose pieces use -- see [bodyPushOut] -- because
+     * a positional shove on a bone is a velocity the solver is free to spend.
+     */
+    private fun pegPush() {
+        val sk = skeleton ?: return
+        val rag = ragdoll ?: return
+        for (nail in nails) {
+            if (nail.bone != null) continue
+            val r = nail.prop.spec.radius
+            for (b in sk.bones) {
+                if (!rag.isSolid(b.name)) continue
+                val a = b.worldPosition
+                val t = b.tipPosition()
+                val abx = t.x - a.x
+                val aby = t.y - a.y
+                val lenSq = abx * abx + aby * aby
+                val k = if (lenSq < 1e-6f) 0f else
+                    (((nail.at.x - a.x) * abx + (nail.at.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
+                val dx = nail.at.x - (a.x + abx * k)
+                val dy = nail.at.y - (a.y + aby * k)
+                val dist = hypot(dx, dy)
+                val gap = r + rag.colliderRadius(b)
+                if (dist >= gap || dist < 1e-4f) continue
+                val slide = gap - dist
+                rag.impulse(b, Vec2(-dx / dist, -dy / dist), min(slide * PIECE_PUSH, PIECE_PUSH_MAX))
+                // One event per bone per quarter second, the same spacing the prop contact
+                // uses and for the same reason: a body resting on a peg touches it every
+                // frame, and the rules would be handed that sixty times a second.
+                val key = nail.prop.serial.toString() + "|" + b.name
+                val last = pegHitAt[key]
+                if (last == null || clock - last >= 0.25f) {
+                    pegHitAt[key] = clock
+                    fire(GameEvent(EventType.PROP_HIT, part = b.name, value = 220f, prop = nail.prop.spec.id))
+                }
+            }
+        }
     }
 
     /**
@@ -1702,7 +1867,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val rag = ragdoll ?: return
         for (prop in w.live) {
             if (prop.spec.kindOf() != PropKind.ANCHOR) continue
-            if (ropes.any { it.anchor === prop }) continue
+            if (ropes.any { it.owner === prop }) continue
             var best: String? = null
             var bestD = Float.MAX_VALUE
             for (bone in sk.bones) {
@@ -1723,13 +1888,158 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 }
             }
             if (best != null && bestD < 0f) {
-                ropes.add(Rope(prop, best, prop.spec.ropeLength))
+                ropes.add(
+                    Rope(
+                        prop,
+                        RopeEnd(prop = prop),
+                        RopeEnd(bone = best, offset = 0f),
+                        prop.spec.ropeLength,
+                    )
+                )
                 onInfo?.invoke("拴住了 " + best + " · 绳子 " + prop.spec.ropeLength.toInt() + "px")
             }
         }
-        // A rope whose stake has been taken away is not a rope any more.
-        ropes.removeAll { w.live.none { live -> live === it.anchor } }
+        // A rope whose stake has been taken away is not a rope any more, and neither is a
+        // 连绳 whose marker prop was cleared by a rule or by 清空.
+        ropes.removeAll { rope -> w.live.none { live -> live === rope.owner } }
+        nails.removeAll { nail -> w.live.none { live -> live === nail.prop } }
+        waitingPins.removeAll { p -> w.live.none { live -> live === p } }
+        waitingRopes.removeAll { p -> w.live.none { live -> live === p } }
+        if (ropeDraft != null && w.live.none { live -> live === ropeDraft?.prop }) ropeDraft = null
     }
+
+    // -- pointing ------------------------------------------------------------
+
+    /**
+     * A tap on the bench, offered to the tools before it is offered to the pet.
+     *
+     * Returns true when the tap was spent on a tool, which also means "this was not a poke":
+     * a finger that is driving a nail is not petting anything, and firing 被点一下 at the same
+     * time would put a rule's actions on top of the gesture.
+     *
+     * The order is the order of what the finger can see. A nail that is already driven is
+     * nearest to the finger, so it is asked first -- that is the one thing here that is not
+     * announced by a pulsing ring, and it is also the only way back out.
+     */
+    private fun toolTap(p: Vec2): Boolean {
+        val sk = skeleton ?: return false
+        val rag = ragdoll ?: return false
+        for (nail in nails.toList()) {
+            if (hypot(p.x - nail.at.x, p.y - nail.at.y) <= nail.prop.spec.radius * 1.2f + 24f) {
+                pullNail(nail)
+                return true
+            }
+        }
+        waitingPins.firstOrNull()?.let {
+            drivePin(it, p, rag)
+            return true
+        }
+        ropeDraft?.let {
+            tieRope(it, p, sk, rag)
+            return true
+        }
+        waitingRopes.firstOrNull()?.let {
+            startRope(it, p, rag)
+            return true
+        }
+        val rope = ropeAt(p, sk, rag) ?: return false
+        ropes.remove(rope)
+        world?.remove(rope.owner)
+        onInfo?.invoke("绳子取下了")
+        return true
+    }
+
+    /** Drive a waiting 钉子 where the finger landed: into the table, or into a limb. */
+    private fun drivePin(pin: Prop, p: Vec2, rag: Ragdoll) {
+        waitingPins.remove(pin)
+        val grip = rag.grabAt(p)
+        // A grip is a spot on the bone's CENTRELINE, and that is what the pin holds. Nailing
+        // the tap point instead would snatch the limb sideways by however fat the bone is at
+        // the moment the nail went in, which is a visible flinch for no reason.
+        val bone = grip?.bone
+        val at = if (grip == null) p else rag.gripPoint(bone!!, grip.offset)
+        nails.add(Nail(pin, bone?.name, grip?.offset ?: 0f, at))
+        pin.position = at
+        onInfo?.invoke(
+            if (bone == null) "钉在桌上了 · 再点一下拔掉"
+            else "钉住了 " + bone.name + " · 再点一下拔掉"
+        )
+    }
+
+    /**
+     * Take a nail out.
+     *
+     * The nail is not destroyed: it goes back to waiting, so a pin can be moved without
+     * going back to the prop list for another one. "拔掉" and "再钉一个地方" are the same
+     * gesture and one fewer thing to find.
+     */
+    private fun pullNail(nail: Nail) {
+        nails.remove(nail)
+        waitingPins.add(nail.prop)
+        onInfo?.invoke("拔掉了 · 再点一下钉在别处")
+        invalidate()
+    }
+
+    /** The first of the two taps: which end, and where. */
+    private fun startRope(rope: Prop, p: Vec2, rag: Ragdoll) {
+        waitingRopes.remove(rope)
+        val grip = rag.grabAt(p)
+        val end = if (grip == null) {
+            RopeEnd(at = p)
+        } else {
+            RopeEnd(bone = grip.bone.name, offset = grip.offset)
+        }
+        ropeDraft = RopeDraft(rope, end).also { it.follow = p }
+        onInfo?.invoke("再点一个点 · 两点的距离就是绳长")
+    }
+
+    /** The second tap: the rope exists, and it is exactly as long as it was drawn. */
+    private fun tieRope(draft: RopeDraft, p: Vec2, sk: Skeleton, rag: Ragdoll) {
+        val grip = rag.grabAt(p)
+        val second = if (grip == null) {
+            RopeEnd(at = p)
+        } else {
+            RopeEnd(bone = grip.bone.name, offset = grip.offset)
+        }
+        val a = draft.first.point(sk, rag)
+        val b = second.point(sk, rag)
+        val length = hypot(b.x - a.x, b.y - a.y)
+        ropes.add(Rope(draft.prop, draft.first, second, length))
+        draft.prop.position = Vec2((a.x + b.x) / 2f, (a.y + b.y) / 2f)
+        ropeDraft = null
+        onInfo?.invoke("绳子系好了 · " + length.toInt() + "px · 点绳子取下")
+    }
+
+    /** The 连绳 under a finger, if there is one. 锚点 ropes are not taken off this way. */
+    private fun ropeAt(p: Vec2, sk: Skeleton, rag: Ragdoll): Rope? {
+        var best: Rope? = null
+        var bestD = 30f
+        for (rope in ropes) {
+            if (rope.owner.spec.kindOf() != PropKind.ROPE) continue
+            val a = rope.a.point(sk, rag)
+            val b = rope.b.point(sk, rag)
+            val d = segmentDistance(p, a, b)
+            if (d < bestD) {
+                bestD = d
+                best = rope
+            }
+        }
+        return best
+    }
+
+    /** Distance from [p] to the segment a-b, which is how a rope is aimed at. */
+    private fun segmentDistance(p: Vec2, a: Vec2, b: Vec2): Float {
+        val abx = b.x - a.x
+        val aby = b.y - a.y
+        val lenSq = abx * abx + aby * aby
+        if (lenSq < 1e-6f) return hypot(p.x - a.x, p.y - a.y)
+        val t = (((p.x - a.x) * abx + (p.y - a.y) * aby) / lenSq).coerceIn(0f, 1f)
+        return hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t))
+    }
+
+    /** Is the bench in the middle of being told where something goes? */
+    private fun toolArmed(): Boolean =
+        waitingPins.isNotEmpty() || waitingRopes.isNotEmpty() || ropeDraft != null
 
     private fun lowestBone(): Bone? {
         val sk = skeleton ?: return null
@@ -1820,6 +2130,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         drawDebris(canvas)
         drawProps(canvas)
         drawRopes(canvas, sk)
+        drawNails(canvas)
+        drawWaiting(canvas)
         if (settings.showBalance) drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
@@ -1862,21 +2174,86 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * only question a leash ever asks.
      */
     private fun drawRopes(canvas: Canvas, sk: Skeleton) {
-        if (ropes.isEmpty()) return
+        val rag = ragdoll ?: return
+        if (ropes.isEmpty() && ropeDraft == null) return
         worldPaint.style = Paint.Style.STROKE
         worldPaint.strokeCap = Paint.Cap.ROUND
         worldPaint.strokeWidth = 7f
         for (rope in ropes) {
-            val bone = sk.find(rope.bone) ?: continue
-            val a = rope.anchor.position
-            val b = bone.worldPosition
-            val d = hypot(b.x - a.x, b.y - a.y)
-            val slack = 1f - (d / rope.length).coerceIn(0f, 1f)
-            worldPaint.color = if (slack < 0.02f) 0xEE8A5A2B.toInt() else 0xBB6B5B45.toInt()
+            val a = rope.a.point(sk, rag)
+            val b = rope.b.point(sk, rag)
+            sagging(canvas, a, b, hypot(b.x - a.x, b.y - a.y) / rope.length)
+        }
+        // The rope that is only half tied: the first point is placed and the other end is not
+        // there yet, so the line goes to wherever the hand is. What is being decided is
+        // visible BEFORE it is decided, which is the whole difference between a tool and a
+        // guess -- and the length is being decided too, so it has to be seen.
+        ropeDraft?.let { draft ->
+            val a = draft.first.point(sk, rag)
+            val b = draft.follow ?: return@let
+            worldPaint.color = 0x99C08A3E.toInt()
             ropePath.reset()
             ropePath.moveTo(a.x, a.y)
-            ropePath.quadTo((a.x + b.x) / 2f, (a.y + b.y) / 2f + slack * 140f, b.x, b.y)
+            ropePath.lineTo(b.x, b.y)
             canvas.drawPath(ropePath, worldPaint)
+            canvas.drawCircle(a.x, a.y, 10f, worldPaint)
+        }
+        worldPaint.style = Paint.Style.FILL
+        worldPaint.strokeWidth = 0f
+    }
+
+    /** One rope, drawn with the sag that says whether it is doing anything. */
+    private fun sagging(canvas: Canvas, a: Vec2, b: Vec2, used: Float) {
+        val slack = 1f - used.coerceIn(0f, 1f)
+        worldPaint.color = if (slack < 0.02f) 0xEE8A5A2B.toInt() else 0xBB6B5B45.toInt()
+        ropePath.reset()
+        ropePath.moveTo(a.x, a.y)
+        ropePath.quadTo((a.x + b.x) / 2f, (a.y + b.y) / 2f + slack * 140f, b.x, b.y)
+        canvas.drawPath(ropePath, worldPaint)
+    }
+
+    /**
+     * The nails, and the ones still waiting to be driven.
+     *
+     * A driven nail is drawn at the point it holds, NOT at the prop's own position: the prop
+     * is a marker with no physics of its own, and what the finger cares about is the spot
+     * that cannot move. A peg gets a wider ring, because it is the one that is in the way.
+     */
+    private fun drawNails(canvas: Canvas) {
+        worldPaint.style = Paint.Style.STROKE
+        worldPaint.strokeWidth = 4f
+        for (nail in nails) {
+            val r = nail.prop.spec.radius
+            worldPaint.color = if (nail.bone == null) 0xCC6E6A62.toInt() else 0xCC8A5A2B.toInt()
+            canvas.drawCircle(nail.at.x, nail.at.y, r * 0.55f, worldPaint)
+            val arm = r * 0.85f
+            canvas.drawLine(
+                nail.at.x - arm, nail.at.y - arm, nail.at.x + arm, nail.at.y + arm, worldPaint,
+            )
+            canvas.drawLine(
+                nail.at.x - arm, nail.at.y + arm, nail.at.x + arm, nail.at.y - arm, worldPaint,
+            )
+        }
+        worldPaint.style = Paint.Style.FILL
+        worldPaint.strokeWidth = 0f
+    }
+
+    /**
+     * The 钉子 and 连绳 that have been spawned but not yet pointed at anything.
+     *
+     * They sit where they landed with a pulsing ring, because a prop that is waiting for a
+     * gesture nobody has been told about is a prop that looks broken. The status line says
+     * the same thing in words; this says it where the finger is looking.
+     */
+    private fun drawWaiting(canvas: Canvas) {
+        if (waitingPins.isEmpty() && waitingRopes.isEmpty()) return
+        worldPaint.style = Paint.Style.STROKE
+        worldPaint.strokeWidth = 3f
+        val pulse = 1f + 0.25f * kotlin.math.sin(clock * 4f)
+        for (p in waitingPins + waitingRopes) {
+            worldPaint.color = 0x996E6A62.toInt()
+            canvas.drawCircle(p.position.x, p.position.y, p.spec.radius * 0.7f * pulse, worldPaint)
+            canvas.drawCircle(p.position.x, p.position.y, p.spec.radius * 1.1f, worldPaint)
         }
         worldPaint.style = Paint.Style.FILL
         worldPaint.strokeWidth = 0f
@@ -2965,12 +3342,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     return true
                 }
                 val now = System.currentTimeMillis()
-                if (now - lastTapAt < 300) {
+                // A tool waiting for a tap turns the double tap off: two taps in a row IS the
+                // gesture for a rope (point, point), and the reset that a double tap means
+                // would throw away the world the rope was being tied in.
+                if (now - lastTapAt < 300 && !toolArmed()) {
                     resetWorld()
                     lastTapAt = 0L
                     return true
                 }
                 lastTapAt = now
+                tapLive = true
+                tapX = event.x
+                tapY = event.y
+                tapAt = now
                 // A piece that came off is a thing on the bench now, so it is picked up
                 // before the figure and the props are asked: it is drawn on top of them, and
                 // the finger means what it is on.
@@ -3002,6 +3386,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // A finger that lands ON the pet pulls it; one that lands on nothing is the
                 // start of a pinch. That is how "pull both thighs apart" and "zoom out" can
                 // both be two-fingered gestures without either getting in the other's way.
+                tapLive = false
                 val index = event.actionIndex
                 val id = event.getPointerId(index)
                 val piece = heldDebris
@@ -3031,6 +3416,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
             MotionEvent.ACTION_MOVE -> {
                 var grabbing = false
+                // The rope that is being aimed: the half-tied line follows the finger, so the
+                // length being chosen is visible while there is still time to change it.
+                ropeDraft?.let { it.follow = toWorld(event.getX(0), event.getY(0)) }
                 for (i in 0 until event.pointerCount) {
                     val id = event.getPointerId(i)
                     // The panel's finger, handled inside the loop rather than by leaving it
@@ -3168,10 +3556,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 //
                 // And when a tap is thrown away the bench SAYS SO on the status line: this is
                 // the one event in the app that otherwise leaves no trace anywhere.
-                if (tapped != null) {
-                    val held = System.currentTimeMillis() - tapAt
-                    val moved = hypot(event.x - tapX, event.y - tapY)
-                    if (held < TAP_MS && moved < TAP_SLOP_DP * density) {
+                val held = System.currentTimeMillis() - tapAt
+                val moved = hypot(event.x - tapX, event.y - tapY)
+                val isTap = tapLive && held < TAP_MS && moved < TAP_SLOP_DP * density
+                tapLive = false
+                if (isTap && toolTap(toWorld(event.x, event.y))) {
+                    // Spent on a tool: not a poke, and not half of a double tap either -- the
+                    // tap after a rope's first point must not find a 300ms-old partner.
+                    lastTapAt = 0L
+                } else if (tapped != null) {
+                    if (isTap) {
                         fire(GameEvent(EventType.CLICK, part = tapped))
                     } else {
                         val why = if (held >= TAP_MS) {
@@ -3208,7 +3602,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             // Pulling the stake out of the ground is how a rope comes off. Anything else
             // needs a tool, a menu or a gesture nobody would guess.
             if (prop.spec.kindOf() == PropKind.ANCHOR) {
-                ropes.removeAll { it.anchor === prop }
+                ropes.removeAll { it.owner === prop }
                 onInfo?.invoke("绳子松开了")
             }
             heldProp = prop

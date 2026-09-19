@@ -20,6 +20,16 @@ class Prop(
     var held = false
     var spin = 0f
 
+    /**
+     * Nailed down: the world does not move it, not even by gravity.
+     *
+     * Set on the props that are placed by pointing — see [PropKind.isPointed] — where the
+     * prop is a MARKER for something the bench puts in the world (a peg, a rope) rather
+     * than a thing with a position of its own. The bench draws and enforces those; here it
+     * only has to be true that nothing else will.
+     */
+    var planted = false
+
     /** How long it has existed, and how long it has been nearly still. */
     var age = 0f
     var still = 0f
@@ -116,6 +126,10 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
         var best: Prop? = null
         var bestDistance = GRAB_SLACK
         for (p in live) {
+            // A nail is taken out by tapping it, not by dragging it: the drag of a planted
+            // prop would have to mean "move the thing it is planted in", and for a rope that
+            // is not even a thing that exists. See the bench's tap handling.
+            if (p.planted) continue
             val d = (p.position - point).length() - p.spec.radius
             if (d < bestDistance) {
                 bestDistance = d
@@ -138,6 +152,10 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
 
         for (p in live) {
             p.age += dt
+            // Planted props are not stepped at all -- no gravity, no contact, no borders.
+            // Aging them is still worth doing: TRANSIENT_LIFE is measured in age for the
+            // bullets, and a nail has no business being the one prop that never gets older.
+            if (p.planted) continue
 
             if (!p.held) {
                 if (!p.onFloor) {
@@ -201,7 +219,11 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
 
                 // Two fingers pressing two props together: neither one is the one that gives.
                 if (a.held && b.held) continue
-                val shareA = if (a.held) 0f else if (b.held) 1f else 0.5f
+                // A planted prop does not give either, and for the same reason a held one
+                // does not: something else is holding it in place. A nail driven through
+                // the table is exactly as immovable as a thumb pressing it there.
+                if (a.planted && b.planted) continue
+                val shareA = if (a.held || a.planted) 0f else if (b.held || b.planted) 1f else 0.5f
                 if (shareA > 0f) {
                     a.position = a.position - normal * (overlap * shareA)
                     moved.add(a)
