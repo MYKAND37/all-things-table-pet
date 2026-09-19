@@ -32,6 +32,7 @@ import dev.atp.pet.engine.prop.NodePoint
 import dev.atp.pet.engine.prop.Prop
 import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
+import dev.atp.pet.engine.prop.PropSpecs
 import dev.atp.pet.engine.prop.PropWorld
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.CharacterSpec
