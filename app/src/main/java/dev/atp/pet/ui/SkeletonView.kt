@@ -694,8 +694,8 @@ class SkeletonView @JvmOverloads constructor(
         // thing on the canvas.
         for (n in s.nodes) {
             val q = nodePointOf(n)
-            val px = vx(q.x)
-            val py = vy(q.y)
+            val px = vx(q)
+            val py = vy(q)
             nodeRingPaint.color = if (n.prop.isEmpty()) 0x556E6A62 else 0x552B7A8A
             canvas.drawCircle(px, py, n.radius * scale, nodeRingPaint)
             nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()

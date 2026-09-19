@@ -40,6 +40,7 @@ import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
+import dev.atp.pet.engine.skeleton.NodeSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import dev.atp.pet.engine.logic.StateSpec

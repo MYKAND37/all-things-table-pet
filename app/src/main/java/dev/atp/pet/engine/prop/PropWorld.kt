@@ -4,6 +4,7 @@ import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.skeleton.Bone
 import dev.atp.pet.engine.skeleton.Skeleton
 import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.max
 
 /** One prop touching one part of the body, this frame.

@@ -3984,7 +3984,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // A node before the bone it sits on, so that "被点一下 · 指尖" is about the fingertip
         // and not about the whole hand. The finger has to be ON it: a node that took the grab
         // from a hand's width away would make the limb it is named after ungrabbable.
-        answer@ run {
+        run {
             val sk = skeleton ?: return@run
             val node = sk.nodeAt(p) ?: return@run
             if (node.name in hiddenNodes) return@run
