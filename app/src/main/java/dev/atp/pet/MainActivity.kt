@@ -56,6 +56,15 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+
+/**
+ * 随机组那个选择器里「新建一组」那一项的代号。
+ *
+ * A sentinel rather than a null: an empty id already means "leave the group", and a picker
+ * whose two special rows are null and null is a picker nobody can read.
+ */
+private const val NEW_GROUP = "\u0000new-group"
+
 /**
  * The shell.
  *
@@ -5017,13 +5026,5 @@ class MainActivity : AppCompatActivity() {
             "thigh_R" to "右大腿", "shin_R" to "右小腿", "foot_R" to "右脚",
         )
     }
-
-/**
- * 随机组那个选择器里「新建一组」那一项的代号。
- *
- * A sentinel rather than a null: an empty id already means "leave the group", and a picker
- * whose two special rows are null and null is a picker nobody can read.
- */
-private const val NEW_GROUP = "\u0000new-group"
 
 }
