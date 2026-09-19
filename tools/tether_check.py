@@ -235,6 +235,38 @@ def closest_on_segment(p, a, b):
     return (a[0] + abx * t, a[1] + aby * t)
 
 
+def node_point(bone, at):
+    """节点在骨头上的位置：**距离**，不是比例 —— 骨头改了长度，末端节点跟着走。"""
+    head, tip = bone["head"], bone["tip"]
+    dx, dy = tip[0] - head[0], tip[1] - head[1]
+    length = math.hypot(dx, dy)
+    if length < 1e-3:
+        return head
+    t = max(0.0, min(1.0, at / length))
+    return (head[0] + dx * t, head[1] + dy * t)
+
+
+def node_at(p, nodes, bones):
+    """最近的一个节点，按「离圆心多远减去半径」算，和道具用的是同一条规矩。"""
+    best, best_d = None, None
+    for n in nodes:
+        q = node_point(bones[n["bone"]], n["at"])
+        d = math.hypot(p[0] - q[0], p[1] - q[1]) - n["radius"]
+        if best_d is None or d < best_d:
+            best, best_d = n, d
+    return best
+
+
+def grab_offset(p, nodes, bones, head_height, slack=10.0):
+    """一次抓取抓到谁：(骨头名, 偏移)。节点赢过它所在的骨头，但手指必须真的在节点上。"""
+    for n in nodes:
+        q = node_point(bones[n["bone"]], n["at"])
+        if math.hypot(p[0] - q[0], p[1] - q[1]) <= n["radius"] + slack:
+            return n["bone"], n["at"]
+    grip = grip_at(p, bones, head_height)
+    return (grip[0], grip[1]) if grip else (None, 0.0)
+
+
 def tool_armed(state):
     """有待放的工具时，双击不能重置世界：连绳本来就是「点、再点」。"""
     return bool(state["waiting_pins"]) or bool(state["waiting_ropes"]) or state["draft"] is not None
@@ -427,6 +459,36 @@ def main():
     bones["foot_L"]["head"] = (1200.0, 1200.0)
     bones["foot_L"]["tip"] = (1200.0, 1240.0)
     report("standing clear of it is not a push", segment_push(seg, bones["foot_L"], 50.0) == [])
+
+    # ---- 节点 ----
+    print("\n节点：骨头上的一个点")
+    bones = {"hand_L": bone()}
+    bones["hand_L"]["head"] = (1000.0, 1000.0)
+    bones["hand_L"]["tip"] = (1200.0, 1000.0)
+    report("关节就是骨头的起点", node_point(bones["hand_L"], 0.0) == (1000.0, 1000.0))
+    report("末端就是骨头的终点", node_point(bones["hand_L"], 200.0) == (1200.0, 1000.0))
+    report("中间在一半", node_point(bones["hand_L"], 100.0) == (1100.0, 1000.0))
+    # 存的是距离而不是比例：骨头被改短之后，末端节点必须跟着变短，而不是留在半空。
+    bones["hand_L"]["tip"] = (1100.0, 1000.0)
+    report("骨头变短，末端节点跟着走",
+           node_point(bones["hand_L"], 200.0) == (1100.0, 1000.0), "越过末端就夹在末端")
+    report("反过来也一样", node_point(bones["hand_L"], -50.0) == (1000.0, 1000.0))
+    bones["hand_L"]["tip"] = (1200.0, 1000.0)
+
+    nodes = [{"name": "finger_tip", "bone": "hand_L", "at": 200.0, "radius": 26.0},
+             {"name": "shoulder", "bone": "hand_L", "at": 0.0, "radius": 26.0}]
+    report("离得近的那个节点被选中",
+           node_at((1205.0, 1005.0), nodes, bones)["name"] == "finger_tip")
+    report("远处那个不会", node_at((1005.0, 1005.0), nodes, bones)["name"] == "shoulder")
+
+    print("\n抓一个节点：抓的是它那个点，不是手指投影到的地方")
+    b, at = grab_offset((1208.0, 1004.0), nodes, bones, 200.0)
+    report("节点赢过它所在的骨头", (b, at) == ("hand_L", 200.0), "%s at %.1f" % (b, at))
+    # 这条是「被点一下 · 指尖」成立的地方：抓到的偏移必须是节点的，否则每次点到的
+    # 都是手指落下的位置，规则里的「指尖」就成了「手附近随便哪里」。
+    b, at = grab_offset((1190.0, 1000.0), nodes, bones, 200.0)
+    report("手指压在节点上，偏移还是节点的", at == 200.0, "at=%.1f" % at)
+    report("离节点太远就还给骨头", grab_offset((1150.0, 1000.0), nodes, bones, 200.0)[1] != 200.0)
 
     print("")
     if FAILURES:

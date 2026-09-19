@@ -141,6 +141,63 @@ object RigEdit {
         return prefix + n
     }
 
+    /** The same, for a node: unique against the bones as well, because both are names. */
+    fun freeNodeName(bones: List<BoneSpec>, nodes: List<NodeSpec>, prefix: String = "node_"): String {
+        val taken = bones.map { it.name }.toSet() + nodes.map { it.name }
+        var n = 1
+        while ((prefix + n) in taken) n++
+        return prefix + n
+    }
+
+    /**
+     * Whether a set of nodes can be written to a file at all.
+     *
+     * A node is a NAME and a PLACE, and both of them can be wrong in ways that are invisible
+     * until a rule does not fire: a node whose bone does not exist is a name nothing can ever
+     * touch, and a node sharing a bone's name would make 被碰到 · 手 mean two different things
+     * depending on which one the finger found first.
+     */
+    fun nodeProblem(bones: List<BoneSpec>, nodes: List<NodeSpec>): String? {
+        val boneNames = bones.map { it.name }.toSet()
+        val seen = HashSet<String>()
+        for (n in nodes) {
+            if (n.name.isBlank()) return "有节点没有名字"
+            if (!seen.add(n.name)) return "节点重名：" + n.name
+            if (n.name in boneNames) return "节点「" + n.name + "」和骨骼重名了"
+            if (n.bone !in boneNames) return n.name + " 挂在不存在的骨骼「" + n.bone + "」上"
+            if (n.radius <= 0f) return n.name + " 的判定半径是 0，永远不会被碰到"
+        }
+        return null
+    }
+
+    /** 关节 / 中间 / 末端 as a distance along the bone, from the joint. */
+    fun placeAt(bone: BoneSpec, place: String): Float {
+        val len = hypot(bone.tail.x - bone.head.x, bone.tail.y - bone.head.y)
+        return when (place) {
+            "mid" -> len / 2f
+            "tip" -> len
+            else -> 0f
+        }
+    }
+
+    /**
+     * Which of the three a node is at, for the editor to light the right chip.
+     *
+     * A node is stored as a DISTANCE, so this is a comparison rather than a lookup -- and the
+     * tolerance is a tenth of the bone because a node dragged along a bone by hand is not
+     * going to land on the exact midpoint, and being told it is "somewhere else" is less
+     * useful than being told it is at the middle.
+     */
+    fun placeOf(bone: BoneSpec, at: Float): String {
+        val len = hypot(bone.tail.x - bone.head.x, bone.tail.y - bone.head.y)
+        val slack = kotlin.math.max(1f, len * 0.1f)
+        return when {
+            kotlin.math.abs(at - len) <= slack -> "tip"
+            kotlin.math.abs(at - len / 2f) <= slack -> "mid"
+            else -> "joint"
+        }
+    }
+
     /**
      * The two ends of a joint's range, sorted.
      *

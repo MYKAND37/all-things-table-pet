@@ -104,7 +104,7 @@ class World:
                 best_d, best = d, p
         return best
 
-    def step(self, dt, gravity, bones, radius_of, on_impulse):
+    def step(self, dt, gravity, bones, radius_of, on_impulse, nodes=()):
         self.clock += dt
         hits, gone = [], []
         for p in self.live:
@@ -119,6 +119,10 @@ class World:
                 p.x += p.vx * dt
                 p.y += p.vy * dt
             self._collide(p, bones, radius_of, hits, on_impulse)
+            # 节点在骨头之后，理由和 Kotlin 里那句一样：同时陷在肢体和一个点里的时候，
+            # 先被肢体推出来，再被那个点推出来。
+            for node in nodes:
+                self._node_collide(p, node, hits, on_impulse)
             self._borders(p)
             if math.hypot(p.vx, p.vy) < 40:
                 p.still += dt
@@ -188,6 +192,40 @@ class World:
                 self.last_hit[key] = self.clock
                 hits.append((p, name, max(speed, MIN_HIT) * p.spec.force))
             speed = 0.0
+
+    def _node_collide(self, p, node, hits, on_impulse):
+        """一个道具对一个被命名的点：同一套重叠、同一套回弹、同一个接触节流。
+
+        node = (节点名, (x, y), 半径, 骨头名)。事件里带的是**节点的名字**：规则问的是
+        「谁被碰到了」，而一个叫「指尖」的地方比「整只手」是更好的答案。
+        """
+        name, at, radius, bone = node
+        if radius <= 0:
+            return
+        speed = math.hypot(p.vx, p.vy)
+        ox, oy = p.x - at[0], p.y - at[1]
+        d = math.hypot(ox, oy)
+        gap = p.spec.radius + radius
+        if d >= gap:
+            return
+        if d < 1e-3:
+            nx, ny = 0.0, -1.0
+        else:
+            nx, ny = ox / d, oy / d
+        if not p.held:
+            p.x, p.y = at[0] + nx * gap, at[1] + ny * gap
+            into = p.vx * nx + p.vy * ny
+            if into < 0:
+                p.vx -= nx * into * (1 + RESTITUTION)
+                p.vy -= ny * into * (1 + RESTITUTION)
+            if speed > IMPULSE_FLOOR:
+                # 冲量给的是节点所在的那根骨头：推动的落点还是身体。
+                self.impulses.append((bone, (-nx, -ny), speed * p.spec.force * IMPULSE_GAIN))
+        key = str(p.serial) + "|" + name
+        last = self.last_hit.get(key)
+        if last is None or self.clock - last >= CONTACT_PERIOD:
+            self.last_hit[key] = self.clock
+            hits.append((p, name, max(speed, MIN_HIT) * p.spec.force))
 
     def _separate(self):
         """道具对道具：圆对圆。重叠对半分，除非其中一个被手指按着。
@@ -368,6 +406,39 @@ def main():
         w.step(1 / 60, 0.0, [], radius_of, lambda *a: None)
     report("a second on the floor takes most of the sideways speed away",
            slid.vx < 600.0 * 0.2, "vx=%.1f after a second, from 600" % slid.vx)
+
+    print("\nnodes are felt as points")
+    noop = lambda *a: None
+    w = World(2000.0, 3000.0)
+    w.impulses = []
+    # 节点在 (1000,1000)，半径 26；道具半径 60，圆心的重叠从 86 开始。
+    node = ("finger_tip", (1000.0, 1000.0), 26.0, "hand_L")
+    stone = w.spawn(Spec("stone", radius=60.0), (1050.0, 1000.0), (400.0, 0.0))
+    hits = w.step(1 / 60, 0.0, [], radius_of, noop, [node])
+    report("a prop inside a node is pushed out of it",
+           abs(stone.x - 1086.0) < 1e-6, "x=%.4f" % stone.x)
+    report("and the event names the NODE, not the bone it sits on",
+           len(hits) == 1 and hits[0][1] == "finger_tip",
+           str([h[1] for h in hits]))
+    report("the shove still goes to the bone", w.impulses and w.impulses[0][0] == "hand_L")
+    report("away from the node, not into it", w.impulses[0][1][0] < -0.99)
+
+    # 接触节流：同一个节点同一根骨头，0.25 秒内只报一次，否则规则一秒响六十遍。
+    # 手指按着的一个道具：它不会被推出去，所以整个半秒都停在节点上，接触是连续的 ——
+    # 这正是节流存在的理由（一个真的会被推开的道具只会报一次，那就测不到节流）。
+    w = World(2000.0, 3000.0)
+    stone = w.spawn(Spec("stone", radius=10.0), (1000.0, 1000.0))
+    stone.begin_drag()
+    n = 0
+    for i in range(30):
+        n += len(w.step(1 / 60, 0.0, [], radius_of, noop, [node]))
+    report("a prop resting on a node reports once per quarter second, not per frame",
+           n == 2, "%d events in half a second" % n)
+
+    w = World(2000.0, 3000.0)
+    far = w.spawn(Spec("stone", radius=10.0), (1400.0, 1000.0))
+    report("and a prop that is clear of it is not felt at all",
+           w.step(1 / 60, 0.0, [], radius_of, noop, [node]) == [])
 
     print("\nprops against each other")
     noop = lambda *a: None

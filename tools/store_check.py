@@ -64,13 +64,19 @@ def rename_files(names, renames):
     return out
 
 
-def save_rig(root, bones, order, renames=None):
+def save_rig(root, bones, order, renames=None, nodes=None):
     """
     bones: [{"name", "parent", "head", "tail", "limits", "collider", "collides", "grabbable"}],
     parents first. Everything the file said about a bone that is still there is kept, except
     the fields the editor owns -- and the editor owns the two switches as well, which is why
     they are written every time: a flag that is not written is a switch that flips itself back
     the next time somebody saves the rig.
+
+    nodes: [{"name", "bone", "at", "radius", "prop"}], written WHOLE from the list rather than
+    carried over field by field like a bone is. A node has nothing in the file the editor does
+    not show, so a node that is missing from the list is a node somebody deleted -- and the list
+    is the only thing that can say that. `nodes=None` means "an older caller that knows nothing
+    about nodes", which leaves whatever the file had alone.
     """
     old = root.get("bones", [])
     kept = {b["name"]: b for b in old}
@@ -117,6 +123,17 @@ def save_rig(root, bones, order, renames=None):
             z += 10
             layers.append(l)
     root["layers"] = layers
+    if nodes is not None:
+        root["nodes"] = [
+            {
+                "name": n["name"],
+                "bone": n["bone"],
+                "at": n["at"],
+                "radius": n["radius"],
+                "prop": n.get("prop", ""),
+            }
+            for n in nodes
+        ]
     return root
 
 
@@ -251,6 +268,31 @@ def main():
            all(saved_bone.get("collides") is True and saved_bone.get("grabbable") is True
                for saved_bone in saved["bones"]),
            "absent means yes, the same way the app reads it")
+
+    print("\n节点：写进去的每一个字段，读回来都还在")
+    # 节点是规则用来称呼一个地方的**名字**。丢一个字段的症状不是画错，而是规则不再
+    # 触发：半径丢了就永远碰不到，prop 丢了手里拿的东西就消失，at 丢了节点会跑回关节。
+    nodes = [
+        {"name": "finger_tip", "bone": "hand_L", "at": 120.0, "radius": 22.0, "prop": "sword"},
+        {"name": "shoulder", "bone": "root", "at": 0.0, "radius": 30.0, "prop": ""},
+    ]
+    saved = save_rig(base, bones, names, nodes=nodes)
+    report("both nodes are written", len(saved.get("nodes", [])) == 2)
+    report("with the place on the bone, not just the name",
+           saved["nodes"][0]["at"] == 120.0 and saved["nodes"][1]["at"] == 0.0)
+    report("with the radius the editor chose", saved["nodes"][0]["radius"] == 22.0)
+    report("with the prop it is wearing", saved["nodes"][0]["prop"] == "sword")
+    report("and one that wears nothing says so", saved["nodes"][1]["prop"] == "")
+
+    # 删掉的节点不能留在文件里 —— 留着的那个名字，规则还能选中它，而它已经不存在了。
+    saved = save_rig(base, bones, names, nodes=nodes[:1])
+    report("a node that is not in the list is gone from the file",
+           [n["name"] for n in saved["nodes"]] == ["finger_tip"])
+    # 不知道节点的老调用方不能把文件里的节点抹掉：这条是给「以后再加字段」留的活口。
+    with_nodes = save_rig(base, bones, names, nodes=nodes)
+    kept = save_rig(with_nodes, bones, names)
+    report("a caller that knows nothing about nodes leaves them alone",
+           len(kept["nodes"]) == 2, "nodes=None means \"not my business\"")
 
     print("\nthe attribute editor changes exactly two things")
     edited = bones_of(load())

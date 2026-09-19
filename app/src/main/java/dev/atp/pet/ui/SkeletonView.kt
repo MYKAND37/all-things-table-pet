@@ -15,6 +15,7 @@ import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.IkChainSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
+import dev.atp.pet.engine.skeleton.NodeSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.engine.skeleton.TwoBoneIK
@@ -111,6 +112,13 @@ class SkeletonView @JvmOverloads constructor(
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
         color = 0xFF171528.toInt()
+    }
+
+    /** Nodes: a dot for where the point is, a ring for how far away it can be touched. */
+    private val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    private val nodeRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
     }
 
     /**
@@ -241,6 +249,67 @@ class SkeletonView @JvmOverloads constructor(
     /** The bones as they stand right now, edits included and parents first. */
     fun rigBones(): List<BoneSpec> = spec?.bones?.toList() ?: emptyList()
 
+    /**
+     * The named points on the rig, as they stand right now.
+     *
+     * Edited in place like the bones are: the spec's list is the one the built [Skeleton] was
+     * handed, so a node added here is a node the bench can feel without anything being rebuilt.
+     */
+    fun rigNodes(): List<NodeSpec> = spec?.nodes?.toList() ?: emptyList()
+
+    /** Add a node, or change one that is already there. False when the name cannot be used. */
+    fun saveNode(
+        original: String?,
+        name: String,
+        bone: String,
+        at: Float,
+        radius: Float,
+        prop: String,
+    ): Boolean {
+        val parsed = spec ?: return false
+        val others = parsed.nodes.filter { it.name != original }
+        val mine = NodeSpec(name, bone, at, radius, prop)
+        val problem = RigEdit.nodeProblem(parsed.bones, others + mine)
+        if (problem != null) {
+            onInfo?.invoke(problem)
+            return false
+        }
+        val existing = original?.let { old -> parsed.nodes.firstOrNull { it.name == old } }
+        if (existing == null) parsed.nodes.add(mine) else {
+            existing.name = name
+            existing.bone = bone
+            existing.at = at
+            existing.radius = radius
+            existing.prop = prop
+        }
+        onInfo?.invoke(if (existing == null) "加了节点 " + name else "改好了 " + name)
+        onRigChanged?.invoke()
+        return true
+    }
+
+    fun deleteNode(name: String): Boolean {
+        val parsed = spec ?: return false
+        val node = parsed.nodes.firstOrNull { it.name == name } ?: return false
+        parsed.nodes.remove(node)
+        onInfo?.invoke("删掉了节点 " + name)
+        onRigChanged?.invoke()
+        return true
+    }
+
+    /** A point on a bone, in canvas coordinates, for the editor to draw a node at. */
+    fun nodePointOf(node: NodeSpec): Vec2 {
+        val bone = spec?.bones?.firstOrNull { it.name == node.bone } ?: return Vec2.ZERO
+        return Vec2(
+            bone.head.x + (bone.tail.x - bone.head.x) * placeFraction(bone, node.at),
+            bone.head.y + (bone.tail.y - bone.head.y) * placeFraction(bone, node.at),
+        )
+    }
+
+    private fun placeFraction(bone: BoneSpec, at: Float): Float {
+        val len = hypot(bone.tail.x - bone.head.x, bone.tail.y - bone.head.y)
+        return if (len < 1e-3f) 0f else (at / len).coerceIn(0f, 1f)
+    }
+
     /** Draw order, back to front, including any bone that has just been added. */
     fun rigLayers(): List<String> = spec?.layers?.sortedBy { it.z }?.map { it.bone } ?: emptyList()
 
@@ -317,6 +386,15 @@ class SkeletonView @JvmOverloads constructor(
         }
         for (b in parsed.bones) if (b.parentName == name) b.parentName = bone.parentName
         parsed.bones.removeAll { it.name == name }
+        // The nodes that were places on this bone are places on nothing now. Children get
+        // re-hung on the grandparent and keep working; a point in the middle of a limb that is
+        // gone has nowhere to be re-hung TO, and a name nothing can touch is worse than a name
+        // that is not there.
+        val orphaned = parsed.nodes.filter { it.bone == name }
+        parsed.nodes.removeAll { it.bone == name }
+        if (orphaned.isNotEmpty()) {
+            onInfo?.invoke("连同 " + orphaned.size + " 个节点一起删了")
+        }
         ensureLayers()
         rebuild(parsed)
         onInfo?.invoke("删掉了 " + name)
@@ -341,6 +419,9 @@ class SkeletonView @JvmOverloads constructor(
         val bone = parsed.bones.firstOrNull { it.name == name } ?: return false
         renamed[name] = next
         bone.name = next
+        // A node names a place ON a bone, so it has to follow the bone's name or it becomes a
+        // name pointing at nothing -- which is a rule that silently stops firing.
+        for (n in parsed.nodes) if (n.bone == name) n.bone = next
         rebuild(parsed)
         onInfo?.invoke(name + " → " + next + " · 保存骨骼后连图片一起改名")
         onRigChanged?.invoke()
@@ -606,6 +687,19 @@ class SkeletonView @JvmOverloads constructor(
             jointPaint.color = paint.color
             canvas.drawCircle(hx, hy, 4.5f * density, jointPaint)
             canvas.drawCircle(hx, hy, 2f * density, jointPaint)
+        }
+
+        // The nodes: a dot where they are and a ring at how far away something can touch them.
+        // Drawn before the picked bone's ring so that a selected bone is still the loudest
+        // thing on the canvas.
+        for (n in s.nodes) {
+            val q = nodePointOf(n)
+            val px = vx(q.x)
+            val py = vy(q.y)
+            nodeRingPaint.color = if (n.prop.isEmpty()) 0x556E6A62 else 0x552B7A8A
+            canvas.drawCircle(px, py, n.radius * scale, nodeRingPaint)
+            nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
+            canvas.drawCircle(px, py, 5f * density, nodePaint)
         }
 
         // The bone the side panel picked, ringed at both ends: the canvas is zoomed in far

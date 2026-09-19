@@ -6,8 +6,22 @@ import dev.atp.pet.engine.skeleton.Skeleton
 import kotlin.math.abs
 import kotlin.math.max
 
-/** One prop touching one bone, this frame. */
-class Hit(val prop: Prop, val bone: Bone, val value: Float)
+/** One prop touching one part of the body, this frame.
+ *
+ * [part] is the name the RULES get: a bone's name for a bone, a node's name for a node. A node
+ * is a place on a bone, and the place is what a rule is usually about -- "被碰到 · 指尖" is a
+ * different instruction from "被碰到 · 整只手". [bone] is what the shove goes to either way.
+ */
+class Hit(val prop: Prop, val bone: Bone, val value: Float, val part: String = bone.name)
+
+/**
+ * A named point on the body, as the world sees it: what a NodeSpec is once the rig is built.
+ *
+ * It is felt as a circle and it is not a shape the solver knows about -- a node has no length
+ * and no joint, so there is nothing about it to solve. What it does have is a place and a size,
+ * which is exactly what a contact needs.
+ */
+class NodePoint(val name: String, val at: Vec2, val radius: Float, val bone: Bone)
 
 /** A prop in the arena, at one moment. */
 class Prop(
@@ -145,6 +159,7 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
         skeleton: Skeleton,
         radiusOf: (Bone) -> Float,
         onImpulse: (Bone, Vec2, Float) -> Unit,
+        nodes: List<NodePoint> = emptyList(),
     ): List<Hit> {
         clock += dt
         val hits = mutableListOf<Hit>()
@@ -167,6 +182,9 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
             }
 
             collide(p, skeleton, radiusOf, hits, onImpulse)
+            // Nodes after the bones, so a prop that is inside both is pushed out of the limb
+            // first and only then out of the point that names a spot on it.
+            for (n in nodes) nodeCollide(p, n, hits, onImpulse)
             borders(p)
 
             if (p.velocity.length() < 40f) p.still += dt else p.still = 0f
@@ -323,6 +341,46 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
                 hits.add(Hit(p, bone, max(speed, MIN_HIT) * p.spec.force))
             }
             speed = 0f
+        }
+    }
+
+    /**
+     * A prop against one named point.
+     *
+     * The same overlap, the same restitution, the same contact throttle and the same impulse
+     * as a bone -- deliberately, and it is not a copy: it is the same code with a circle whose
+     * centre happens to come from the rig instead of from a capsule. A node that felt different
+     * from the limb it sits on would be a second kind of contact to explain.
+     */
+    private fun nodeCollide(
+        p: Prop,
+        node: NodePoint,
+        hits: MutableList<Hit>,
+        onImpulse: (Bone, Vec2, Float) -> Unit,
+    ) {
+        if (node.radius <= 0f) return
+        val speed = p.velocity.length()
+        val dx = p.position.x - node.at.x
+        val dy = p.position.y - node.at.y
+        val distance = hypot(dx, dy)
+        val gap = p.spec.radius + node.radius
+        if (distance >= gap) return
+        val normal = if (distance < 1e-3f) Vec2(0f, -1f) else Vec2(dx / distance, dy / distance)
+        if (!p.held) {
+            p.position = Vec2(node.at.x + normal.x * gap, node.at.y + normal.y * gap)
+            val into = p.velocity.x * normal.x + p.velocity.y * normal.y
+            if (into < 0f) {
+                p.velocity = p.velocity - normal * (into * (1f + RESTITUTION))
+            }
+            if (speed > IMPULSE_FLOOR) {
+                onImpulse(node.bone, normal * -1f, speed * p.spec.force * IMPULSE_GAIN)
+            }
+        }
+        val key = p.serial.toString() + "|" + node.name
+        val last = lastHit[key]
+        if (last == null || clock - last >= CONTACT_PERIOD) {
+            lastHit[key] = clock
+            hits.add(Hit(p, node.bone, max(speed, MIN_HIT) * p.spec.force, node.name))
         }
     }
 

@@ -1792,7 +1792,10 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
             return
         }
-        val ok = store.saveRig(folder.id, bones, skeletonView.rigLayers(), skeletonView.renames())
+        val ok = store.saveRig(
+            folder.id, bones, skeletonView.rigLayers(), skeletonView.renames(),
+            skeletonView.rigNodes(),
+        )
         Toast.makeText(
             this,
             getString(if (ok) R.string.rig_bones_saved else R.string.rig_save_failed),
@@ -1880,6 +1883,7 @@ class MainActivity : AppCompatActivity() {
 
         val depth = RigEdit.depths(bones)
         for (b in bones) box.addView(boneRow(folder, box, b, depth[b.name] ?: 0))
+        fillNodeList(box, bones)
 
         val footer = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         footer.layoutParams = LinearLayout.LayoutParams(
@@ -1903,6 +1907,198 @@ class MainActivity : AppCompatActivity() {
         clear.setOnClickListener { confirmKeepOnlyRoot() }
         footer.addView(clear)
         box.addView(footer)
+    }
+
+    /**
+     * The nodes, in the same list as the bones.
+     *
+     * They belong here rather than behind their own button: "这一节的指尖" is one thought, and a
+     * rig where the points are somewhere else is a rig where nobody remembers they exist.
+     */
+    private fun fillNodeList(box: LinearLayout, bones: List<BoneSpec>) {
+        val nodes = skeletonView.rigNodes()
+        box.addView(
+            label(getString(R.string.rig_node_list) + " (" + nodes.size + ")", 12f, INK, top = 16)
+        )
+        box.addView(label(getString(R.string.rig_node_hint), 10f, MUTED, top = 4, bottom = 6))
+        if (nodes.isEmpty()) box.addView(label(getString(R.string.rig_no_nodes), 10f, MUTED))
+
+        for (n in nodes) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            text.addView(label(n.name, 13f, INK))
+            val bone = bones.firstOrNull { it.name == n.bone }
+            val place = when {
+                bone == null -> "?"
+                RigEdit.placeOf(bone, n.at) == "tip" -> getString(R.string.rig_node_tip)
+                RigEdit.placeOf(bone, n.at) == "mid" -> getString(R.string.rig_node_mid)
+                else -> getString(R.string.rig_node_joint)
+            }
+            val worn = props.firstOrNull { it.id == n.prop }?.name
+            text.addView(
+                label(
+                    getString(R.string.rig_node_on) + " " + n.bone + " · " + place +
+                        " · r" + n.radius.toInt() +
+                        (worn?.let { " · " + it } ?: ""),
+                    10f, MUTED,
+                )
+            )
+            row.addView(text)
+
+            val edit = label(getString(R.string.rig_attributes), 11f, MUTED)
+            edit.setPadding(dp(7), dp(6), dp(7), dp(6))
+            edit.setOnClickListener { askNode(n) }
+            row.addView(edit)
+
+            val remove = label(getString(R.string.action_delete), 11f, MUTED)
+            remove.setPadding(dp(8), dp(6), dp(8), dp(6))
+            remove.setOnClickListener {
+                skeletonView.deleteNode(n.name)
+                refreshBoneList()
+            }
+            row.addView(remove)
+            box.addView(row)
+        }
+
+        val add = label(getString(R.string.rig_node_add), 12f, INK)
+        add.setPadding(dp(12), dp(8), dp(12), dp(8))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.setOnClickListener { askNode(null) }
+        box.addView(add)
+    }
+
+    /**
+     * One node: a name, a bone, which end of it, how big it is, and what it is wearing.
+     *
+     * The bone is picked off a list rather than typed, because a node whose bone does not exist
+     * is a name nothing can ever touch ("挂在 hand_L 上" is not something a person should have
+     * to spell correctly). The place is three chips, and it is stored as a DISTANCE so that a
+     * bone resized later takes its tip node along with it.
+     */
+    private fun askNode(existing: NodeSpec?) {
+        val bones = skeletonView.rigBones()
+        if (bones.isEmpty()) {
+            Toast.makeText(this, R.string.rig_bone_list_empty, Toast.LENGTH_SHORT).show()
+            return
+        }
+        var bone = existing?.bone ?: bones.first().name
+        var place = existing?.let { n -> bones.firstOrNull { it.name == n.bone }?.let { RigEdit.placeOf(it, n.at) } }
+            ?: "joint"
+        var prop = existing?.prop ?: ""
+
+        val nameInput = EditText(this).apply {
+            setText(existing?.name ?: RigEdit.freeNodeName(bones, skeletonView.rigNodes()))
+            setSelection(text.length)
+            hint = getString(R.string.rig_node_name)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        box.addView(nameInput)
+        box.addView(label(getString(R.string.rig_node_hint), 10f, MUTED, top = 6))
+
+        box.addView(label(getString(R.string.rig_node_bone), 11f, MUTED, top = 12, bottom = 6))
+        val boneChip = label(boneLabel(bone).ifEmpty { bone }, 12f, INK)
+        boneChip.setPadding(dp(12), dp(8), dp(12), dp(8))
+        boneChip.background = getDrawable(R.drawable.menu_item_idle)
+        boneChip.setOnClickListener {
+            pickList(
+                title = getString(R.string.rig_node_bone),
+                options = bones.map { it.name to (boneLabel(it.name).ifEmpty { it.name }) },
+                hint = "",
+                current = bone,
+            ) { id ->
+                bone = id
+                boneChip.text = boneLabel(id).ifEmpty { id }
+                true
+            }
+        }
+        box.addView(boneChip)
+
+        box.addView(label(getString(R.string.rig_node_place), 11f, MUTED, top = 12, bottom = 6))
+        val placeRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val placeViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "joint" to getString(R.string.rig_node_joint),
+            "mid" to getString(R.string.rig_node_mid),
+            "tip" to getString(R.string.rig_node_tip),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                place = id
+                paintChips(placeViews, listOf("joint", "mid", "tip"), { place })
+            }
+            placeViews.add(chip)
+            placeRow.addView(chip)
+        }
+        box.addView(placeRow)
+
+        val (radiusRow, radiusOf) = stepperRow(
+            getString(R.string.rig_node_radius), existing?.radius ?: 26f, 4f, 4f, 200f,
+        ) { it.toInt().toString() }
+        box.addView(radiusRow)
+        box.addView(label(getString(R.string.rig_node_radius_hint), 10f, MUTED, top = 2))
+
+        box.addView(label(getString(R.string.rig_node_prop), 11f, MUTED, top = 12, bottom = 6))
+        val propChip = label(
+            props.firstOrNull { it.id == prop }?.name ?: getString(R.string.rig_node_none), 12f, INK,
+        )
+        propChip.setPadding(dp(12), dp(8), dp(12), dp(8))
+        propChip.background = getDrawable(R.drawable.menu_item_idle)
+        propChip.setOnClickListener {
+            pickList(
+                title = getString(R.string.rig_node_prop),
+                options = listOf("" to getString(R.string.rig_node_none)) +
+                    props.map { it.id to it.name },
+                hint = "",
+                current = prop,
+            ) { id ->
+                prop = id
+                propChip.text = props.firstOrNull { it.id == id }?.name
+                    ?: getString(R.string.rig_node_none)
+                true
+            }
+        }
+        box.addView(propChip)
+        box.addView(label(getString(R.string.rig_node_prop_hint), 10f, MUTED, top = 4))
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) R.string.rig_node_new else R.string.rig_node_edit)
+            .setView(box)
+            .setPositiveButton(R.string.depth_save) { _, _ ->
+                val boneSpec = bones.firstOrNull { it.name == bone } ?: return@setPositiveButton
+                val name = nameInput.text.toString().trim()
+                    .ifEmpty { RigEdit.freeNodeName(bones, skeletonView.rigNodes()) }
+                val ok = skeletonView.saveNode(
+                    existing?.name, name, bone, RigEdit.placeAt(boneSpec, place),
+                    radiusOf(), prop,
+                )
+                if (!ok) Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                refreshBoneList()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+        paintChips(placeViews, listOf("joint", "mid", "tip"), { place })
     }
 
     private fun boneRow(
@@ -2823,6 +3019,9 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.logic_scope_local) to
                     (summoned?.let { boneNames(it) } ?: emptyList()).map {
                         Subjects.part(it) to getString(R.string.logic_subject_part, boneLabel(it))
+                    } +
+                    (summoned?.let { nodeNames(it) } ?: emptyList()).map {
+                        Subjects.part(it) to getString(R.string.logic_subject_part, it)
                     },
             )
             LogicFolder.PROPS -> listOf(
@@ -4276,12 +4475,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun askRulePart(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
-        val bones = summoned?.let { boneNames(it) } ?: emptyList()
+        val parts = summoned?.let { partNames(it) } ?: emptyList()
         val options = mutableListOf("" to getString(R.string.logic_pick_any_part))
-        for (b in bones) {
-            val zh = boneLabel(b)
-            options.add(b to (if (zh.isEmpty()) b else zh + "   " + b))
-        }
+        options.addAll(parts)
         pickList(
             title = getString(R.string.logic_pick_part),
             options = options,
@@ -4794,12 +4990,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickBoneName(title: String, current: String?, onPick: (String) -> Unit) {
-        val bones = summoned?.let { boneNames(it) } ?: emptyList()
+        val parts = summoned?.let { partNames(it) } ?: emptyList()
         val options = mutableListOf("" to getString(R.string.logic_pick_any_part))
-        for (b in bones) {
-            val zh = boneLabel(b)
-            options.add(b to (if (zh.isEmpty()) b else zh + "   " + b))
-        }
+        options.addAll(parts)
         pickList(title, options, "", current) { id ->
             onPick(id)
             true
@@ -4974,6 +5167,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun boneNames(folder: CharacterFolder): List<String> =
         CharacterSpec.parseOrNull(folder.specText())?.bones?.map { it.name }.orEmpty()
+
+    /**
+     * Everything a rule can name as a 部位: the bones, and the nodes on them.
+     *
+     * One list rather than two, because the question "who was hit" has one answer -- a node
+     * that names a fingertip is a better answer than the finger, not a different kind of thing.
+     * They are told apart in the label, which is the only place it matters.
+     */
+    private fun partNames(folder: CharacterFolder): List<Pair<String, String>> {
+        val spec = CharacterSpec.parseOrNull(folder.specText())
+        val bones = spec?.bones?.map { it.name }.orEmpty()
+        val out = bones.map { b ->
+            val zh = boneLabel(b)
+            b to (if (zh.isEmpty()) b else zh + "   " + b)
+        }.toMutableList()
+        for (n in spec?.nodes.orEmpty()) {
+            out.add(n.name to (getString(R.string.rig_node_list) + " · " + n.name))
+        }
+        return out
+    }
+
+    /** The nodes of the summoned character, for the places that need them by themselves. */
+    private fun nodeNames(folder: CharacterFolder): List<String> =
+        CharacterSpec.parseOrNull(folder.specText())?.nodes?.map { it.name }.orEmpty()
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).roundToInt()
 

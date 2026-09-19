@@ -46,6 +46,40 @@ data class BoneSpec(
     var grabbable: Boolean = true,
 )
 
+/**
+ * A point on a bone that the rules can name.
+ *
+ * A 部位 is a bone, and a bone is a whole limb: you cannot say "the tip of the middle finger"
+ * or "the joint at the shoulder" and have the rules do something about it. A node is that
+ * point. It has no length, no joint and nothing of its own to solve -- it is a name for a
+ * place on the figure, and everything it can do follows from being one:
+ *
+ *  * the world can feel it, so 被道具碰到 and 被点一下 can name it;
+ *  * a finger can take hold of it, which pulls the bone it sits on at exactly that spot;
+ *  * a rope or a nail can be tied to it, for the same reason;
+ *  * a rule can hide it, and hiding a node hides what is worn at it;
+ *  * and it can carry a prop, which is what "手里拿着东西" is.
+ *
+ * [at] is a distance along the bone from its JOINT, in canvas pixels, so 0 is the joint
+ * itself and the bone's own length is its tip -- the two ends the user asked for, and
+ * everything between them for free. It is stored as a number rather than as "head/tip"
+ * because a bone that is resized afterwards should move its tip node with it, not leave it
+ * hanging in the air where the old tip was.
+ */
+data class NodeSpec(
+    var name: String,
+    var bone: String,
+    var at: Float = 0f,
+    /**
+     * How near something has to be to touch it. A node has no length, so this is the whole of
+     * its size -- and it is deliberately its own number rather than the bone's: a fingertip
+     * sensor and a shoulder joint want to be felt from different distances.
+     */
+    var radius: Float = 26f,
+    /** A prop carried at this point, by id. Empty means nothing is worn here. */
+    var prop: String = "",
+)
+
 /** A limb the user can drag by its end, solved as a two-segment chain. */
 data class IkChainSpec(val upper: String, val lower: String, val bend: Float)
 
@@ -111,6 +145,8 @@ class CharacterSpec(
     val headHeight: Float,
     /** Mutable, and ordered parents-first: that is the order [buildSkeleton] requires. */
     val bones: MutableList<BoneSpec>,
+    /** Points on those bones the rules can name. See [NodeSpec]. Empty in older files. */
+    val nodes: MutableList<NodeSpec>,
     val ikChains: List<IkChainSpec>,
     /** Mutable: a bone that is added or deleted changes the draw order with it. */
     val layers: MutableList<LayerSpec>,
@@ -209,7 +245,14 @@ class CharacterSpec(
             if (parentBone != null) parentBone.attach(bone) else root = bone
         }
 
-        return Skeleton(root ?: error("character '" + id + "' has no root bone"))
+        val skeleton = Skeleton(root ?: error("character '" + id + "' has no root bone"))
+        // Nodes are handed over rather than rebuilt: they are names for places on the bones,
+        // and the bones are already here. A node whose bone was deleted comes along as a node
+        // pointing at nothing -- nodePoint answers the rig's origin for it, which is a place
+        // the rules can name and nothing can ever touch, and the editor is where that gets
+        // noticed. Dropping it silently would be the worse of the two.
+        skeleton.nodes = nodes
+        return skeleton
     }
 
     companion object {
@@ -325,6 +368,20 @@ class CharacterSpec(
                 )
             }.toMutableList()
 
+            // Absent in every file written before nodes existed, and that has to mean "none"
+            // rather than "work something out": there is nothing to derive a node from.
+            val nodesArr = o.optJSONArray("nodes")
+            val nodes = (0 until (nodesArr?.length() ?: 0)).map { i ->
+                val n = nodesArr!!.getJSONObject(i)
+                NodeSpec(
+                    name = n.getString("name"),
+                    bone = n.getString("bone"),
+                    at = n.optDouble("at", 0.0).toFloat(),
+                    radius = n.optDouble("radius", 26.0).toFloat(),
+                    prop = n.optString("prop", ""),
+                )
+            }.toMutableList()
+
             val chainsArr = o.optJSONArray("ikChains")
             val chains = (0 until (chainsArr?.length() ?: 0)).map { i ->
                 val c = chainsArr!!.getJSONObject(i)
@@ -395,6 +452,7 @@ class CharacterSpec(
                     if (it > 0f) it else rigSpan * HEAD_OF_FIGURE
                 },
                 bones = bones,
+                nodes = nodes,
                 ikChains = chains,
                 layers = layers,
                 centreX = num(o, "centreX", canvasW / 2f),

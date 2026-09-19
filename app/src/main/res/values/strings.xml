@@ -141,6 +141,27 @@
 
     <!-- 骨骼编辑器：加骨骼 / 改父级 / 删骨骼 -->
     <string name="rig_add_bone">＋ 加骨骼</string>
+
+    <!-- 骨骼节点：一根骨头上可以被规则叫出名字的一个点 -->
+    <string name="rig_node_list">节点</string>
+    <string name="rig_bone_list_empty">还没有骨骼，先加一根</string>
+    <string name="rig_node_hint">节点是骨头上一个点，不占长度。规则可以拿它当部位（被碰到 / 被点一下），绳子可以系在它上面，也能被隐藏/显示。被隐藏的节点不会被碰到。</string>
+    <string name="rig_node_add">＋ 加节点</string>
+    <string name="rig_node_new">新建节点</string>
+    <string name="rig_node_edit">改节点</string>
+    <string name="rig_node_name">节点名字</string>
+    <string name="rig_node_bone">挂在哪根骨头上</string>
+    <string name="rig_node_place">在骨头的哪一头</string>
+    <string name="rig_node_joint">关节</string>
+    <string name="rig_node_mid">中间</string>
+    <string name="rig_node_tip">末端</string>
+    <string name="rig_node_radius">判定半径</string>
+    <string name="rig_node_radius_hint">别的东西离它多近算碰到。节点没有长度，这个数就是它全部的大小。</string>
+    <string name="rig_node_prop">装一个道具</string>
+    <string name="rig_node_prop_hint">装上的道具会跟着这个点走：手里拿的东西、头上戴的东西。装了道具的节点画成蓝色。</string>
+    <string name="rig_node_none">（无）</string>
+    <string name="rig_node_on">挂在</string>
+    <string name="rig_no_nodes">还没有节点。加一个就有「指尖」「肩膀」这样叫得出名字的地方了。</string>
     <string name="rig_bone_list">骨骼列表</string>
     <string name="rig_bone_list_hint">缩进表示父子关系，上排是下排的父级。</string>
     <string name="rig_new_bone">新建骨骼</string>

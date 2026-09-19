@@ -26,6 +26,7 @@ import dev.atp.pet.engine.math.Transform
 import dev.atp.pet.engine.math.normalizeAngle
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
+import dev.atp.pet.engine.prop.NodePoint
 import dev.atp.pet.engine.prop.Prop
 import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
@@ -394,6 +395,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** When each peg last reported a contact, so a body resting on one is one event, not sixty. */
     private val pegHitAt = HashMap<String, Float>()
 
+    /**
+     * The named points on the body that a rule has switched off. See [NodeSpec].
+     *
+     * Kept apart from [broken], which is bone names and is handed to the renderer as such: a
+     * node has no artwork, so hiding one is the bench's business and nothing else's.
+     */
+    private val hiddenNodes = mutableSetOf<String>()
+
+    /** The prop each node is wearing, by node name. See [NodeSpec.prop]. */
+    private val worn = HashMap<String, Prop>()
+
     private var heldProp: Prop? = null
     /** Which finger is carrying the prop, so it follows that one and not the first. */
     private var propPointer = -1
@@ -654,6 +666,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         segmentBox = null
         ropeDraft = null
         pegHitAt.clear()
+        hiddenNodes.clear()
+        worn.clear()
         broken.clear()
         signals.clear()
         particles.clear()
@@ -866,6 +880,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         segmentBox = null
         ropeDraft = null
         pegHitAt.clear()
+        hiddenNodes.clear()
+        worn.clear()
         particles.clear()
         fluid?.clear()
         broken.clear()
@@ -1030,7 +1046,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 "break" -> {
                     val name = a.bone.ifEmpty { event?.part ?: "" }
                     if (name.isNotEmpty()) {
-                        broken.add(name)
+                        // A node and a bone are both names a rule can hide, so the one that
+                        // exists is the one that is hidden. They are kept in different places
+                        // because only the bone has artwork behind it.
+                        if (isNode(name)) hiddenNodes.add(name) else broken.add(name)
                         renderer?.hidden = broken
                         particles.burst("spark", pointOf(event), 12)
                     }
@@ -1038,7 +1057,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 "show" -> {
                     val name = a.bone.ifEmpty { event?.part ?: "" }
                     if (name.isNotEmpty()) {
-                        broken.remove(name)
+                        if (isNode(name)) hiddenNodes.remove(name) else broken.remove(name)
                         renderer?.hidden = broken
                     }
                 }
@@ -1395,13 +1414,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // mass, same swing, radius zero. See BoneSpec.collides.
                 { bone -> if (rag.isSolid(bone.name)) rag.colliderRadius(bone) else 0f },
                 { bone, dir, strength -> rag.impulse(bone, dir, strength) },
+                nodePoints(sk),
             )
             for (h in hits) {
-                fire(GameEvent(EventType.PROP_HIT, part = h.bone.name, value = h.value, prop = h.prop.spec.id))
+                fire(GameEvent(EventType.PROP_HIT, part = h.part, value = h.value, prop = h.prop.spec.id))
                 // The prop hears about it too: it hit something, and what it hit is the part.
                 fireTo(
                     Subjects.prop(h.prop.spec.id),
-                    GameEvent(EventType.IMPACT, part = h.bone.name, value = h.value, prop = h.prop.spec.id),
+                    GameEvent(EventType.IMPACT, part = h.part, value = h.value, prop = h.prop.spec.id),
                 )
             }
             // A prop that has just touched down. A transition, not a state: "on the floor" as
@@ -1470,6 +1490,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         attachRopes()
         pegPush()
         segmentPush()
+        wearProps()
     }
 
     /**
@@ -1771,7 +1792,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // Every part of the character is a subject, and it exists exactly as long as the
         // character does -- so a part is present whenever the bench is. The lookup below
         // filters this down to the parts somebody has actually given rules to.
-        skeleton?.let { sk -> for (bone in sk.bones) present.add(Subjects.part(bone.name)) }
+        skeleton?.let { sk ->
+            for (bone in sk.bones) present.add(Subjects.part(bone.name))
+            // A node is a part too, for the same reason a bone is: it is a thing the user named,
+            // and the rules about it belong to it. Names cannot collide -- RigEdit.nodeProblem
+            // refuses a node that shares a bone's name -- so one prefix is enough for both.
+            for (node in sk.nodes) if (node.name !in hiddenNodes) present.add(Subjects.part(node.name))
+        }
 
         // A subject that has just appeared gets its SPAWN, which is what a rule about "when
         // the candle appears" has been waiting for.
@@ -2174,6 +2201,58 @@ class PhysicsSandboxView @JvmOverloads constructor(
         return hypot(p.x - (a.x + abx * t), p.y - (a.y + aby * t))
     }
 
+    /** Is this the name of a node on the rig rather than of a bone? */
+    private fun isNode(name: String): Boolean = skeleton?.nodes?.any { it.name == name } == true
+
+    /**
+     * The props the body is wearing.
+     *
+     * A node with a prop on it is what "手里拿着东西" is, and the prop has to travel with the
+     * point: the node is asked where it is EVERY frame rather than the prop being pushed once,
+     * because a worn prop that lags a frame behind the hand looks like a prop that is being
+     * dragged along by a string.
+     *
+     * A worn prop is [Prop.planted]: nothing in the world moves it, no finger can take it and
+     * the body cannot feel it -- a sword that shoves its own hand every frame is a sword nobody
+     * can hold. It still pushes OTHER props out of the way, which is what makes swinging one
+     * do something, and hiding the node takes it off.
+     */
+    private fun wearProps() {
+        val sk = skeleton ?: return
+        val w = world ?: return
+        for (node in sk.nodes) {
+            if (node.prop.isEmpty()) continue
+            val existing = worn[node.name]?.takeIf { old -> w.live.any { it === old } }
+            if (node.name in hiddenNodes) {
+                if (existing != null) w.remove(existing)
+                worn.remove(node.name)
+                continue
+            }
+            // Straight into the world rather than through [spawn]: a prop that is WORN is not
+            // being placed by a finger, so a nail somebody hangs on a shoulder must not turn up
+            // in the waiting list asking to be driven.
+            val prop = existing ?: propSpecs.firstOrNull { it.id == node.prop }
+                ?.let { w.spawn(it, sk.nodePoint(node), Vec2.ZERO) }
+                ?: continue
+            prop.planted = true
+            prop.position = sk.nodePoint(node)
+            worn[node.name] = prop
+        }
+    }
+
+    /** The nodes as the world sees them: a place, a size, and the bone behind them. */
+    private fun nodePoints(sk: Skeleton): List<NodePoint> {
+        if (sk.nodes.isEmpty()) return emptyList()
+        return sk.nodes.mapNotNull { node ->
+            if (node.name in hiddenNodes || node.radius <= 0f) return@mapNotNull null
+            val bone = sk.find(node.bone) ?: return@mapNotNull null
+            // A part that collides = false is invisible to the world, and a node on it is part
+            // of that part: a sensor is not a way around the switch.
+            if (ragdoll?.isSolid(bone.name) == false) return@mapNotNull null
+            NodePoint(node.name, sk.nodePoint(node), node.radius, bone)
+        }
+    }
+
     /** Is the bench in the middle of being told where something goes? */
     private fun toolArmed(): Boolean =
         waitingPins.isNotEmpty() || waitingRopes.isNotEmpty() || waitingSegments.isNotEmpty() ||
@@ -2317,6 +2396,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         if (settings.liquid) drawFluid(canvas)
         drawCharacter(canvas, sk)
+        drawNodes(canvas, sk)
         drawDebris(canvas)
         drawProps(canvas)
         drawRopes(canvas, sk)
@@ -2424,6 +2504,31 @@ class PhysicsSandboxView @JvmOverloads constructor(
             canvas.drawLine(
                 nail.at.x - arm, nail.at.y + arm, nail.at.x + arm, nail.at.y - arm, worldPaint,
             )
+        }
+        worldPaint.style = Paint.Style.FILL
+        worldPaint.strokeWidth = 0f
+    }
+
+    /**
+     * The named points on the body.
+     *
+     * Drawn as the dot they are plus the circle they are felt at, because a node is the one
+     * thing on this bench whose size cannot be seen from its shape: the dot is where it is and
+     * the ring is how far away something can be and still touch it. A node a rule has hidden is
+     * not drawn at all, for the same reason it is not felt.
+     */
+    private fun drawNodes(canvas: Canvas, sk: Skeleton) {
+        if (sk.nodes.isEmpty()) return
+        worldPaint.style = Paint.Style.STROKE
+        for (node in sk.nodes) {
+            if (node.name in hiddenNodes) continue
+            val q = sk.nodePoint(node)
+            worldPaint.strokeWidth = 2f
+            worldPaint.color = 0x558A5A2B.toInt()
+            canvas.drawCircle(q.x, q.y, node.radius, worldPaint)
+            worldPaint.strokeWidth = 3f
+            worldPaint.color = if (node.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
+            canvas.drawCircle(q.x, q.y, 5f, worldPaint)
         }
         worldPaint.style = Paint.Style.FILL
         worldPaint.strokeWidth = 0f
@@ -3876,6 +3981,28 @@ class PhysicsSandboxView @JvmOverloads constructor(
             prop.beginDrag()
             return true
         }
+        // A node before the bone it sits on, so that "被点一下 · 指尖" is about the fingertip
+        // and not about the whole hand. The finger has to be ON it: a node that took the grab
+        // from a hand's width away would make the limb it is named after ungrabbable.
+        answer@ run {
+            val sk = skeleton ?: return@run
+            val node = sk.nodeAt(p) ?: return@run
+            if (node.name in hiddenNodes) return@run
+            val q = sk.nodePoint(node)
+            if (hypot(p.x - q.x, p.y - q.y) > node.radius + NODE_GRAB_SLACK) return@run
+            if (!rag.canGrab(node.bone)) return@run
+            heldBones[id] = node.bone
+            // The node's own offset, not the finger's projection: taking hold of a named point
+            // has to mean that point, or the pull is somewhere else every time.
+            heldOffsets[id] = node.at
+            heldTargets[id] = p
+            tapBone = node.name
+            tapX = x
+            tapY = y
+            tapAt = System.currentTimeMillis()
+            fire(GameEvent(EventType.GRAB, part = node.name))
+            return true
+        }
         // A part with grabbable = false is still there, still solid, still part of the
         // figure -- a finger simply goes through it, the way it goes through a prop it is
         // not allowed to pick up.
@@ -3979,6 +4106,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val SEGMENT_MAX_R = 48f
         /** How near an end a tap has to be to mean 复制. */
         private const val SEGMENT_END_REACH = 26f
+        /** A finger is fatter than a node: how much wider than one the grab is. */
+        private const val NODE_GRAB_SLACK = 10f
         private const val PIECE_PUSH = 10f
         private const val PIECE_PUSH_MAX = 90f
         private const val SHOT_SPEED = 2600f

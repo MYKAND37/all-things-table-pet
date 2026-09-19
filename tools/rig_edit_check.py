@@ -145,6 +145,49 @@ def problem(bones):
     return None
 
 
+def free_node_name(bones, nodes, prefix="node_"):
+    """节点名不能和骨骼重名：两者都是规则里的名字，重名就是同一个名字指两样东西。"""
+    taken = {b["name"] for b in bones} | {n["name"] for n in nodes}
+    n = 1
+    while (prefix + str(n)) in taken:
+        n += 1
+    return prefix + str(n)
+
+
+def node_problem(bones, nodes):
+    bone_names = {b["name"] for b in bones}
+    seen = set()
+    for n in nodes:
+        if not n["name"].strip():
+            return "有节点没有名字"
+        if n["name"] in seen:
+            return "节点重名：" + n["name"]
+        if n["name"] in bone_names:
+            return "节点「" + n["name"] + "」和骨骼重名了"
+        if n["bone"] not in bone_names:
+            return n["name"] + " 挂在不存在的骨骼「" + n["bone"] + "」上"
+        if n["radius"] <= 0:
+            return n["name"] + " 的判定半径是 0，永远不会被碰到"
+        seen.add(n["name"])
+    return None
+
+
+def place_at(bone, place):
+    """关节 / 中间 / 末端 存成**距离**：骨头以后改了长度，末端节点跟着走。"""
+    length = math.hypot(bone["tail"][0] - bone["head"][0], bone["tail"][1] - bone["head"][1])
+    return {"mid": length / 2.0, "tip": length}.get(place, 0.0)
+
+
+def place_of(bone, at):
+    length = math.hypot(bone["tail"][0] - bone["head"][0], bone["tail"][1] - bone["head"][1])
+    slack = max(1.0, length * 0.1)
+    if abs(at - length) <= slack:
+        return "tip"
+    if abs(at - length / 2.0) <= slack:
+        return "mid"
+    return "joint"
+
+
 # ------------------------------- helpers --------------------------------
 
 def spec_dicts(bones):
@@ -415,6 +458,39 @@ def main():
     # only worked on one side of zero would be a sign bug the finger would never explain.
     report("the swap is about order, not about sign",
            limits(-90.0, -170.0) == (-170.0, -90.0))
+
+    print("\n节点：名字、地方、和半径")
+    rig = spec_dicts(base)
+    bone = rig[0]
+    report("关节就是 0", place_at(bone, "joint") == 0.0)
+    report("末端是这根骨头的长度",
+           abs(place_at(bone, "tip") - math.hypot(bone["tail"][0] - bone["head"][0],
+                                                  bone["tail"][1] - bone["head"][1])) < 1e-9)
+    report("中间是一半", place_at(bone, "mid") == place_at(bone, "tip") / 2.0)
+    report("三个地方各自认得出来",
+           [place_of(bone, place_at(bone, p)) for p in ("joint", "mid", "tip")] ==
+           ["joint", "mid", "tip"])
+    # 容差是骨长的十分之一：手指拖出来的节点不会正好落在中点上，而"你不在中点上"
+    # 比"你在中间"更没用。
+    report("稍微偏一点还算在中间",
+           place_of(bone, place_at(bone, "mid") + place_at(bone, "tip") * 0.05) == "mid")
+
+    good = [{"name": "finger_tip", "bone": bone["name"], "at": 0.0, "radius": 26.0}]
+    report("一个正常的节点没有问题", node_problem(rig, good) is None)
+    report("挂在不存在的那根骨头上不行",
+           node_problem(rig, [{"name": "x", "bone": "nosuch", "at": 0.0, "radius": 26.0}]) is not None)
+    report("和骨骼重名不行（同一个名字会指两样东西）",
+           node_problem(rig, [{"name": bone["name"], "bone": bone["name"], "at": 0.0,
+                               "radius": 26.0}]) is not None)
+    report("两个节点重名不行",
+           node_problem(rig, good + [{"name": "finger_tip", "bone": bone["name"], "at": 0.0,
+                                      "radius": 26.0}]) is not None)
+    report("半径 0 不行：那是一个永远碰不到的节点",
+           node_problem(rig, [{"name": "x", "bone": bone["name"], "at": 0.0,
+                               "radius": 0.0}]) is not None)
+    report("新节点的名字会绕开骨骼和已有的节点",
+           free_node_name(rig, [{"name": "node_1"}]) not in
+           {b["name"] for b in rig} | {"node_1"})
 
     print("")
     if FAILURES:

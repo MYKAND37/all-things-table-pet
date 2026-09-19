@@ -7,6 +7,7 @@ import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.prop.PropSpecs
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
+import dev.atp.pet.engine.skeleton.NodeSpec
 import dev.atp.pet.engine.skeleton.RigEdit
 import dev.atp.pet.engine.skeleton.SwapRuleSpec
 import org.json.JSONArray
@@ -273,9 +274,11 @@ class CharacterStore(private val context: Context) {
         bones: List<BoneSpec>,
         backToFront: List<String>,
         renames: Map<String, String> = emptyMap(),
+        nodes: List<NodeSpec> = emptyList(),
     ): Boolean {
         if (bones.isEmpty()) return false
         if (RigEdit.problem(bones) != null) return false
+        if (RigEdit.nodeProblem(bones, nodes) != null) return false
         val folder = folder(id) ?: return false
         // A bone missing from the list has been deleted — unless it was renamed, in which
         // case the name it used to have is the one that is missing.
@@ -325,6 +328,23 @@ class CharacterStore(private val context: Context) {
                 arr.put(o)
             }
             root.put("bones", arr)
+
+            // Nodes are written WHOLE rather than carried over field by field like a bone:
+            // there is nothing in the file a node has that the editor does not show, so a
+            // node that is not in the list is a node somebody deleted -- and the list is the
+            // only place that can say that.
+            val nodesArr = JSONArray()
+            for (n in nodes) {
+                nodesArr.put(
+                    JSONObject()
+                        .put("name", n.name)
+                        .put("bone", n.bone)
+                        .put("at", n.at.toDouble())
+                        .put("radius", n.radius.toDouble())
+                        .put("prop", n.prop)
+                )
+            }
+            root.put("nodes", nodesArr)
 
             val live = bones.map { it.name }.toSet()
             val order = backToFront.filter { it in live } +
