@@ -2678,6 +2678,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * same argument holds twice as hard -- 9.0 to 1000 linearly would put everything above
      * 100 in the last 9% of the track.
      */
+    private fun rateText(): String =
+        if (jitterBone == null) "--" else "%.0f%%".format(jitterRate)
+
+    /** Degrees, because that is the unit the diagnosis was done in: 8.5944, not 0.15. */
+    private fun ampText(): String =
+        if (jitterBone == null) "--" else "%.2f°".format(Math.toDegrees(jitterAmp.toDouble()))
+
+    /** One phase's contribution this frame, signed, in degrees like every other number here. */
+    private fun phaseText(now: Float): String =
+        if (jitterBone == null) "--" else "%+.2f°".format(Math.toDegrees(now.toDouble()))
+
+    /** The same phase's sign change rate over the window, a percentage like the header's. */
+    private fun phaseRateText(rate: Float): String =
+        if (jitterBone == null) "--" else "%.0f%%".format(rate)
+
     private fun tuneRow(
         canvas: Canvas, box: RectF, y: Float, label: String, value: String,
         right: Float = box.right - tunePad,
