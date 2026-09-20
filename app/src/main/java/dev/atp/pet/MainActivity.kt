@@ -3267,6 +3267,17 @@ class MainActivity : AppCompatActivity() {
             // fork downwards, so "below" is what the picture means.
             for ((bi, branch) in rule.branches.withIndex()) {
                 val bRow = mutableListOf<LogicGraphView.Node>()
+                // A branch with a 当 of its own gets a WHEN box like any other detector; one
+                // that hangs off the group's shows the fork's own label instead.
+                if (branch.ownDetector) {
+                    val where = if (branch.part.isEmpty()) "" else " · " + partText(branch.part)
+                    bRow.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.WHEN,
+                            listOf(EventType.of(branch.on).label + where), -1,
+                        )
+                    )
+                }
                 bRow.add(
                     LogicGraphView.Node(
                         LogicGraphView.Node.ELSE,
@@ -3274,7 +3285,7 @@ class MainActivity : AppCompatActivity() {
                         -1,
                     )
                 )
-                for ((ai, a) in branch.withIndex()) {
+                for ((ai, a) in branch.actions.withIndex()) {
                     bRow.add(
                         LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai)
                     )
@@ -3593,7 +3604,10 @@ class MainActivity : AppCompatActivity() {
         ) { addBranch(index) }
         for ((bi, b) in rule.branches.withIndex()) {
             row(
-                getString(R.string.logic_branch) + " " + (bi + 2) + " · " + b.size + " 个动作"
+                getString(R.string.logic_branch) + " " + (bi + 2) + " · " +
+                    (if (b.ownDetector) getString(R.string.logic_when) + EventType.of(b.on).label
+                    else getString(R.string.logic_branch_same_when)) +
+                    " · " + b.actions.size + " 个动作"
             ) { askBranch(index, bi) }
         }
         if (rule.branches.isNotEmpty()) {
@@ -5546,13 +5560,13 @@ class MainActivity : AppCompatActivity() {
         if (branch >= 0 && !isElse) {
             val branches = rule.branches.toMutableList()
             if (branch >= branches.size) return
-            val list = branches[branch].toMutableList()
+            val list = branches[branch].actions.toMutableList()
             if (actionIndex >= 0 && actionIndex < list.size) {
                 list[actionIndex] = action
             } else {
                 list.add(action)
             }
-            branches[branch] = list
+            branches[branch] = branches[branch].copy(actions = list)
             putRule(index, rule.copy(branches = branches))
             return
         }
@@ -5572,8 +5586,40 @@ class MainActivity : AppCompatActivity() {
     private fun addBranch(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val branches = rule.branches.toMutableList()
-        branches.add(listOf(ActionSpec("say", text = "……")))
+        // A new branch hangs off the group's 当 until somebody gives it one of its own: a branch
+        // that arrives already needing to be told WHEN would be a dialog nobody asked for.
+        branches.add(BranchSpec(actions = listOf(ActionSpec("say", text = "……"))))
         putRule(index, rule.copy(branches = branches))
+    }
+
+    /** 分支自己的当: the event this branch answers, or empty for "同一个当". */
+    private fun askBranchEvent(index: Int, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val b = rule.branches.getOrNull(branch) ?: return
+        val options = mutableListOf("" to getString(R.string.logic_branch_same_when))
+        options.addAll(EventType.values().map { it.id to it.label })
+        pickList(
+            title = getString(R.string.logic_branch_when),
+            options = options,
+            hint = getString(R.string.logic_branch_when_hint),
+            current = b.on,
+        ) { id ->
+            val branches = rule.branches.toMutableList()
+            branches[branch] = b.copy(on = id)
+            putRule(index, rule.copy(branches = branches))
+            true
+        }
+    }
+
+    /** 分支的部位: which part this branch's own detector listens to. */
+    private fun askBranchPart(index: Int, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val b = rule.branches.getOrNull(branch) ?: return
+        pickBoneName(getString(R.string.logic_pick_part), b.part) { id ->
+            val branches = rule.branches.toMutableList()
+            branches[branch] = b.copy(part = id)
+            putRule(index, rule.copy(branches = branches))
+        }
     }
 
     private fun removeBranch(index: Int, branch: Int) {
@@ -5593,7 +5639,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun askBranch(index: Int, branch: Int) {
         val rule = logicRules.getOrNull(index) ?: return
-        val list = rule.branches.getOrNull(branch) ?: return
+        val b = rule.branches.getOrNull(branch) ?: return
+        val list = b.actions
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         box.addView(
             label(
@@ -5601,6 +5648,43 @@ class MainActivity : AppCompatActivity() {
                 11f, MUTED, bottom = 6,
             )
         )
+        // 分支自己的当 + 部位: a branch is a line with its own trigger, and this is where it says
+        // so. Both rows are on top of the actions because that is the order they happen in.
+        val whenRow = label(
+            getString(R.string.logic_branch_when) + "：" +
+                if (b.ownDetector) EventType.of(b.on).label
+                else getString(R.string.logic_branch_same_when),
+            13f, INK,
+        )
+        whenRow.setPadding(dp(12), dp(11), dp(12), dp(11))
+        whenRow.background = getDrawable(R.drawable.menu_item_idle)
+        whenRow.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        whenRow.setOnClickListener {
+            askBranchEvent(index, branch)
+            dialog.dismiss()
+        }
+        box.addView(whenRow)
+
+        val partRow = label(
+            getString(R.string.logic_pick_part) + "：" +
+                if (b.part.isEmpty()) getString(R.string.logic_pick_any_part) else partText(b.part),
+            13f, INK,
+        )
+        partRow.setPadding(dp(12), dp(11), dp(12), dp(11))
+        partRow.background = getDrawable(R.drawable.menu_item_idle)
+        partRow.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        partRow.setOnClickListener {
+            askBranchPart(index, branch)
+            dialog.dismiss()
+        }
+        if (b.ownDetector) box.addView(partRow)
+
         for ((ai, a) in list.withIndex()) {
             val view = label(
                 getString(R.string.logic_module_action) + "：" + actionText(a), 13f, INK,
@@ -5627,11 +5711,12 @@ class MainActivity : AppCompatActivity() {
             editingBranch = -1
         }
         box.addView(add)
-        AlertDialog.Builder(this)
+        val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.logic_branch) + " " + (branch + 2))
             .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
-            .show()
+            .create()
+        dialog.show()
     }
 
     private fun pickStat(title: String, onPick: (String) -> Unit) {

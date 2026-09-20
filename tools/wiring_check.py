@@ -209,6 +209,7 @@ def main():
         ("粒子图案", "particle_draw"),
         ("绳子图案", "prop_rope_draw"),
         ("并行分支", "logic_branch"),
+        ("分支自己的当", "logic_branch_when"),
         ("沙盒放道具", "sandbox_props"),
         ("加骨骼", "rig_add_bone"),
         ("骨骼列表", "rig_bone_list"),

@@ -110,18 +110,30 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         // The rules that have FIRED during this one event. See fire() for why it is filled in
         // there and not when a rule is considered.
         val ran = mutableSetOf<Int>()
+        // 分支 with a detector of their own, once each per event: they are not rules, so `ran`
+        // does not cover them, and two listeners for one event would otherwise fire twice.
+        val branchRan = mutableSetOf<Pair<Int, Int>>()
         for ((index, rule) in spec.rules.withIndex()) {
-            if (rule.on != event.type.id) continue
-            if (!event.touches(rule.part)) continue
-            // WHICH prop or particle. Two rules can otherwise be identical on the screen and
-            // behave differently for reasons nobody can see. See RuleSpec.about.
-            if (!event.aboutIs(rule.about)) continue
-            // No grouping here any more: a 并行组 IS a rule with branches, and the forking
-            // happens inside fire() where the rule's own actions are known. What used to be
-            // here was a name shared between rules that rolled once among themselves, and it
-            // could not have a detector or an executor of its own -- which is exactly what the
-            // owner said was wrong with it.
-            out.addAll(fire(index, rule, ran))
+            // The rule's own 当, and the branches that hang off it, are fired inside fire().
+            //
+            // The branches that carry a detector of their own are checked in the SAME pass but
+            // OUTSIDE those filters, and that is the whole point of them: they are waiting for
+            // their own event, so a rule whose 当 is something else entirely must not be what
+            // decides whether they are looked at.
+            val heard = rule.on == event.type.id &&
+                event.touches(rule.part) &&
+                // WHICH prop or particle. Two rules can otherwise be identical on the screen
+                // and behave differently for reasons nobody can see. See RuleSpec.about.
+                event.aboutIs(rule.about)
+            if (heard) out.addAll(fire(index, rule, ran))
+            for ((bi, branch) in rule.branches.withIndex()) {
+                if (!branch.ownDetector) continue
+                if (branch.on != event.type.id) continue
+                if (!event.touches(branch.part)) continue
+                if (!event.aboutIs(branch.about)) continue
+                if (!branchRan.add(index to bi)) continue
+                out.addAll(branchActions(index, rule, bi))
+            }
         }
         return out
     }
@@ -177,8 +189,31 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         // not a second kind of thing.
         log("  规则 " + (index + 1) + " → 并行 " + (rule.branches.size + 1) + " 支")
         val out = follow(rule.actions, ran).toMutableList()
-        for (branch in rule.branches) out.addAll(follow(branch, ran))
+        for ((bi, branch) in rule.branches.withIndex()) {
+            // A branch with its own 当 is not driven by this one; it is waiting for its own
+            // event and resolve() will hand it over when that arrives.
+            if (branch.ownDetector) continue
+            out.addAll(follow(branch.actions, ran))
+        }
         return out
+    }
+
+    /**
+     * One 并行分支's executor, for a branch that carries its own detector.
+     *
+     * It is the rule's 冷却 and 一次 that apply, not the branch's own: a group is one thing that
+     * happens, and two executors of it getting out of step with each other is not a feature
+     * anybody asked for. Nothing else of the rule is checked -- the branch said WHEN, and the
+     * event has already matched it.
+     */
+    private fun branchActions(index: Int, rule: RuleSpec, branch: Int): List<ActionSpec> {
+        val last = lastFired[index]
+        if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) return emptyList()
+        if (rule.once && index in firedOnce) return emptyList()
+        lastFired[index] = clock
+        if (rule.once) firedOnce.add(index)
+        log("  规则 " + (index + 1) + " 的分支 " + (branch + 2) + " →")
+        return follow(rule.branches[branch].actions, mutableSetOf(index))
     }
 
     /**

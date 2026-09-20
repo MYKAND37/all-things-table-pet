@@ -270,6 +270,29 @@ data class ActionSpec(
  * is resting on the character — from firing sixty times a second. [once] is for the things
  * that should happen exactly once in a life, like dying.
  */
+/**
+ * One 并行分支: its own detector, and the executor that answers it.
+ *
+ * 「并行逻辑也有完整的侦测器和执行器」, and then 「分支没有侦测器，加上」: a branch is not just a
+ * second action list hanging off the group's 当, it is a LINE of its own -- its own trigger,
+ * beside the group's. Two triggers with their lines drawn parallel is what the owner asked for
+ * at the very beginning, and a branch that cannot say WHEN is only half of that.
+ *
+ * An empty [on] means "同一个当": the branch fires with the group's detector, which is what a
+ * branch that has not been given one should do. Set it and the branch fires on THAT event
+ * instead -- the group's own 当 no longer reaches it, because a line with its own trigger is
+ * not also driven by somebody else's.
+ */
+data class BranchSpec(
+    val on: String = "",
+    val part: String = "",
+    val about: String = "",
+    val actions: List<ActionSpec> = emptyList(),
+) {
+    /** Does this branch have a detector of its own, or does it hang off the group's? */
+    val ownDetector: Boolean get() = on.isNotEmpty()
+}
+
 data class RuleSpec(
     val on: String,
     val part: String,
@@ -313,7 +336,7 @@ data class RuleSpec(
      * [elseActions] is deliberately NOT forked: 否则 is the path where the conditions did not
      * hold, and there is nothing to fork from a detector that did not fire.
      */
-    val branches: List<List<ActionSpec>> = emptyList(),
+    val branches: List<BranchSpec> = emptyList(),
 )
 
 /** What a rule can do, with the parameter the editor has to ask for. */
@@ -589,7 +612,21 @@ class LogicSpec(
                     },
                     actions = actionsOf(actArr),
                     branches = (0 until (branchArr?.length() ?: 0)).map { k ->
-                        actionsOf(branchArr!!.getJSONArray(k))
+                        // A bare array is how branches were written before they could have a
+                        // detector of their own: it means "同一个当", and files in that shape
+                        // have to keep working.
+                        val raw = branchArr!!.get(k)
+                        if (raw is JSONArray) {
+                            BranchSpec(actions = actionsOf(raw))
+                        } else {
+                            val b = branchArr.getJSONObject(k)
+                            BranchSpec(
+                                on = b.optString("on", ""),
+                                part = b.optString("part", ""),
+                                about = b.optString("about", ""),
+                                actions = actionsOf(b.optJSONArray("then")),
+                            )
+                        }
                     },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
                     once = r.optBoolean("once", false),
@@ -676,7 +713,21 @@ class LogicSpec(
                 }
                 val acts = actionJson(r.actions)
                 val branches = JSONArray()
-                for (b in r.branches) branches.put(actionJson(b))
+                for (b in r.branches) {
+                    // A branch with no detector of its own stays a bare array: it is an
+                    // executor, and saying "when: nothing" in the file would be noise.
+                    if (!b.ownDetector && b.part.isEmpty() && b.about.isEmpty()) {
+                        branches.put(actionJson(b.actions))
+                    } else {
+                        branches.put(
+                            JSONObject()
+                                .put("on", b.on)
+                                .put("part", b.part)
+                                .apply { if (b.about.isNotEmpty()) put("about", b.about) }
+                                .put("then", actionJson(b.actions))
+                        )
+                    }
+                }
                 val elses = actionJson(r.elseActions)
                 rules.put(
                     JSONObject()

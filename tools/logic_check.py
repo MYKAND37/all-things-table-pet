@@ -325,8 +325,25 @@ class Engine:
         # 并行：这一个侦测器岔开的每一支都执行，按写下的顺序。规则自己的「就」是第一支。
         out = list(self.follow(rule.get("then", []), ran))
         for b in branches:
-            out.extend(self.follow(b, ran))
+            # 有自己的当的那一支不归这里管：它等自己的事件，resolve() 会交给它。
+            if isinstance(b, dict) and b.get("on"):
+                continue
+            out.extend(self.follow(b.get("actions", []) if isinstance(b, dict) else b, ran))
         return out
+
+    def branch_actions(self, index, rule, branch):
+        """带自己的当的分支的执行器。用的是**规则自己的**冷却和一次：一个组是一件事，
+        两个执行器各走各的节奏不是谁要的功能。"""
+        last = self.last_fired.get(index)
+        cd = rule.get("cooldown", 0.0)
+        if cd > 0 and last is not None and self.clock - last < cd:
+            return []
+        if rule.get("once") and index in self.fired_once:
+            return []
+        self.last_fired[index] = self.clock
+        if rule.get("once"):
+            self.fired_once.add(index)
+        return self.follow(rule["branches"][branch]["actions"], {index})
 
     def follow(self, actions, ran):
         """跑一串动作，并追它末尾的跳转。"""
@@ -347,16 +364,30 @@ class Engine:
         out = []
         # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
         ran = set()
+        # 带自己的当的分支：它们不是规则，ran 管不到，两个监听者会各响一次。
+        branch_ran = set()
         for index, rule in enumerate(self.spec["rules"]):
-            if rule.get("on") != event.get("type"):
-                continue
-            if not self.touches(event, rule.get("part", "")):
-                continue
-            if not self.about_is(event, rule.get("about", "")):
-                continue
-            # 这里不再有分组：并行组**就是**一条带分支的规则，岔开发生在 fire() 里，
-            # 因为只有那里知道这条规则自己的动作是什么。
-            out.extend(self.fire(index, rule, ran))
+            # 规则自己的「当」和挂在它上面的分支在 fire() 里执行；**带自己的当**的分支在
+            # 同一趟里、但在这些过滤**之外**检查 —— 那正是它们的意义：它们等的是自己的
+            # 事件，所以"这条规则的当是别的东西"不能决定它们会不会被看一眼。
+            heard = (rule.get("on") == event.get("type")
+                     and self.touches(event, rule.get("part", ""))
+                     and self.about_is(event, rule.get("about", "")))
+            if heard:
+                out.extend(self.fire(index, rule, ran))
+            for bi, branch in enumerate(rule.get("branches", [])):
+                if not isinstance(branch, dict) or not branch.get("on"):
+                    continue
+                if branch["on"] != event.get("type"):
+                    continue
+                if not self.touches(event, branch.get("part", "")):
+                    continue
+                if not self.about_is(event, branch.get("about", "")):
+                    continue
+                if (index, bi) in branch_ran:
+                    continue
+                branch_ran.add((index, bi))
+                out.extend(self.branch_actions(index, rule, bi))
         return out
 
     def handle(self, etype, part="", value=0.0, prop=""):
@@ -1037,6 +1068,31 @@ def main():
     ]})
     report("没有分支的规则和以前一模一样",
            [a.get("text") for a in plain.handle("tick")] == ["A"])
+
+    # 分支自己的当：一条有自己侦测器的分支是一条自己的线，等它自己的事件。
+    both = Engine({"stats": [], "states": [], "rules": [{
+        "on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "组的就"}],
+        "branches": [
+            {"on": "click", "part": "", "actions": [{"kind": "say", "text": "点它"}]},
+            [{"kind": "say", "text": "跟组"}],
+        ],
+    }]})
+    out = both.handle("tick")
+    report("带自己的当的分支不被组的当带动",
+           [a.get("text") for a in out] == ["组的就", "跟组"], str([a.get("text") for a in out]))
+    out = both.handle("click")
+    report("它自己的事件来了才响", [a.get("text") for a in out] == ["点它"],
+           str([a.get("text") for a in out]))
+    # 分支的部位也是它自己的侦测器的一部分。
+    part = Engine({"stats": [], "states": [], "rules": [{
+        "on": "tick", "part": "", "if": [], "then": [],
+        "branches": [{"on": "click", "part": "hand_L", "actions": [{"kind": "say", "text": "手"}]}],
+    }]})
+    report("分支部位不对就不响",
+           part.resolve({"type": "click", "part": "hand_R", "value": 0.0, "prop": ""}) == [])
+    report("部位对了才响",
+           [a.get("text") for a in
+            part.resolve({"type": "click", "part": "hand_L", "value": 0.0, "prop": ""})] == ["手"])
 
     # 一个没响的侦测器上挂不了分支：条件不成立时走的是「否则」，分支一条都不跑。
     blocked = Engine({"stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
