@@ -28,6 +28,7 @@ import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.logic.ActionKind
 import dev.atp.pet.engine.logic.ActionSpec
+import dev.atp.pet.engine.logic.BranchSpec
 import dev.atp.pet.engine.logic.CompareOp
 import dev.atp.pet.engine.logic.ConditionSpec
 import dev.atp.pet.engine.logic.Joins
@@ -5642,6 +5643,13 @@ class MainActivity : AppCompatActivity() {
         val b = rule.branches.getOrNull(branch) ?: return
         val list = b.actions
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        // The dialog exists BEFORE its rows do, because the rows close over it: choosing a 当 or
+        // a 部位 reopens the branch with the new answer, and that means dismissing this one.
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.logic_branch) + " " + (branch + 2))
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
         box.addView(
             label(
                 getString(R.string.logic_branch_row_hint, branch + 2, rule.branches.size + 1),
@@ -5711,11 +5719,6 @@ class MainActivity : AppCompatActivity() {
             editingBranch = -1
         }
         box.addView(add)
-        val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.logic_branch) + " " + (branch + 2))
-            .setView(scrolling(box))
-            .setNegativeButton(R.string.action_close, null)
-            .create()
         dialog.show()
     }
 
