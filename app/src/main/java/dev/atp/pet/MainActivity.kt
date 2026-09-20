@@ -2696,8 +2696,11 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.prop_force), existing?.force ?: 1f, 0.25f, 0.25f, 5f,
         ) { "%.2f".format(it) }
         val (ropeRow, ropeOf) = stepperRow(
-            getString(R.string.prop_rope), existing?.ropeLength ?: 420f, 40f, 80f, 2000f,
-        ) { it.toInt().toString() }
+            getString(R.string.prop_rope), existing?.ropeLength ?: 0f, 100f, 0f, 3000f,
+        ) { if (it <= 0f) getString(R.string.prop_rope_auto) else it.toInt().toString() }
+        val (elasticRow, elasticOf) = stepperRow(
+            getString(R.string.prop_elastic), existing?.elastic ?: 1f, 0.2f, 0.2f, 3f,
+        ) { "%.1f×".format(it) }
 
         // 拖尾：拖着一个「持续使用」的道具走，身后留下的图案。画一个就是画一笔 ——
         // 用户画的是**一小段图案**，它沿着路径重复贴、渐淡。
@@ -2744,8 +2747,11 @@ class MainActivity : AppCompatActivity() {
                     hintView.text = option.hint
                     // The rope length only means anything for a stake, and a row that is
                     // always there but usually ignored is a row people stop reading.
-                    ropeRow.visibility =
-                        if (option == PropKind.ANCHOR) View.VISIBLE else View.GONE
+                    // 绳长和弹性只对绳子有意义: a row that is always there but usually ignored
+                    // is a row people stop reading.
+                    val rope = option == PropKind.ROPE
+                    ropeRow.visibility = if (rope) View.VISIBLE else View.GONE
+                    elasticRow.visibility = if (rope) View.VISIBLE else View.GONE
                     paintChips(chipViews, PropKind.values().map { it.id }, { kind })
                 }
                 chipViews.add(chip)
@@ -2757,6 +2763,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(radiusRow)
         box.addView(forceRow)
         box.addView(ropeRow)
+        box.addView(elasticRow)
+        box.addView(label(getString(R.string.prop_elastic_hint), 10f, MUTED, top = 2))
         // Moved up next to the kind for the same reason: at the bottom of a form it was off the
         // screen, and a New prop has no id yet -- the row in 道具管理 is the one that always works.
         box.addView(trailLabel)
@@ -2781,6 +2789,7 @@ class MainActivity : AppCompatActivity() {
                         gravityScale = existing?.gravityScale ?: 1f,
                         transient = existing?.transient ?: false,
                         ropeLength = ropeOf(),
+                        elastic = elasticOf(),
                     )
                 )
                 store.saveProps(props)
@@ -2789,7 +2798,9 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
         paintChips(chipViews, PropKind.values().map { it.id }, { kind })
-        ropeRow.visibility = if (kind == PropKind.ANCHOR.id) View.VISIBLE else View.GONE
+        val ropeKind = kind == PropKind.ROPE.id
+        ropeRow.visibility = if (ropeKind) View.VISIBLE else View.GONE
+        elasticRow.visibility = if (ropeKind) View.VISIBLE else View.GONE
     }
 
     /**
@@ -2814,6 +2825,7 @@ class MainActivity : AppCompatActivity() {
         )
         box.addView(board)
         box.addView(label(getString(R.string.prop_trail_board_hint), 10f, MUTED, top = 8, bottom = 6))
+        paintPaletteRow(board, 0xFF8A5A2B.toInt(), box)
 
         val widthRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         var width = 8f
@@ -2904,6 +2916,7 @@ class MainActivity : AppCompatActivity() {
         )
         box.addView(board)
         box.addView(label(getString(R.string.prop_rope_hint), 10f, MUTED, top = 8, bottom = 6))
+        paintPaletteRow(board, 0xFF8A6B4A.toInt(), box)
 
         val widthRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         var width = 12f
@@ -4739,6 +4752,34 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
+    }
+
+    /**
+     * 颜色, for a board: the kind's own colour first, then a row of the usual ones.
+     *
+     * First because "the same as it already is" is the commonest answer, and the row is shared
+     * by all three boards (particles, trails, ropes) so that picking a colour looks the same
+     * wherever you are picking it.
+     */
+    private fun paintPaletteRow(board: PaintBoardView, first: Int, box: LinearLayout) {
+        val colours = listOf(first) + PAINT_COLOURS
+        var colour = first
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val views = mutableListOf<View>()
+        for (c in colours) {
+            val view = swatch(c, 26)
+            view.setOnClickListener {
+                colour = c
+                board.colour = c
+                // 挑了颜色就是离开橡皮: a brush that is still erasing does nothing with a colour.
+                board.erasing = false
+                paintSwatches(views, colours, colour)
+            }
+            views.add(view)
+            row.addView(view)
+        }
+        box.addView(row)
+        paintSwatches(views, colours, colour)
     }
 
     /** The colours a board offers, after the kind's own. */

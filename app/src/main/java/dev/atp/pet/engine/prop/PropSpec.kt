@@ -20,7 +20,6 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
     DEVICE("device", "装置", "放在桌上不动，角色碰到才触发"),
     THROW("throw", "投掷", "拖起来甩出去，砸到哪算哪"),
     SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地"),
-    ANCHOR("anchor", "锚点", "放在桌上不动，角色的部位碰到就被拴住；把锚点拿起来就松开"),
     PIN("pin", "钉子", "点一下钉住：点空白处钉在桌上，点部位就把部位钉在那儿；再点一下拔掉"),
     ROPE("rope", "绳子", "先画一段绳子的样子，再点两个点：点空白处=锚在桌上，点部位=系在那根骨头上。绳子会垂、会摆，拉直了拽得动身体；点绳子取下");
 
@@ -30,6 +29,10 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
             // saved as one is a rope now rather than a hammer: the file said "rope", and 1.11.7
             // changed what a rope is, not what the prop was for.
             "segment" -> ROPE
+            // The old 锚点 was a stake that tied itself to whatever walked into it. It is gone
+            // too, and for the same reason a file that names it has to land somewhere sensible:
+            // a rope is the thing that holds a body now, and it is placed by pointing.
+            "anchor" -> ROPE
             else -> values().firstOrNull { it.id == id } ?: THROW
         }
 
@@ -65,8 +68,16 @@ data class PropSpec(
     val gravityScale: Float = 1f,
     /** Bullets and other spawned things clean themselves up. Placed props never do. */
     val transient: Boolean = false,
-    /** 锚点专用：绳子有多长。身体在这个半径里自由活动，超了就被拉回来。 */
-    val ropeLength: Float = 420f,
+    /**
+     * 绳子专用：绳子有多长。0 表示"照着两个锚点的距离来"（自动长出 18% + 20px，这样它才垂
+     * 得下去）。写了数就是写死的长度 —— 一根三米的绳拴在两米宽的地方，垂在地上。
+     */
+    val ropeLength: Float = 0f,
+    /**
+     * 弹性系数：同一个拉伸量能拽出多大力。1 = 默认。小于 1 是软绳（拉得动但没什么劲），
+     * 大于 1 是蹦极绳（一点点拉伸就很凶）。它乘在拉力上，不是乘在长度上。
+     */
+    val elastic: Float = 1f,
 ) {
     fun kindOf(): PropKind = PropKind.of(kind)
 
@@ -112,7 +123,8 @@ object PropSpecs {
                 force = o.optDouble("force", 1.0).toFloat(),
                 gravityScale = o.optDouble("gravity", 1.0).toFloat(),
                 transient = o.optBoolean("transient", false),
-                ropeLength = o.optDouble("rope", 420.0).toFloat(),
+                ropeLength = o.optDouble("rope", 0.0).toFloat(),
+                elastic = o.optDouble("elastic", 1.0).toFloat(),
             )
         }
     }
@@ -130,6 +142,7 @@ object PropSpecs {
                     .put("gravity", s.gravityScale.toDouble())
                     .put("transient", s.transient)
                     .put("rope", s.ropeLength.toDouble())
+                    .put("elastic", s.elastic.toDouble())
             )
         }
         return arr.toString(2)

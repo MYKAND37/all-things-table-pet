@@ -147,6 +147,9 @@
     <string name="logic_no_characters">还没有别的角色</string>
     <string name="morph_missing">没有这个角色：%1$s</string>
 
+    <string name="prop_elastic">弹性系数</string>
+    <string name="prop_elastic_hint">同一个拉伸量能拽出多大力。1× 是默认；小于 1 是软绳（拉得动但没劲），大于 1 是蹦极绳（一点点拉伸就很凶）。</string>
+    <string name="prop_rope_auto">自动（两点距离 +18%）</string>
     <string name="prop_rope_draw">画绳子</string>
     <string name="prop_rope_edit">改绳子图案</string>
     <string name="prop_rope_title">绳子的样子</string>
