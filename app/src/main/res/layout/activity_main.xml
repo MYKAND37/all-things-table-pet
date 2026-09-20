@@ -480,6 +480,11 @@
                         android:text="@string/rig_add_bone" />
 
                     <TextView
+                        android:id="@+id/rigAddNode"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_add_node" />
+
+                    <TextView
                         android:id="@+id/rigBoneList"
                         style="@style/AlignButton"
                         android:text="@string/rig_bone_list" />

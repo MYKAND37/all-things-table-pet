@@ -253,6 +253,11 @@ class MainActivity : AppCompatActivity() {
         rigLimitMax.setOnClickListener { captureLimit(asMax = true) }
         findViewById<View>(R.id.rigMode).setOnClickListener { toggleRigMode() }
         findViewById<View>(R.id.rigAddBone).setOnClickListener { askNewBone() }
+        // 加节点 works like 加骨骼: arm it, then point at the canvas. See SkeletonView.
+        findViewById<View>(R.id.rigAddNode).setOnClickListener {
+            skeletonView.beginNodePlacement()
+            hideBonePanelsForPlacement()
+        }
         findViewById<View>(R.id.rigBoneList).setOnClickListener { showBoneList() }
         findViewById<View>(R.id.rigSaveBones).setOnClickListener { saveBones() }
         findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
@@ -288,6 +293,17 @@ class MainActivity : AppCompatActivity() {
         // activity's job, because a share sheet is started from an Activity and not from a
         // View. See shareFile.
         sandboxView.onShareFile = { shareFile(it) }
+        // 加节点 on the canvas: one tap, one node, written to the character file straight away.
+        // The node screen used to leave it in the editor's memory, which is why 加节点 looked
+        // like it did nothing at all.
+        skeletonView.onNodePlaced = {
+            if (persistRig()) {
+                Toast.makeText(this, R.string.rig_node_saved, Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            }
+            buildRigBonePanel()
+        }
         // 变身：规则说"变成谁"，这里去把它找出来换上去。找不到就说出来 —— 一个改了 id 或
         // 删掉了角色的规则，否则表现成"这个规则什么都不做"，而那是最难查的一种。
         sandboxView.onMorph = { id ->
@@ -1814,6 +1830,35 @@ class MainActivity : AppCompatActivity() {
         skeletonView.invalidate()
     }
 
+    /**
+     * Get out of the way of a tap that is about to mean "here".
+     *
+     * 加骨骼 already does this by hiding the panel; a node is placed with ONE tap, so anything
+     * that is open and eats a tap -- a dialog, a list -- would swallow the answer.
+     */
+    private fun hideBonePanelsForPlacement() {
+        boneDialog?.dismiss()
+    }
+
+    /**
+     * Write the rig to disk, nodes included.
+     *
+     * The node screen used to change the editor's copy and stop there: the node only existed on
+     * disk after somebody opened 骨架 and pressed 保存骨骼, which nobody has any reason to do
+     * after adding a node somewhere else. That is exactly the shape of "这个功能不能用".
+     */
+    private fun persistRig(): Boolean {
+        val folder = opened ?: return false
+        val bones = skeletonView.rigBones()
+        if (RigEdit.problem(bones) != null) return false
+        val ok = store.saveRig(
+            folder.id, bones, skeletonView.rigLayers(), skeletonView.renames(),
+            skeletonView.rigNodes(),
+        )
+        if (ok) reloadSummoned(folder)
+        return ok
+    }
+
     private fun saveBones() {
         val folder = opened ?: return
         // Half a bone is not a bone: the first tap is only a marker until the second one
@@ -1953,6 +1998,10 @@ class MainActivity : AppCompatActivity() {
      * They belong here rather than behind their own button: "这一节的指尖" is one thought, and a
      * rig where the points are somewhere else is a rig where nobody remembers they exist.
      */
+    /** The folder the node screen is about, and how it asks for a tap on the canvas. */
+    private var nodeFolderId: String = ""
+    private var nodePlacement: ((String) -> Unit)? = null
+
     private fun fillNodeList(
         box: LinearLayout,
         bones: List<BoneSpec>,
@@ -2009,15 +2058,26 @@ class MainActivity : AppCompatActivity() {
             remove.setPadding(dp(8), dp(6), dp(8), dp(6))
             remove.setOnClickListener {
                 skeletonView.deleteNode(n.name)
+                persistRig()
                 refresh()
             }
             row.addView(remove)
             box.addView(row)
         }
 
+        val place = label(getString(R.string.rig_node_place_on_canvas), 13f, INK)
+        place.setPadding(dp(14), dp(11), dp(14), dp(11))
+        place.background = getDrawable(R.drawable.menu_item_selected)
+        place.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(6) }
+        place.setOnClickListener { nodePlacement?.invoke(nodeFolderId) }
+        box.addView(place)
+
         val add = label(getString(R.string.rig_node_add), 12f, INK)
         add.setPadding(dp(12), dp(8), dp(12), dp(8))
-        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.background = getDrawable(R.drawable.menu_item_idle)
         add.setOnClickListener { askNode(null) }
         box.addView(add)
     }
@@ -2034,6 +2094,7 @@ class MainActivity : AppCompatActivity() {
         // The editor's own copy of the rig, because that is what saves the nodes: the part list
         // can be opened without ever having gone through 看骨架.
         skeletonView.load(folder)
+        nodeFolderId = folder.id
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -2043,6 +2104,20 @@ class MainActivity : AppCompatActivity() {
             .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
+        // Placing on the canvas needs the canvas: the dialog gets out of the way first, and the
+        // rig screen is where the figure is.
+        nodePlacement = { folderId ->
+            dialog.dismiss()
+            val target = characters.firstOrNull { it.id == folderId } ?: opened
+                ?: return@nodePlacement
+            skeletonView.load(target)
+            rigBoneMode = false
+            skeletonView.setBoneEditMode(false)
+            applyRigMode()
+            buildRigBonePanel()
+            show(Pane.PET_RIG)
+            skeletonView.beginNodePlacement()
+        }
         fun fill() {
             box.removeAllViews()
             fillNodeList(box, skeletonView.rigBones()) {
@@ -2168,6 +2243,7 @@ class MainActivity : AppCompatActivity() {
                     radiusOf(), prop,
                 )
                 if (!ok) Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                persistRig()
                 refreshBoneList()
             }
             .setNegativeButton(R.string.depth_cancel, null)

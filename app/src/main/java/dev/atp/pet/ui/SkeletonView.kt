@@ -242,7 +242,19 @@ class SkeletonView @JvmOverloads constructor(
     /** Fired whenever the rig's shape changes, so the host can refresh what it shows. */
     var onRigChanged: (() -> Unit)? = null
 
+    /**
+     * A node was just placed on the canvas, and the rig has changed on disk with it.
+     *
+     * Separate from [onRigChanged] on purpose: that one fires for every joint the finger moves
+     * in the bone editor, and writing the character file on each of those would be saving a rig
+     * half-way through being edited. A placed node is a finished act -- one tap, one node.
+     */
+    var onNodePlaced: (() -> Unit)? = null
+
     private val renamed = HashMap<String, String>()
+
+    /** True while 加节点 is waiting for the tap that says where the node goes. */
+    private var placingNode = false
 
     val addingBone: Boolean get() = pendingName != null
 
@@ -294,6 +306,61 @@ class SkeletonView @JvmOverloads constructor(
         onInfo?.invoke("删掉了节点 " + name)
         onRigChanged?.invoke()
         return true
+    }
+
+    /**
+     * 加节点, the way 加骨骼 works: arm it, then point at the canvas.
+     *
+     * A node is a place ON a bone, and the place is the whole content of it -- asking somebody
+     * to say "关节 / 中间 / 末端" in a dialog is asking them to translate a point they can see
+     * into a word, and then to trust that the word landed where they meant. Tapping the bone
+     * IS the answer: the tap is projected onto the nearest bone and becomes the offset.
+     */
+    fun beginNodePlacement() {
+        placingNode = true
+        onInfo?.invoke("点一下骨头上的位置 · 节点就钉在那儿")
+        invalidate()
+    }
+
+    val placingNodeNow: Boolean get() = placingNode
+
+    /**
+     * Put a node where the finger landed: the nearest bone, at the tap's own offset along it.
+     *
+     * The projection is onto the bone's SEGMENT, so a tap beside a thin bone lands on it rather
+     * than being refused -- the same forgiveness a finger gets everywhere else in this app.
+     */
+    fun placeNodeAt(x: Float, y: Float): Boolean {
+        val parsed = spec ?: return false
+        val p = toCanvas(x, y)
+        var best: BoneSpec? = null
+        var bestD = Float.MAX_VALUE
+        var bestAt = 0f
+        for (b in parsed.bones) {
+            val dx = b.tail.x - b.head.x
+            val dy = b.tail.y - b.head.y
+            val lenSq = dx * dx + dy * dy
+            if (lenSq < 1e-3f) continue
+            val t = (((p.x - b.head.x) * dx + (p.y - b.head.y) * dy) / lenSq).coerceIn(0f, 1f)
+            val nx = b.head.x + dx * t
+            val ny = b.head.y + dy * t
+            val d = hypot(p.x - nx, p.y - ny)
+            if (d < bestD) {
+                bestD = d
+                best = b
+                bestAt = t * kotlin.math.sqrt(lenSq)
+            }
+        }
+        val bone = best ?: return false
+        val name = RigEdit.freeNodeName(parsed.bones, parsed.nodes)
+        placingNode = false
+        val ok = saveNode(null, name, bone.name, bestAt, DEFAULT_NODE_RADIUS, "")
+        if (ok) {
+            onInfo?.invoke(name + " 钉在 " + bone.name + " 上（离关节 " + bestAt.toInt() + "px）")
+            onNodePlaced?.invoke()
+        }
+        invalidate()
+        return ok
     }
 
     /** A point on a bone, in canvas coordinates, for the editor to draw a node at. */
@@ -807,6 +874,11 @@ class SkeletonView @JvmOverloads constructor(
         val sk = skeleton ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 加节点 owns the next tap, the same way 加骨骼 owns two.
+                if (placingNode) {
+                    placeNodeAt(event.x, event.y)
+                    return true
+                }
                 // A bone being drawn owns both taps.
                 if (pendingName != null) {
                     placePoint(event.x, event.y)
@@ -916,6 +988,9 @@ class SkeletonView @JvmOverloads constructor(
     }
 
     private companion object {
+        /** The size a node gets when it is placed by tapping. Editable afterwards. */
+        const val DEFAULT_NODE_RADIUS = 26f
+
         /** How far a pick in the side panel zooms in. Enough to see a hand, not a pixel. */
         const val ZOOM_ON_PICK = 2.5f
 

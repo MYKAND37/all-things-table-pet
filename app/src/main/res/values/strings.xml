@@ -180,7 +180,10 @@
     <string name="rig_node_list">节点</string>
     <string name="rig_bone_list_empty">还没有骨骼，先加一根</string>
     <string name="rig_node_hint">节点是骨头上一个点，不占长度。规则可以拿它当部位（被碰到 / 被点一下），绳子可以系在它上面，也能被隐藏/显示。被隐藏的节点不会被碰到。</string>
-    <string name="rig_node_add">＋ 加节点</string>
+    <string name="rig_add_node">＋ 加节点</string>
+    <string name="rig_node_place_on_canvas">在画布上点一下放节点（像加骨骼那样）</string>
+    <string name="rig_node_add">＋ 加节点（手填）</string>
+    <string name="rig_node_saved">节点放好了，已保存</string>
     <string name="rig_node_new">新建节点</string>
     <string name="rig_node_edit">改节点</string>
     <string name="rig_node_name">节点名字</string>
