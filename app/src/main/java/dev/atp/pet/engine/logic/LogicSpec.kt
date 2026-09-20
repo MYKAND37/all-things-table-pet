@@ -298,18 +298,22 @@ data class RuleSpec(
      */
     val about: String = "",
     /**
-     * A 随机组: rules that share a name here take ONE turn between them per event.
+     * 并行分支: the executors that fork off this rule's detector.
      *
-     * Empty is "on my own", which is every rule that has ever been written. A group is for
-     * saying "either it says A or it says B" -- two rules with a 50% chance each are NOT
-     * that: each rolls its own dice, so a quarter of the time both speak and the pet says
-     * two things at once. A group rolls once, among the rules whose own conditions hold, and
-     * the winner is the group's answer.
+     * The owner asked for this in as many words: 「并行逻辑也有完整的侦测器和执行器，箭头是向下
+     * 指过去的，就是岔开」. So a rule with branches is a GROUP, and it has the whole of a rule:
+     * its own 当 is the group's detector, its own 如果 is the group's condition, and [actions]
+     * is its first executor -- each entry here is ANOTHER executor, forked off the same 当.
      *
-     * The name is the user's ("话", "受伤的样子"), not a number, because it is read on the
-     * graph and in the file it is the only thing that says which rules belong together.
+     * Every branch RUNS. This replaced a 随机组 that shared a name and rolled once between its
+     * members: that was a way of saying "either A or B", it could not have a detector or an
+     * executor of its own (there was nothing to hang them on), and it is gone.「全部响」 is what
+     * the owner asked for when the two were put side by side.
+     *
+     * [elseActions] is deliberately NOT forked: 否则 is the path where the conditions did not
+     * hold, and there is nothing to fork from a detector that did not fire.
      */
-    val group: String = "",
+    val branches: List<List<ActionSpec>> = emptyList(),
 )
 
 /** What a rule can do, with the parameter the editor has to ask for. */
@@ -538,19 +542,40 @@ class LogicSpec(
                 }
             }
 
+            // One place that knows how an action is written down. It was inline three times
+            // (then, else, and now the branches), which is three places for a new action field
+            // to be forgotten in -- and a forgotten field is an action that silently loses a
+            // setting every time the file is saved.
+            fun actionsOf(arr: JSONArray?): List<ActionSpec> =
+                (0 until (arr?.length() ?: 0)).map { j ->
+                    val a = arr!!.getJSONObject(j)
+                    ActionSpec(
+                        kind = a.optString("kind", "say"),
+                        text = a.optString("text", ""),
+                        stat = a.optString("stat", ""),
+                        value = a.optDouble("value", 0.0).toFloat(),
+                        value2 = a.optDouble("value2", 0.0).toFloat(),
+                        bone = a.optString("bone", ""),
+                        prop = a.optString("prop", ""),
+                        state = a.optString("state", ""),
+                        shape = a.optString("shape", ""),
+                        rule = a.optInt("rule", 0),
+                    )
+                }
+
             val ruleArr = o.optJSONArray("rules")
             val rules = (0 until (ruleArr?.length() ?: 0)).map { i ->
                 val r = ruleArr!!.getJSONObject(i)
                 val condArr = r.optJSONArray("if")
                 val actArr = r.optJSONArray("then")
                 val elseArr = r.optJSONArray("else")
+                val branchArr = r.optJSONArray("branches")
                 RuleSpec(
                     on = r.optString("on", "tick"),
                     part = r.optString("part", ""),
                     // A file that says nothing gets "any of them", which is what every rule
                     // meant before this existed.
                     about = r.optString("about", ""),
-                    group = r.optString("group", ""),
                     conditions = (0 until (condArr?.length() ?: 0)).map { j ->
                         val c = condArr!!.getJSONObject(j)
                         ConditionSpec(
@@ -562,38 +587,13 @@ class LogicSpec(
                             join = c.optString("join", Joins.AND),
                         )
                     },
-                    actions = (0 until (actArr?.length() ?: 0)).map { j ->
-                        val a = actArr!!.getJSONObject(j)
-                        ActionSpec(
-                            kind = a.optString("kind", "say"),
-                            text = a.optString("text", ""),
-                            stat = a.optString("stat", ""),
-                            value = a.optDouble("value", 0.0).toFloat(),
-                            value2 = a.optDouble("value2", 0.0).toFloat(),
-                            bone = a.optString("bone", ""),
-                            prop = a.optString("prop", ""),
-                            state = a.optString("state", ""),
-                            shape = a.optString("shape", ""),
-                            rule = a.optInt("rule", 0),
-                        )
+                    actions = actionsOf(actArr),
+                    branches = (0 until (branchArr?.length() ?: 0)).map { k ->
+                        actionsOf(branchArr!!.getJSONArray(k))
                     },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
                     once = r.optBoolean("once", false),
-                    elseActions = (0 until (elseArr?.length() ?: 0)).map { j ->
-                        val a = elseArr!!.getJSONObject(j)
-                        ActionSpec(
-                            kind = a.optString("kind", "say"),
-                            text = a.optString("text", ""),
-                            stat = a.optString("stat", ""),
-                            value = a.optDouble("value", 0.0).toFloat(),
-                            value2 = a.optDouble("value2", 0.0).toFloat(),
-                            bone = a.optString("bone", ""),
-                            prop = a.optString("prop", ""),
-                            state = a.optString("state", ""),
-                            shape = a.optString("shape", ""),
-                            rule = a.optInt("rule", 0),
-                        )
-                    },
+                    elseActions = actionsOf(elseArr),
                 )
             }
             return LogicSpec(stats, rules, states, liquids, particles)
@@ -656,43 +656,38 @@ class LogicSpec(
                             .put("state", c.state).put("join", c.join)
                     )
                 }
-                val acts = JSONArray()
-                for (a in r.actions) {
-                    acts.put(
-                        JSONObject()
-                            .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
-                            .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
-                            .put("bone", a.bone)
-                            .put("prop", a.prop).put("state", a.state)
-                            // Written only when it was chosen: a file that never asked for a
-                            // shape does not grow a key that means "the default".
-                            .apply { if (a.shape.isNotEmpty()) put("shape", a.shape) }
-                            .put("rule", a.rule)
-                    )
+                fun actionJson(list: List<ActionSpec>): JSONArray {
+                    val arr = JSONArray()
+                    for (a in list) {
+                        arr.put(
+                            JSONObject()
+                                .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
+                                .put("value", a.value.toDouble())
+                                .put("value2", a.value2.toDouble())
+                                .put("bone", a.bone)
+                                .put("prop", a.prop).put("state", a.state)
+                                // Written only when it was chosen: a file that never asked for
+                                // a shape does not grow a key that means "the default".
+                                .apply { if (a.shape.isNotEmpty()) put("shape", a.shape) }
+                                .put("rule", a.rule)
+                        )
+                    }
+                    return arr
                 }
-                val elses = JSONArray()
-                for (a in r.elseActions) {
-                    elses.put(
-                        JSONObject()
-                            .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
-                            .put("value", a.value.toDouble()).put("value2", a.value2.toDouble())
-                            .put("bone", a.bone)
-                            .put("prop", a.prop).put("state", a.state)
-                            // Written only when it was chosen: a file that never asked for a
-                            // shape does not grow a key that means "the default".
-                            .apply { if (a.shape.isNotEmpty()) put("shape", a.shape) }
-                            .put("rule", a.rule)
-                    )
-                }
+                val acts = actionJson(r.actions)
+                val branches = JSONArray()
+                for (b in r.branches) branches.put(actionJson(b))
+                val elses = actionJson(r.elseActions)
                 rules.put(
                     JSONObject()
                         .put("on", r.on).put("part", r.part)
                         .put("cooldown", r.cooldown.toDouble()).put("once", r.once)
                         .put("if", conds).put("then", acts).put("else", elses)
                         // Only when it was chosen: a rule that is about anything does not
-                        // grow a key that says "anything".
+                        // grow a key that says "anything", and a rule with no branches does
+                        // not grow an empty fork.
                         .apply { if (r.about.isNotEmpty()) put("about", r.about) }
-                        .apply { if (r.group.isNotEmpty()) put("group", r.group) }
+                        .apply { if (r.branches.isNotEmpty()) put("branches", branches) }
                 )
             }
             root.put("rules", rules)

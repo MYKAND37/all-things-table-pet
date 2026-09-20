@@ -407,10 +407,11 @@
     <string name="logic_when">当：</string>
     <string name="logic_pick_part_hint">留「任何部位」就是全身都算。写个前缀（比如 hand）会同时匹配 hand_L 和 hand_R。</string>
     <string name="logic_delete_rule">删规则</string>
-    <string name="logic_group">并行组（同组随机只响一条）</string>
-    <string name="logic_group_none">不分组 · 各响各的</string>
-    <string name="logic_group_new">＋ 新建一组…</string>
-    <string name="logic_group_hint">同一组里的规则每次只响一条，随机挑。两条各带「概率 50%」不是这件事：那样有四次里一次两条一起响。</string>
+    <string name="logic_branch_row_hint">第 %1$d 支，一共 %2$d 支。分支的「当」就是这条规则的「当」，每一支都会执行。</string>
+    <string name="logic_branch">并行分支</string>
+    <string name="logic_branch_none">一条（还没有分支）</string>
+    <string name="logic_branch_remove">− 去掉最后一个分支</string>
+    <string name="logic_branch_hint_row">第 %1$d 支，一共 %2$d 支。分支的「当」就是这条规则的「当」，每一支都会执行。</string>
     <string name="logic_cooldown">冷却 %1$ss</string>
     <string name="logic_once">只发生一次</string>
     <string name="logic_stat_id">代号（英文，规则里用）</string>

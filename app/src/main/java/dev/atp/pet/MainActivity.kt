@@ -65,7 +65,6 @@ import kotlin.math.roundToInt
  * A sentinel rather than a null: an empty id already means "leave the group", and a picker
  * whose two special rows are null and null is a picker nobody can read.
  */
-private const val NEW_GROUP = "\u0000new-group"
 
 /**
  * The shell.
@@ -3116,11 +3115,12 @@ class MainActivity : AppCompatActivity() {
      */
     private fun buildLogicPane() {
         val graph = mutableListOf<List<LogicGraphView.Node>>()
+        val counts = mutableListOf<Int>()
         for ((ri, rule) in logicRules.withIndex()) {
             val row = mutableListOf<LogicGraphView.Node>()
             val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
             val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
-            val with = if (rule.group.isEmpty()) "" else " · 随机「" + rule.group + "」"
+            val with = if (rule.branches.isEmpty()) "" else " · 并行 " + (rule.branches.size + 1) + " 支"
             row.add(
                 LogicGraphView.Node(
                     LogicGraphView.Node.WHEN,
@@ -3186,9 +3186,37 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             graph.add(row)
+            counts.add(rule.branches.size)
+            // One row per 并行分支, immediately under the rule it forks from: the graph draws the
+            // fork downwards, so "below" is what the picture means.
+            for ((bi, branch) in rule.branches.withIndex()) {
+                val bRow = mutableListOf<LogicGraphView.Node>()
+                bRow.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ELSE,
+                        listOf(getString(R.string.logic_branch) + " " + (bi + 2), "都会响"),
+                        -1,
+                    )
+                )
+                for ((ai, a) in branch.withIndex()) {
+                    bRow.add(
+                        LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai)
+                    )
+                }
+                bRow.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
+                        LogicGraphView.Node.ADD_ELSE,
+                    )
+                )
+                graph.add(bRow)
+                counts.add(0)
+            }
         }
         // 每一行的随机组：图用它把同组的行括起来（并行分支）。
-        logicGraph.setRules(graph, logicRules.map { it.group })
+        // How many branch rows follow each rule row, so the graph can draw the fork: one
+        // detector, arrows going down and splitting to each executor.
+        logicGraph.setRules(graph, counts)
         buildLiquidBar()
 
         logicBar.removeAllViews()
@@ -3432,44 +3460,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /**
-     * 随机组：这一条跟哪些规则抢同一次机会。
-     *
-     * The picker lists the names already in the file plus "leave the group", and "a new one"
-     * asks for a name -- a group is a name a person reads on the graph, not a number the
-     * editor hands out.
-     */
-    private fun askRuleGroup(index: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        val names = logicRules.map { it.group }.filter { it.isNotEmpty() }.distinct()
-        val options = mutableListOf("" to getString(R.string.logic_group_none))
-        options.addAll(names.map { it to it })
-        options.add(NEW_GROUP to getString(R.string.logic_group_new))
-        pickList(
-            getString(R.string.logic_group),
-            options,
-            getString(R.string.logic_group_hint),
-            rule.group,
-            onDelete = null,
-        ) { id ->
-            if (id == NEW_GROUP) {
-                askText(getString(R.string.logic_group_new), "") { name ->
-                    setGroup(index, rule, RigEdit.sanitise(name))
-                }
-                true
-            } else {
-                setGroup(index, rule, id)
-                true
-            }
-        }
-    }
-
-    private fun setGroup(index: Int, rule: RuleSpec, name: String) {
-        logicRules[index] = rule.copy(group = name)
-        saveLogic()
-        buildLogicPane()
-    }
-
     private fun askRuleSettings(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
@@ -3518,11 +3508,23 @@ class MainActivity : AppCompatActivity() {
                     else aboutText(rule.about)
             ) { askRuleAbout(index) }
         }
-        // 「两个触发器可以设定为随机触发，它们的逻辑线条并行」：一组规则每次事件只响一条。
+        // 「并行逻辑也有完整的侦测器和执行器」: this rule's own 当 is the group's detector, its own
+        // 就 is the first executor, and every branch below is another executor forked off the
+        // same detector -- all of them run. See RuleSpec.branches.
         row(
-            getString(R.string.logic_group) + "：" +
-                if (rule.group.isEmpty()) getString(R.string.logic_group_none) else rule.group
-        ) { askRuleGroup(index) }
+            getString(R.string.logic_branch) + "：" + (rule.branches.size + 1) + " 支" +
+                if (rule.branches.isEmpty()) " · " + getString(R.string.logic_branch_none) else ""
+        ) { addBranch(index) }
+        for ((bi, b) in rule.branches.withIndex()) {
+            row(
+                getString(R.string.logic_branch) + " " + (bi + 2) + " · " + b.size + " 个动作"
+            ) { askBranch(index, bi) }
+        }
+        if (rule.branches.isNotEmpty()) {
+            row(getString(R.string.logic_branch_remove)) {
+                removeBranch(index, rule.branches.size - 1)
+            }
+        }
         row(getString(R.string.logic_cooldown, trim(rule.cooldown))) { askCooldown(index) }
         row((if (rule.once) "✓ " else "") + getString(R.string.logic_once)) {
             logicRules[index] = rule.copy(once = !rule.once)
@@ -5447,6 +5449,16 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Which 并行分支 the action editor is writing into, or -1 for the rule's own list.
+     *
+     * A field rather than a parameter, deliberately: askAction() is one long `when` with a
+     * putAction() in every arm (twenty-odd of them), and threading a fifth parameter through
+     * all of them is twenty chances to miss one. One action is edited at a time, so there is
+     * exactly one value, and askBranch() sets it around the call.
+     */
+    private var editingBranch = -1
+
     private fun putAction(
         index: Int,
         actionIndex: Int,
@@ -5454,6 +5466,20 @@ class MainActivity : AppCompatActivity() {
         action: ActionSpec,
     ) {
         val rule = logicRules.getOrNull(index) ?: return
+        val branch = editingBranch
+        if (branch >= 0 && !isElse) {
+            val branches = rule.branches.toMutableList()
+            if (branch >= branches.size) return
+            val list = branches[branch].toMutableList()
+            if (actionIndex >= 0 && actionIndex < list.size) {
+                list[actionIndex] = action
+            } else {
+                list.add(action)
+            }
+            branches[branch] = list
+            putRule(index, rule.copy(branches = branches))
+            return
+        }
         val actions = (if (isElse) rule.elseActions else rule.actions).toMutableList()
         if (actionIndex >= 0 && actionIndex < actions.size) {
             actions[actionIndex] = action
@@ -5464,6 +5490,72 @@ class MainActivity : AppCompatActivity() {
             index,
             if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
         )
+    }
+
+    /** 加一个并行分支: another executor forked off this rule's own 当. */
+    private fun addBranch(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val branches = rule.branches.toMutableList()
+        branches.add(listOf(ActionSpec("say", text = "……")))
+        putRule(index, rule.copy(branches = branches))
+    }
+
+    private fun removeBranch(index: Int, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val branches = rule.branches.toMutableList()
+        if (branch !in branches.indices) return
+        branches.removeAt(branch)
+        putRule(index, rule.copy(branches = branches))
+    }
+
+    /**
+     * One 并行分支 opened for editing: its actions, and the same editor the rule's own 就 uses.
+     *
+     * 「并行逻辑也有完整的执行器」 is the whole point: a branch holds an action list exactly like
+     * the rule's own and is edited by the same screen, because a second kind of action editor
+     * would be a second set of actions that could do less.
+     */
+    private fun askBranch(index: Int, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val list = rule.branches.getOrNull(branch) ?: return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        box.addView(
+            label(
+                getString(R.string.logic_branch_row_hint, branch + 2, rule.branches.size + 1),
+                11f, MUTED, bottom = 6,
+            )
+        )
+        for ((ai, a) in list.withIndex()) {
+            val view = label(
+                getString(R.string.logic_module_action) + "：" + actionText(a), 13f, INK,
+            )
+            view.setPadding(dp(12), dp(11), dp(12), dp(11))
+            view.background = getDrawable(R.drawable.menu_item_idle)
+            view.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+            view.setOnClickListener {
+                editingBranch = branch
+                askAction(index, ai)
+                editingBranch = -1
+            }
+            box.addView(view)
+        }
+        val add = label(getString(R.string.logic_module_action), 13f, INK)
+        add.setPadding(dp(12), dp(11), dp(12), dp(11))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.setOnClickListener {
+            editingBranch = branch
+            askAction(index, -1)
+            editingBranch = -1
+        }
+        box.addView(add)
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.logic_branch) + " " + (branch + 2))
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .show()
     }
 
     private fun pickStat(title: String, onPick: (String) -> Unit) {

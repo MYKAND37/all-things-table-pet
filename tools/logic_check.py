@@ -316,7 +316,17 @@ class Engine:
         self.last_fired[index] = self.clock
         if rule.get("once"):
             self.fired_once.add(index)
-        return self.follow(rule.get("then", []) if holds else rule.get("else", []), ran)
+        # 否则 是条件**不成立**的那条路，没有岔开可谈：一个没响的侦测器上挂不了分支。
+        if not holds:
+                return self.follow(rule.get("else", []), ran)
+        branches = rule.get("branches", [])
+        if not branches:
+            return self.follow(rule.get("then", []), ran)
+        # 并行：这一个侦测器岔开的每一支都执行，按写下的顺序。规则自己的「就」是第一支。
+        out = list(self.follow(rule.get("then", []), ran))
+        for b in branches:
+            out.extend(self.follow(b, ran))
+        return out
 
     def follow(self, actions, ran):
         """跑一串动作，并追它末尾的跳转。"""
@@ -337,8 +347,6 @@ class Engine:
         out = []
         # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
         ran = set()
-        # 随机组：同一组里每次事件只响一条。见 RuleSpec.group。
-        groups_done = set()
         for index, rule in enumerate(self.spec["rules"]):
             if rule.get("on") != event.get("type"):
                 continue
@@ -346,24 +354,9 @@ class Engine:
                 continue
             if not self.about_is(event, rule.get("about", "")):
                 continue
-            group = rule.get("group", "")
-            if not group:
-                out.extend(self.fire(index, rule, ran))
-                continue
-            if group in groups_done:
-                continue
-            groups_done.add(group)
-            # 组在**第一条成员写下**的位置结算，所以规则的先后顺序照旧是文件里的顺序。
-            # 组里凡是听得到这次事件的都在池子里，池子打乱，第一条真的开火的就是这一组的答案。
-            members = [i for i, r in enumerate(self.spec["rules"])
-                       if r.get("group", "") == group and r.get("on") == event.get("type")
-                       and self.touches(event, r.get("part", ""))
-                       and self.about_is(event, r.get("about", ""))]
-            self.rng.shuffle(members)
-            for i in members:
-                out.extend(self.fire(i, self.spec["rules"][i], ran))
-                if i in ran:
-                    break
+            # 这里不再有分组：并行组**就是**一条带分支的规则，岔开发生在 fire() 里，
+            # 因为只有那里知道这条规则自己的动作是什么。
+            out.extend(self.fire(index, rule, ran))
         return out
 
     def handle(self, etype, part="", value=0.0, prop=""):
@@ -1018,50 +1011,45 @@ def main():
         ],
     }).resolve({"type": "landed", "particle": "dust"}) == [], "")
 
-    print("\n一组规则每次事件只响一条")
-    # 「两个触发器（A话/B话）可以设定为随机触发，它们的逻辑线条应该是并行的」。
-    # 两条各带一个 50% 的「概率」不是这件事：各自掷自己的骰子，四次里有一次两条都响，
-    # 宠物同时说两句话。组是掷一次，在够条件的成员里挑一条。
-    def group_engine(members):
-        rules = []
-        for i, g in enumerate(members):
-            rules.append({"on": "tick", "part": "", "group": g, "if": [],
-                          "then": [{"kind": "say", "text": "第%d句" % i}]})
+    print("\n并行分支：一个侦测器，岔开的每一支都执行")
+    # 「并行逻辑也有完整的侦测器和执行器，箭头是向下指过去的，就是岔开」。
+    # 这条规则自己的「当」就是组的侦测器，自己的「就」是第一支执行器，branches 里每一
+    # 项是另一支 —— **全部响**，按写下的顺序。它换掉的是一套同组随机挑一条的机制：那
+    # 东西没法有自己的侦测器和执行器（没有地方挂）。
+    def fork_engine(branches, conditions=None):
+        rules = [{
+            "on": "tick", "part": "", "if": conditions or [],
+            "then": [{"kind": "say", "text": "就"}],
+            "branches": [[{"kind": "say", "text": "支%d" % (i + 1)}] for i in range(branches)],
+        }]
         return Engine({"stats": [], "states": [], "rules": rules})
 
-    both = group_engine(["话", "话"])
-    spoken = []
-    for _ in range(40):
-        spoken.append(len(both.handle("tick")))
-    report("同一组每次只响一条", set(spoken) == {1}, "每次响 %s 条" % sorted(set(spoken)))
+    lit = fork_engine(2)
+    out = lit.handle("tick")
+    report("两条分支全响，加上规则自己的就一共三条",
+           [a.get("text") for a in out] == ["就", "支1", "支2"], str([a.get("text") for a in out]))
+    report("顺序是写下的顺序，不是随机的",
+           all([a.get("text") for a in lit.handle("tick")] == ["就", "支1", "支2"] for _ in range(5)))
 
-    # 而且两条都真的有机会响：只响一条也可能是"永远只响第一条"那个假货。
-    first = group_engine(["话", "话"])
-    picked = set()
-    for _ in range(60):
-        acts = first.handle("tick")
-        if acts:
-            picked.add(acts[0].get("text"))
-    report("组里两条都有机会被挑中", len(picked) == 2, str(sorted(picked)))
-
-    apart = group_engine(["", ""])
-    counts = [len(apart.handle("tick")) for _ in range(10)]
-    report("不分组还是各响各的", set(counts) == {2}, "每次响 %s 条" % sorted(set(counts)))
-
-    # 组里没有一条够条件：全都不响，而且不会因为"这一组今天轮过了"就吃掉别人。
-    blocked = Engine({"stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
-                      "states": [], "rules": [
-        {"on": "tick", "part": "", "group": "话",
-         "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
-         "then": [{"kind": "say", "text": "A"}]},
-        {"on": "tick", "part": "", "group": "话",
-         "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 90}],
-         "then": [{"kind": "say", "text": "B"}]},
-        {"on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "总是"}]},
+    plain = Engine({"stats": [], "states": [], "rules": [
+        {"on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "A"}],
+         "branches": []},
     ]})
-    out = blocked.handle("tick")
-    report("组里一条都不够条件时整组安静，别的照响",
-           [a.get("text") for a in out] == ["总是"], str([a.get("text") for a in out]))
+    report("没有分支的规则和以前一模一样",
+           [a.get("text") for a in plain.handle("tick")] == ["A"])
+
+    # 一个没响的侦测器上挂不了分支：条件不成立时走的是「否则」，分支一条都不跑。
+    blocked = Engine({"stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
+                      "states": [], "rules": [{
+        "on": "tick", "part": "",
+        "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+        "then": [{"kind": "say", "text": "就"}],
+        "else": [{"kind": "say", "text": "否则"}],
+        "branches": [[{"kind": "say", "text": "支1"}]],
+    }]})
+    report("条件不成立时只有「否则」响，分支一条都不跑",
+           [a.get("text") for a in blocked.handle("tick")] == ["否则"],
+           str([a.get("text") for a in blocked.handle("tick")]))
 
     print("")
     if FAILURES:

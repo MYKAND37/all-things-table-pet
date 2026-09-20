@@ -90,18 +90,22 @@ class LogicGraphView @JvmOverloads constructor(
 
     private val density = resources.displayMetrics.density
 
-    private var groups: List<String> = emptyList()
-    private val groupRuns = mutableListOf<Run>()
+    /**
+     * How many 并行分支 rows follow each rule's row.
+     *
+     * A count and not a name any more: a 并行组 is a rule with more executors, and what the
+     * graph has to draw is a FORK -- one detector, arrows going down and splitting to each
+     * executor. See RuleSpec.branches.
+     */
+    private var branches: List<Int> = emptyList()
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-    private val bracket = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    /** The fork that says one detector has several executors. */
+    private val fork = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
+        strokeCap = Paint.Cap.ROUND
         color = 0x886C4CE0.toInt()
-    }
-    private val bracketText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        textSize = 11f * density
-        color = 0xFF6C4CE0.toInt()
     }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val wire = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -128,16 +132,16 @@ class LogicGraphView @JvmOverloads constructor(
 
     /** Replace the model. Layout is recomputed; the pan and zoom are kept. */
     /**
-     * The rows, plus which 随机组 each one belongs to (empty for "on its own").
+     * The rows, plus how many 并行分支 rows follow each one.
      *
-     * A group is drawn as a bracket down the left of its rows: the rows stay where the file
-     * put them, and the bracket is what says "these are parallel -- one of them answers".
+     * A branch row is a row like any other -- it holds one executor's actions -- and the fork
+     * drawn from the rule's detector down to it is what says "these all run". The rows stay in
+     * the order the file has them, which is the one thing about rule order anybody can rely on.
      */
-    fun setRules(next: List<List<Node>>, nextGroups: List<String> = emptyList()) {
+    fun setRules(next: List<List<Node>>, nextBranches: List<Int> = emptyList()) {
         rules = next
-        groups = nextGroups
+        branches = nextBranches
         layout()
-        layoutGroups()
         if (!fitted) fit()
         invalidate()
     }
@@ -213,49 +217,8 @@ class LogicGraphView @JvmOverloads constructor(
     private fun contentBounds(): RectF {
         val box = RectF(0f, 0f, 1f, 1f)
         for (p in placed) box.union(p.rect)
-        // The 随机组 brackets stand to the LEFT of the first node, so the fit has to know
-        // about them or they are the first thing to be cropped.
-        for (run in groupRuns) {
-            box.union(run.first - BRACKET * density - 8f * density, run.top - 24f * density)
-            box.union(run.first, run.bottom)
-        }
         return box
     }
-
-    /**
-     * One bracket per run of ADJACENT rows that share a group.
-     *
-     * Adjacent runs rather than "every row with this name", because the rows are in the order
-     * the file has the rules, and gathering a group by reordering them would change what the
-     * rules do: rule order is the one thing about this list anybody can rely on. Members
-     * written apart get a bracket each -- and each row's own 当 box names its group, so
-     * nothing is hidden.
-     */
-    private fun layoutGroups() {
-        groupRuns.clear()
-        var i = 0
-        while (i < rows.size) {
-            val name = groups.getOrNull(i) ?: ""
-            if (name.isEmpty() || rows[i].isEmpty()) {
-                i++
-                continue
-            }
-            var j = i
-            while (j + 1 < rows.size && (groups.getOrNull(j + 1) ?: "") == name &&
-                rows[j + 1].isNotEmpty()
-            ) {
-                j++
-            }
-            groupRuns.add(
-                Run(name, rows[i].first().rect.top, rows[j].first().rect.bottom,
-                    rows[i].first().rect.left)
-            )
-            i = j + 1
-        }
-    }
-
-    /** One 随机组 bracket: the name, and the span of rows it gathers. */
-    private class Run(val name: String, val top: Float, val bottom: Float, val first: Float)
 
     /** Fit the graph into the view, but never magnify past 1:1 — big text is not a goal. */
     private fun fit() {
@@ -328,18 +291,40 @@ class LogicGraphView @JvmOverloads constructor(
         for (p in placed) {
             drawNode(canvas, p)
         }
-        // The brackets last, on top: a line the boxes hide under is a line nobody sees.
-        for (run in groupRuns) {
-            val x = run.first - BRACKET * density
-            val head = run.top - 8f * density
-            canvas.drawLine(x, head, x, run.bottom, bracket)
-            canvas.drawLine(x, head, run.first, head, bracket)
-            canvas.drawLine(x, run.bottom, run.first, run.bottom, bracket)
-            canvas.drawText(
-                "随机「" + run.name + "」", x - 6f * density, head - 6f * density, bracketText,
-            )
-        }
+        // The forks last, on top: a line the boxes hide under is a line nobody sees.
+        drawForks(canvas)
         canvas.restore()
+    }
+
+    /**
+     * 岔开: one detector with its executors forked off it, drawn (箭头向下指过去).
+     *
+     * A spine drops from the detector's own box and splits -- a tick and an arrowhead into the
+     * first box of every branch row below it. The rule's own 就 is the first executor and needs
+     * no arrow, because it is on the same row as the detector it came from.
+     */
+    private fun drawForks(canvas: Canvas) {
+        for ((i, n) in branches.withIndex()) {
+            if (n <= 0 || i >= rows.size) continue
+            val parent = rows[i].firstOrNull() ?: continue
+            val last = min(i + n, rows.size - 1)
+            val x = (parent.rect.left + parent.rect.right) / 2f
+            val top = parent.rect.bottom
+            var bottom = top
+            for (b in i + 1..last) {
+                val head = rows[b].firstOrNull() ?: continue
+                bottom = max(bottom, (head.rect.top + head.rect.bottom) / 2f)
+            }
+            canvas.drawLine(x, top, x, bottom, fork)
+            for (b in i + 1..last) {
+                val head = rows[b].firstOrNull() ?: continue
+                val ty = (head.rect.top + head.rect.bottom) / 2f
+                val tx = head.rect.left
+                canvas.drawLine(x, ty, tx, ty, fork)
+                canvas.drawLine(tx, ty, tx - 9f * density, ty - 5f * density, fork)
+                canvas.drawLine(tx, ty, tx - 9f * density, ty + 5f * density, fork)
+            }
+        }
     }
 
     private fun drawNode(canvas: Canvas, p: Placed) {
@@ -483,7 +468,5 @@ class LogicGraphView @JvmOverloads constructor(
         private const val ROW_GAP = 26f
         private const val MAX_W = 300f
 
-        /** How far left of the first node a 随机组 bracket stands, in dp. */
-        const val BRACKET = 16f
     }
 }
