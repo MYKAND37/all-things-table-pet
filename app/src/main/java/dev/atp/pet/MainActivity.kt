@@ -2106,10 +2106,10 @@ class MainActivity : AppCompatActivity() {
             .create()
         // Placing on the canvas needs the canvas: the dialog gets out of the way first, and the
         // rig screen is where the figure is.
-        nodePlacement = { folderId ->
+        nodePlacement = place@{ folderId ->
             dialog.dismiss()
             val target = characters.firstOrNull { it.id == folderId } ?: opened
-                ?: return@nodePlacement
+                ?: return@place
             skeletonView.load(target)
             rigBoneMode = false
             skeletonView.setBoneEditMode(false)
