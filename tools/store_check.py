@@ -98,6 +98,18 @@ def save_rig(root, bones, order, renames=None, nodes=None):
         # no opinion about these, and the default is the behaviour it already had.
         o["collides"] = b.get("collides", True)
         o["grabbable"] = b.get("grabbable", True)
+        # 刚度 ×：属性编辑器改的就是它，而它以前**根本没被写回**。一个人的调参会在按下
+        # 保存骨骼的那一刻无声地回到文件里的旧值（新骨骼则是 1.0）—— 症状是"这个滑杆没用"。
+        # 只在不是 1.0 时写："不在"本来就等于 1.0，而回 1.0 要把这个键拿掉。
+        phys = o.get("physics") or {}
+        if b.get("stiffness", 1.0) != 1.0:
+            phys["stiffness"] = b["stiffness"]
+        else:
+            phys.pop("stiffness", None)
+        if phys:
+            o["physics"] = phys
+        else:
+            o.pop("physics", None)
         arr.append(o)
     root["bones"] = arr
     # Layers are carried over WHOLE and only renumbered. One layer per bone was the bug: a bone
@@ -231,6 +243,8 @@ def save_depth(root, back_to_front, swaps):
 
 
 def bones_of(root):
+    """The bones as the rig editor holds them: everything the editor OWNS has to ride along,
+    or the second save of a file quietly resets it. `stiffness` is here for that reason."""
     """
     The bones as the rig editor holds them.
 
@@ -240,7 +254,8 @@ def bones_of(root):
     """
     return [{"name": b["name"], "parent": b.get("parent"), "head": b["head"], "tail": b["tail"],
              "limits": b.get("limits", [-180, 180]), "collider": b.get("collider", {}),
-             "collides": b.get("collides", True), "grabbable": b.get("grabbable", True)}
+             "collides": b.get("collides", True), "grabbable": b.get("grabbable", True),
+             "stiffness": (b.get("physics") or {}).get("stiffness", 1.0)}
             for b in root["bones"]]
 
 
@@ -268,6 +283,46 @@ def main():
            all(saved_bone.get("collides") is True and saved_bone.get("grabbable") is True
                for saved_bone in saved["bones"]),
            "absent means yes, the same way the app reads it")
+
+    print("\n刚度 ×：编辑器改的那个数，真的写回文件")
+    # 这条是用户问"自定义骨骼刚度做了吗"问出来的：编辑器有那一行、求解器真的读它
+    # （Ragdoll 里 k = stiffness * b.stiffness * K_MAX）、文件也能读进来 —— 但保存骨骼
+    # 的时候**没写回去**。三处里断了一处，症状就是"调了没用"。
+    bones = bones_of(base)
+    bones[0]["stiffness"] = 0.35
+    saved = save_rig(base, bones, names)
+    report("调过的关节写进了 physics.stiffness",
+           saved["bones"][0].get("physics", {}).get("stiffness") == 0.35,
+           str(saved["bones"][0].get("physics")))
+    report("别的关节不长出这个键（不在就是 1.0）",
+           "physics" not in saved["bones"][1] or
+           "stiffness" not in saved["bones"][1].get("physics", {}),
+           str(saved["bones"][1].get("physics")))
+    # 同一个文件改两次：调回去必须把键拿掉，不能留下 0.35 的旧值。
+    again = bones_of(saved)
+    again[0]["stiffness"] = 1.0
+    back = save_rig(saved, again, names)
+    report("调回 1.0 时这个键被拿掉，不留旧值",
+           "stiffness" not in back["bones"][0].get("physics", {}),
+           str(back["bones"][0].get("physics")))
+    # damping/gravity 不是编辑器拥有的，必须原样留着 —— 一次保存把它们抹掉就是另一种丢数据。
+    with_more = save_rig(base, bones, names)
+    with_more["bones"][2]["physics"] = {"damping": 0.5, "gravity": 3.0}
+    kept = save_rig(with_more, bones_of(with_more), names)
+    report("编辑器不管的那些键（damping/gravity）原样留着",
+           kept["bones"][2].get("physics", {}).get("damping") == 0.5 and
+           kept["bones"][2].get("physics", {}).get("gravity") == 3.0,
+           str(kept["bones"][2].get("physics")))
+
+    print("\n属性编辑器拥有的每一个字段，save_rig 都要写")
+    # 这一条是给"以后又加一个字段、忘了写回去"准备的：属性编辑器能改的字段，一个都不能
+    # 只活在内存在里。它是从 Kotlin 里读出来的，不是手抄的清单。
+    kt = open(STORE_KT, encoding="utf-8").read()
+    body = kt[kt.find("fun saveRig"):kt.find("fun ", kt.find("fun saveRig") + 10)]
+    owns = ["limits", "collider", "collides", "grabbable", "stiffness"]
+    missing = [f for f in owns if f not in body]
+    report("limits / collider / collides / grabbable / stiffness 都写", not missing,
+           "没写：" + str(missing))
 
     print("\n节点：写进去的每一个字段，读回来都还在")
     # 节点是规则用来称呼一个地方的**名字**。丢一个字段的症状不是画错，而是规则不再

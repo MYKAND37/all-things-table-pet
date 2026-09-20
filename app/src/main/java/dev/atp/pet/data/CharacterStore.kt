@@ -382,6 +382,20 @@ class CharacterStore(private val context: Context) {
                     .put("radius", b.colliderRadius.toDouble()))
                 o.put("collides", b.collides)
                 o.put("grabbable", b.grabbable)
+                // 刚度 ×: this joint's own spring, as a multiple of the character's. THIS IS THE
+                // FIELD THE ATTRIBUTE EDITOR CHANGES AND THE ONE THAT WAS MISSING HERE -- a
+                // stiffness somebody tuned came back as whatever the file already said (or 1.0
+                // for a new bone), silently, the moment they pressed 保存骨骼. It is written
+                // only when it is not 1.0, because "not there" already means 1.0 and a file
+                // should not grow a physics object on all nineteen bones the first time it is
+                // saved; going back to 1.0 takes the key away again.
+                val phys = o.optJSONObject("physics") ?: JSONObject()
+                if (b.stiffness != 1f) {
+                    phys.put("stiffness", b.stiffness.toDouble())
+                } else {
+                    phys.remove("stiffness")
+                }
+                if (phys.length() == 0) o.remove("physics") else o.put("physics", phys)
                 arr.put(o)
             }
             root.put("bones", arr)
