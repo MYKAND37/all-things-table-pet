@@ -16,6 +16,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * How a drawing for a STATE is named: upperarm_L__mech.png for the mech state.
@@ -836,7 +837,7 @@ class CharacterStore(private val context: Context) {
      * it, and two people naming their pet 小白 is not a reason to lose one of them. A name that
      * is taken gets a number (see [freeId]).
      */
-    fun importPackage(open: () -> InputStream?, fallback: String = "pet"): String? {
+    fun importPackage(fallback: String = "pet", open: () -> InputStream?): String? {
         val stream = open() ?: return null
         root.mkdirs()
         // Copied to a file first so it can be read twice: the manifest says what is inside, and
