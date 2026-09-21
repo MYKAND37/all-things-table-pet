@@ -750,6 +750,21 @@ class Ragdoll(
         pinVel = Vec2.ZERO
     }
 
+    /**
+     * Put the figure down where it is standing, keeping nothing else.
+     *
+     * The one caller is a 换骨骼套: the pet gets another body underneath it, and a body that
+     * jumps back to its home corner while its owner watches is a body that was replaced rather
+     * than changed. The pose is NOT carried over -- the joints are new and their angles mean
+     * nothing on it -- only the place is.
+     */
+    fun moveRootTo(place: Vec2) {
+        rootPos = place
+        rootVel = Vec2.ZERO
+        pinLast = null
+        pinVel = Vec2.ZERO
+    }
+
     /** One finger: the bone it is holding, where on that bone, and where the finger is. */
     class Pin(val bone: String, val target: Vec2, val offset: Float = 0f)
 

@@ -762,7 +762,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         ragdoll = Ragdoll(built, parsed, stiffness)
         layersNow = parsed.drawOrder()
         // The pet does not teleport: the new body is put where the old one was standing.
-        if (where != null) ragdoll?.rootPos = where
+        if (where != null) ragdoll?.moveRootTo(where)
         prevRootY = ragdoll?.rootPos?.y ?: 0f
         wasGrounded = true
         framed = false
