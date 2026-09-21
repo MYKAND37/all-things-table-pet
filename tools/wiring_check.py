@@ -214,6 +214,7 @@ def main():
         ("加骨骼", "rig_add_bone"),
         ("骨骼列表", "rig_bone_list"),
         ("画板的撤销", "paint_undo"),
+        ("调骨骼时的参考图", "rig_reference"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -253,6 +254,17 @@ def main():
     # 有意的：道具会跟着搬过去，水不会（它的每一滴都在旧屋子的坐标里）。
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
+
+    print("== 调骨骼时看得见参考图：两半都要在 ==")
+    # 「在调骨骼的时候看不到参考图了」有两个成因，两句断言各盯一个。
+    # 1) 拼起来的那一整只只画"状态允许"的图层（LayerSpec.visible），而这个界面从来没人
+    #    给过它状态表 —— 于是画在「穿着」「机械」后面的图在测试场里看得见、在这里看不见。
+    # 2) 从外面拿进来的那张图（上传的参考图）必须真的被画出来。
+    view = next((t for path, t in files.items() if path.endswith("SkeletonView.kt")), "")
+    report("编辑器把状态表交给了渲染器（不然被状态挡住的图永远不画）",
+           "renderer?.states" in view)
+    report("上传的参考图会在骨架下面画出来",
+           "reference" in view and "drawBitmap" in view)
 
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0

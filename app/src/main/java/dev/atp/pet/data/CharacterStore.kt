@@ -60,6 +60,15 @@ class CharacterFolder(val dir: File, val rig: String = "") {
     fun partFile(bone: String): File = File(partsDir, bone + ".png")
 
     /**
+     * A picture to rig THIS rig against, if the user brought one in.
+     *
+     * Beside the rig's spec rather than in parts/: it is not artwork for a bone and it must not
+     * be mistaken for one -- a file called reference.png next to hand_L.png is a file somebody
+     * will wonder about, and it would be drawn on the bench as if it were a part.
+     */
+    val referenceFile: File get() = File(rigDir, REFERENCE_FILE)
+
+    /**
      * The saved poses, which belong to the RIG and not to the pet: a pose is a set of bone
      * angles, and a rig whose bones are named differently cannot hold the same ones. The
      * default rig's file stays where it always was, so nobody's saved poses move.
@@ -98,6 +107,9 @@ class CharacterFolder(val dir: File, val rig: String = "") {
 
         /** The extra rigs of one pet. See [rigDir]. */
         val RIGS_DIR = "rigs"
+
+        /** The picture a rig is adjusted against. One per rig: it is a picture of that body. */
+        val REFERENCE_FILE = "reference.png"
 
         /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
         val POSES_FILE = "poses.json"
@@ -264,6 +276,33 @@ class CharacterStore(private val context: Context) {
             if (f.isDirectory) copyDir(f, File(to, f.name)) else f.copyTo(File(to, f.name), overwrite = true)
         }
     }
+
+    /**
+     * Keep a picked image as this rig's reference, or drop the one it has.
+     *
+     * Written to a neighbour first and renamed, like every other file this app owns: a
+     * half-copied picture would show up as a reference that is half there.
+     */
+    fun saveReference(folder: CharacterFolder, open: () -> InputStream?): Boolean {
+        val stream = open() ?: return false
+        val target = folder.referenceFile
+        return try {
+            folder.rigDir.mkdirs()
+            val temp = File(folder.rigDir, CharacterFolder.REFERENCE_FILE + ".part")
+            stream.use { input -> temp.outputStream().use { out -> input.copyTo(out) } }
+            if (target.exists()) target.delete()
+            temp.renameTo(target)
+        } catch (e: IOException) {
+            false
+        }
+    }
+
+    fun clearReference(folder: CharacterFolder): Boolean =
+        try {
+            folder.referenceFile.delete()
+        } catch (e: Exception) {
+            false
+        }
 
     /**
      * Write an imported image as the artwork for one bone.

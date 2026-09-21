@@ -105,6 +105,13 @@ class MainActivity : AppCompatActivity() {
 
     /** Set while importing a variant: the bone whose geometry to fit, and the file key. */
     private var awaitingVariant: Pair<String, String>? = null
+
+    /** The rig editor's preview: which states are on, and whether the assembled pet is drawn. */
+    private var previewStates: Map<String, Boolean> = emptyMap()
+    private var previewParts = true
+
+    /** The next image picked is the rig's reference picture, not a part. See onImagePicked. */
+    private var pickingReference = false
     private var railCollapsed = false
     private var stiffnessStep = 0
 
@@ -275,6 +282,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.rigSaveBones).setOnClickListener { saveBones() }
         findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
         findViewById<View>(R.id.rigSavePose).setOnClickListener { askPoseName() }
+        findViewById<View>(R.id.rigReference).setOnClickListener { askReference() }
         // Adding, deleting or reparenting a bone redraws the list it was done from.
         skeletonView.onRigChanged = {
             refreshBoneList()
@@ -1465,6 +1473,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onImagePicked(uri: Uri?) {
+        // A reference picture is not artwork for a bone either, and it does not go through the
+        // alignment screen: it is put UNDER the rig to be traced, fitted to the canvas.
+        if (pickingReference) {
+            pickingReference = false
+            val folder = opened
+            if (uri == null || folder == null) return
+            if (store.saveReference(folder) { contentResolver.openInputStream(uri) }) {
+                skeletonView.loadReference()
+                Toast.makeText(this, R.string.rig_ref_picked, Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
         // Prop art is not attached to a bone, so it needs no alignment step: the picture
         // is simply the thing, and where its pixels are is where it is drawn.
         if (awaitingProp != null) {
@@ -2780,6 +2802,112 @@ class MainActivity : AppCompatActivity() {
             row.setOnClickListener { if (onPick(name)) dialog.dismiss() }
         }
         return row
+    }
+
+    /**
+     * 参考图: what the rig editor draws under the skeleton.
+     *
+     * 「在调骨骼的时候看不到参考图了」 has two answers, and this screen is both of them.
+     * The assembled pet only draws the layers a STATE lets through (see LayerSpec.visible),
+     * and this screen never turned any state on -- so a drawing that lives behind 穿着/机械
+     * was invisible here while it was plainly there on the bench. And a drawing that has not
+     * been imported at all cannot be shown by any amount of state-toggling, so any picture
+     * from the phone can be put underneath and traced.
+     */
+    private fun askReference() {
+        val folder = opened ?: return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.rig_reference)
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+
+        // Every row reopens this dialog after it answers, so what is on is always what the
+        // screen says is on -- the same shape the branch dialog uses.
+        fun row(text: String, lit: Boolean, tap: () -> Unit) {
+            val v = label(text, 13f, if (lit) INK else MUTED)
+            v.setPadding(dp(12), dp(11), dp(12), dp(11))
+            v.background = getDrawable(
+                if (lit) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            v.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+            v.setOnClickListener {
+                tap()
+                dialog.dismiss()
+                askReference()
+            }
+            box.addView(v)
+        }
+
+        box.addView(label(getString(R.string.rig_ref_hint), 11f, MUTED, bottom = 8))
+        val partsOn = previewParts
+        row(
+            getString(if (partsOn) R.string.rig_ref_parts_on else R.string.rig_ref_parts_off),
+            partsOn,
+        ) {
+            previewParts = !partsOn
+            skeletonView.setPreview(previewStates, previewParts)
+        }
+
+        box.addView(label(getString(R.string.rig_ref_states), 11f, MUTED, top = 8, bottom = 6))
+        val keys = previewStateKeys(folder)
+        if (keys.isEmpty()) {
+            box.addView(label(getString(R.string.rig_ref_none_states), 11f, MUTED, bottom = 6))
+        }
+        for ((key, text) in keys) {
+            val on = previewStates[key] == true
+            row((if (on) "✓ " else "· ") + text, on) {
+                previewStates = if (on) previewStates - key else previewStates + (key to true)
+                skeletonView.setPreview(previewStates, previewParts)
+            }
+        }
+
+        box.addView(label(getString(R.string.rig_ref_alpha), 11f, MUTED, top = 8, bottom = 6))
+        val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for ((value, name) in listOf(
+            60 to R.string.rig_ref_light,
+            140 to R.string.rig_ref_mid,
+            220 to R.string.rig_ref_strong,
+        )) {
+            val c = chip(getString(name), skeletonView.referenceAlpha == value, 12f)
+            c.setOnClickListener {
+                skeletonView.setReferenceAlpha(value)
+                dialog.dismiss()
+                askReference()
+            }
+            chips.addView(c)
+        }
+        box.addView(chips)
+
+        row(getString(R.string.rig_ref_pick), false) {
+            pickingReference = true
+            pickImage.launch(arrayOf("image/*"))
+        }
+        if (skeletonView.hasReference) {
+            row(getString(R.string.rig_ref_clear), false) {
+                store.clearReference(folder)
+                skeletonView.loadReference()
+            }
+        }
+        dialog.show()
+    }
+
+    /** Every state that can gate a layer of this rig: the pet's own, and each part's own. */
+    private fun previewStateKeys(folder: CharacterFolder): List<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        for (s in store.loadLogic(folder.id).states) out.add(s.id to s.name)
+        for ((subject, spec) in store.loadObjectLogic(folder)) {
+            if (!Subjects.isPart(subject)) continue
+            val bone = Subjects.partId(subject)
+            for (s in spec.states) {
+                out.add(Subjects.stateTag(bone, s.id) to (bone + " · " + s.name))
+            }
+        }
+        return out
     }
 
     private fun askPoseName() {

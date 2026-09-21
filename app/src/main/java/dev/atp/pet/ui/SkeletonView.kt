@@ -1,8 +1,11 @@
 package dev.atp.pet.ui
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.util.AttributeSet
 import android.view.MotionEvent
@@ -24,6 +27,7 @@ import dev.atp.pet.render.PartRenderer
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
 
@@ -58,6 +62,27 @@ class SkeletonView @JvmOverloads constructor(
     private var renderer: PartRenderer? = null
     private var library: PartLibrary? = null
     private val handles = mutableListOf<Handle>()
+
+    /**
+     * A picture to rig against, drawn under everything: the assembled pet, or one the user
+     * brought in with them.
+     *
+     * 「在调骨骼的时候看不到参考图」 was the report, and there were two ways to be blind. The
+     * assembled pet only draws the layers a state lets through, and this screen never turned
+     * any state on -- so art that lives behind 穿着/机械 was invisible here while it was
+     * plainly there on the bench. And art that has not been imported yet cannot be shown by
+     * any amount of state-toggling, which is what [reference] is for: a drawing from outside
+     * the app, fitted to the canvas, to place joints against.
+     */
+    private var reference: Bitmap? = null
+    private var refAlpha = 140
+    /** Whether the assembled pet is drawn at all. See [setPreviewStates]. */
+    private var showParts = true
+    /**
+     * The states the preview is drawn WITH. Every state off is how this screen has always
+     * looked; turning one on is how a drawing that a state hides gets looked at.
+     */
+    private var previewStates: Map<String, Boolean> = emptyMap()
 
     /** One scratch rect for the range arcs, so a redraw does not allocate. */
     private val rangeRect = RectF()
@@ -94,6 +119,8 @@ class SkeletonView @JvmOverloads constructor(
         strokeWidth = 3f * density
     }
     private val jointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+    /** The reference image: filtered, because it is usually a different size from the canvas. */
+    private val refPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2f * density
@@ -177,6 +204,7 @@ class SkeletonView @JvmOverloads constructor(
         }
         spec = parsed
         rebuild(parsed)
+        loadReference()
 
         onInfo?.invoke(
             parsed.id + "  ·  " + parsed.bones.size + " bones  ·  " +
@@ -206,6 +234,9 @@ class SkeletonView @JvmOverloads constructor(
             parsed.drawOrder(),
             parsed.swaps,
         )
+        // The states the preview was asked for, on the renderer that was just rebuilt: a rig
+        // edit must not quietly turn the reference off.
+        renderer?.states = previewStates
 
         handles.clear()
         val alive = built.bones.map { it.name }.toSet()
@@ -219,6 +250,56 @@ class SkeletonView @JvmOverloads constructor(
             handles.add(Handle(b, chainByLower[b.name]))
         }
         requestLayout()
+        invalidate()
+    }
+
+    // ── 参考图 ──────────────────────────────────────────────────────────────
+
+    /**
+     * Read the rig's own reference image off disk, if it has one.
+     *
+     * Per RIG rather than per pet: it is a picture of the body being rigged, and two bodies
+     * of one pet are two different drawings. The file lives beside that rig's spec.
+     */
+    fun loadReference() {
+        reference?.recycle()
+        reference = null
+        val file = folder?.referenceFile
+        if (file != null && file.isFile) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            var sample = 1
+            while (max(bounds.outWidth, bounds.outHeight) / sample > 2048) sample *= 2
+            reference = BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sample },
+            )
+        }
+        invalidate()
+    }
+
+    /** Does this rig have a picture of its own to rig against? */
+    val hasReference: Boolean get() = reference != null
+
+    /** How strongly the reference shows through, 0..255. The dialog offers three of these. */
+    val referenceAlpha: Int get() = refAlpha
+
+    fun setReferenceAlpha(alpha: Int) {
+        refAlpha = alpha.coerceIn(0, 255)
+        invalidate()
+    }
+
+    /**
+     * Which states the preview is drawn with, and whether the assembled pet is drawn at all.
+     *
+     * This is the half of 「看不到参考图」 that is a bug rather than a missing feature: the
+     * renderer draws a layer only if its state is on (see LayerSpec.visible), and until now
+     * nothing on this screen ever set the map, so every drawing behind a state was skipped.
+     */
+    fun setPreview(states: Map<String, Boolean>, parts: Boolean) {
+        previewStates = states
+        showParts = parts
+        renderer?.states = states
         invalidate()
     }
 
@@ -729,7 +810,29 @@ class SkeletonView @JvmOverloads constructor(
             framePaint
         )
 
-        renderer?.let {
+        // The reference first, so both the assembled pet and the skeleton are drawn ON it.
+        // Fitted, not stretched: an image exported at the canvas size fills the frame exactly,
+        // and anything else keeps its proportions instead of being quietly distorted.
+        reference?.let { bmp ->
+            val boxW = s.canvasWidth * scale
+            val boxH = s.canvasHeight * scale
+            if (bmp.width > 0 && bmp.height > 0 && boxW > 0f && boxH > 0f) {
+                val k = min(boxW / bmp.width, boxH / bmp.height)
+                val w = bmp.width * k
+                val h = bmp.height * k
+                val left = offsetX + (boxW - w) / 2f
+                val top = offsetY + (boxH - h) / 2f
+                refPaint.alpha = refAlpha
+                canvas.drawBitmap(
+                    bmp,
+                    Rect(0, 0, bmp.width, bmp.height),
+                    RectF(left, top, left + w, top + h),
+                    refPaint,
+                )
+            }
+        }
+
+        if (showParts) renderer?.let {
             canvas.save()
             canvas.translate(offsetX, offsetY)
             canvas.scale(scale, scale)
@@ -1004,5 +1107,7 @@ class SkeletonView @JvmOverloads constructor(
         library?.release()
         library = null
         renderer = null
+        reference?.recycle()
+        reference = null
     }
 }

@@ -174,6 +174,15 @@ def poses_file_name():
     return kotlin_val("POSES_FILE", "poses.json")
 
 
+def reference_file_name():
+    return kotlin_val("REFERENCE_FILE", "reference.png")
+
+
+def rig_reference(character_id, rig=""):
+    """The picture a rig is adjusted against. Per rig: it is a picture of THAT body."""
+    return rig_dir(character_id, rig) + "/" + reference_file_name()
+
+
 def rig_dir(character_id, rig=""):
     """Mirror of CharacterFolder.rigDir: the package itself, or one folder in for a named rig."""
     if not rig:
@@ -506,6 +515,13 @@ def main():
            rig_poses("female_base", "mech"))
     report("而默认套的动作也还在老地方",
            rig_poses("female_base") == "characters/female_base/" + poses_file_name())
+    report("参考图跟着那一套走（它是这副身体的画）",
+           rig_reference("female_base", "mech") ==
+           "characters/female_base/%s/mech/%s" % (rigs_dir(), reference_file_name()),
+           rig_reference("female_base", "mech"))
+    # 参考图不能落在 parts/ 里：那是"每根骨头一张图"的地方，一张叫 reference.png 的东西
+    # 摆在那儿，既会被当成一根骨头的画，也会在测试场上被画出来。
+    report("参考图不在 parts/ 里", "/parts/" not in rig_reference("female_base", "mech"))
     # 其余的东西是桌宠的，不跟着骨骼走：规则、数值、状态、粒子、液体都住在包裹顶层。
     # 这一条是"换骨骼套不动内在"在文件层面的那一半。
     report("规则/粒子/液体不跟着骨骼套走（它们住在桌宠顶层）",

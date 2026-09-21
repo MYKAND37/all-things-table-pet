@@ -505,6 +505,11 @@
                         android:text="@string/rig_save_pose" />
 
                     <TextView
+                        android:id="@+id/rigReference"
+                        style="@style/AlignButton"
+                        android:text="@string/rig_reference" />
+
+                    <TextView
                         android:id="@+id/rigLimitMin"
                         style="@style/AlignButton"
                         android:text="@string/rig_limit_set_min" />
