@@ -216,6 +216,88 @@ class CharacterStore(private val context: Context) {
         return if (File(dir, CharacterFolder.SPEC_FILE).isFile) CharacterFolder(dir) else null
     }
 
+    // ── 新建与复制一只桌宠 ───────────────────────────────────────────────────
+
+    /**
+     * The first free name of the form `<prefix>`, `<prefix>2`, `<prefix>3` … .
+     *
+     * Used for new pets and for importing a package whose name is taken: importing must never
+     * write over a pet that is already there, and asking the user to invent a name before they
+     * have seen what is in the package is asking them to name somebody else's pet.
+     */
+    fun freeId(prefix: String, taken: Set<String>? = null): String {
+        val used = taken ?: list().map { it.id }.toSet()
+        val base = RigEdit.sanitise(prefix).ifEmpty { "pet" }
+        if (base !in used) return base
+        var n = 2
+        while (base + n in used) n++
+        return base + n
+    }
+
+    /**
+     * A new pet: one copied from the bundled one, or a copy of an existing package.
+     *
+     * [from] empty means "the one that ships with the app" -- the素体, which is what somebody
+     * starting from nothing wants. A copy of an existing pet takes the WHOLE folder: its
+     * drawings, its rigs, its rules, its particles, its liquids and its poses, because that is
+     * what "the same pet again" means and it is also how somebody makes a variant without
+     * risking the original.
+     *
+     * The ids inside the copied specs are stamped with the new name (see [stampId]): a pet whose
+     * character.json still says `female_base` shows that name in the editor and in the 变身
+     * check, and a package that lies about its own name is a package nobody can debug.
+     */
+    fun createCharacter(name: String, from: String = ""): String? {
+        val clean = RigEdit.sanitise(name)
+        if (clean.isEmpty()) return null
+        val target = File(root, clean)
+        if (target.exists()) return null
+        return try {
+            if (from.isEmpty()) {
+                val bundled = BUNDLED_ROOT + "/" + BUNDLED_FALLBACK
+                if ((context.assets.list(bundled) ?: emptyArray()).isEmpty()) return null
+                target.mkdirs()
+                copyAssetTree(bundled, target)
+            } else {
+                val source = folder(from) ?: return null
+                copyDir(source.dir, target)
+            }
+            stampId(target, clean)
+            clean
+        } catch (e: Exception) {
+            target.deleteRecursively()
+            null
+        }
+    }
+
+    /**
+     * Every spec inside one pet folder says whose pet it is.
+     *
+     * The default rig's spec and each `rigs/<套名>/character.json`: all of them belong to the
+     * same pet, so all of them carry the same id. A copied file keeps the name of the folder it
+     * came from otherwise, and that name is shown to the user (the rig editor's first line, the
+     * bench's status line) and compared against by 变身.
+     */
+    private fun stampId(petDir: File, id: String) {
+        val specs = mutableListOf(File(petDir, CharacterFolder.SPEC_FILE))
+        File(petDir, CharacterFolder.RIGS_DIR).listFiles()?.forEach {
+            if (it.isDirectory) specs.add(File(it, CharacterFolder.SPEC_FILE))
+        }
+        for (spec in specs) {
+            if (!spec.isFile) continue
+            try {
+                val text = spec.readText()
+                val root = JSONObject(text)
+                if (root.optString("id", "") == id) continue
+                root.put("id", id)
+                writeText(spec, root.toString(2))
+            } catch (e: Exception) {
+                // A spec that will not parse is left exactly as it is: rewriting a broken file
+                // from a parse that failed would turn "unreadable" into "empty".
+            }
+        }
+    }
+
     // ── 骨骼套 ──────────────────────────────────────────────────────────────
 
     /**
@@ -254,6 +336,37 @@ class CharacterStore(private val context: Context) {
         val dir = pet.withRig(name).rigDir
         if (!dir.isDirectory) return false
         return dir.deleteRecursively()
+    }
+
+    /**
+     * Put ONE rig's skeleton back to the one that ships with the app.
+     *
+     * The report was 「搞一个重置骨骼的功能」, and the thing that has no way back is the rig
+     * itself: dragging joints in 改骨骼 moves them for good, and 清空 leaves one bone and a
+     * blank canvas. This restores the spec -- bones, layers, chains, physics numbers -- while
+     * leaving everything that is the pet's or the user's: the drawings in this rig's `parts/`
+     * stay (a bone with the same name keeps its picture), the poses stay, the rules, the
+     * particles, the liquids and the OTHER rigs are not touched at all.
+     *
+     * The spec that comes back says `female_base` inside it, so its id is stamped with the pet's
+     * own name on the way in (see [stampId]).
+     */
+    fun resetRig(folder: CharacterFolder): Boolean {
+        val asset = BUNDLED_ROOT + "/" + BUNDLED_FALLBACK + "/" + CharacterFolder.SPEC_FILE
+        return try {
+            folder.rigDir.mkdirs()
+            val temp = File(folder.rigDir, CharacterFolder.SPEC_FILE + ".part")
+            context.assets.open(asset).use { input ->
+                temp.outputStream().use { out -> input.copyTo(out) }
+            }
+            if (temp.length() <= 0L) return false
+            if (folder.specFile.exists()) folder.specFile.delete()
+            if (!temp.renameTo(folder.specFile)) return false
+            stampId(folder.dir, folder.id)
+            true
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /** Rename a rig: the whole folder moves, so the skeleton, the art and the poses move with it. */
@@ -703,6 +816,43 @@ class CharacterStore(private val context: Context) {
         return false
     }
 
+    // ── 桌宠包 ──────────────────────────────────────────────────────────────
+
+    /**
+     * Write one pet out as a single file.
+     *
+     * Everything in the folder goes in -- the rig, the drawings, the other rigs, the rules, the
+     * particles, the liquids, the poses, the reference pictures -- because a package that leaves
+     * something behind is a package that restores a pet somebody does not recognise. [out] is
+     * whatever the system file picker handed back, so this writes and closes and owns nothing.
+     */
+    fun exportPackage(folder: CharacterFolder, out: OutputStream): Boolean =
+        PetPackage.write(folder.dir, folder.id, out)
+
+    /**
+     * Read a package in as a NEW pet, and answer its name.
+     *
+     * Never over a pet that is already there: the name in the package is what the sender called
+     * it, and two people naming their pet 小白 is not a reason to lose one of them. A name that
+     * is taken gets a number (see [freeId]).
+     */
+    fun importPackage(open: () -> InputStream?, fallback: String = "pet"): String? {
+        val stream = open() ?: return null
+        root.mkdirs()
+        // Copied to a file first so it can be read twice: the manifest says what is inside, and
+        // a stream cannot be rewound. It also means a half-downloaded package never gets
+        // half-extracted.
+        val temp = File(root, ".import-" + System.nanoTime() + ".part")
+        return try {
+            stream.use { input -> temp.outputStream().use { out -> input.copyTo(out) } }
+            PetPackage.read(temp, root) { wanted -> freeId(wanted.ifEmpty { fallback }) }
+        } catch (e: Exception) {
+            null
+        } finally {
+            temp.delete()
+        }
+    }
+
     // ── 动作预设 ────────────────────────────────────────────────────────────
 
     /** A saved pose: the joint angles the character holds while it is "doing" this action. */
@@ -1119,6 +1269,9 @@ class CharacterStore(private val context: Context) {
 
     private companion object {
         const val BUNDLED_ROOT = "characters"
+
+        /** What "a new pet" is copied from when nothing else is named. The素体. */
+        const val BUNDLED_FALLBACK = "female_base"
 
         /** Rules and numbers are the user's too, for the same reason. */
         const val LOGIC_FILE = "logic.json"

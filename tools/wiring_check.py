@@ -215,6 +215,7 @@ def main():
         ("骨骼列表", "rig_bone_list"),
         ("画板的撤销", "paint_undo"),
         ("调骨骼时的参考图", "rig_reference"),
+        ("重置骨骼", "rig_reset_bones"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -254,6 +255,17 @@ def main():
     # 有意的：道具会跟着搬过去，水不会（它的每一滴都在旧屋子的坐标里）。
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
+
+    print("== 重置骨骼：只回骨架，不是把这一套删了重来 ==")
+    # 「重置骨骼」要是把部位图一起删了，那它和"删掉这套骨骼重画"没有区别 —— 而后者用户
+    # 已经会了。三句断言盯住这件事：写的是这一套的 spec，而且一个文件都不删。
+    store = next((t for path, t in files.items() if path.endswith("CharacterStore.kt")), "")
+    reset = store[store.find("fun resetRig"):]
+    end = reset.find("\n    }")
+    reset = reset[:end] if end >= 0 else reset
+    report("只写这一套的 character.json", "folder.specFile" in reset)
+    report("不碰这一套的部位图", "partsDir" not in reset)
+    report("不删任何东西", "deleteRecursively" not in reset)
 
     print("== 调骨骼时看得见参考图：两半都要在 ==")
     # 「在调骨骼的时候看不到参考图了」有两个成因，两句断言各盯一个。

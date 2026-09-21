@@ -21,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
 import dev.atp.pet.data.CharacterFolder
+import dev.atp.pet.data.PetPackage
 import dev.atp.pet.data.Settings
 import dev.atp.pet.data.SettingsStore
 import dev.atp.pet.data.CharacterStore
@@ -205,6 +206,19 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? -> onImagePicked(uri) }
 
+    /** 导出桌宠包: the system's "save as", so the file lands wherever the user keeps things. */
+    private val exportPackage = registerForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri: Uri? -> onExportPicked(uri) }
+
+    /** 导入桌宠包: the matching picker. */
+    private val importPackage = registerForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? -> onImportPicked(uri) }
+
+    /** Which pet the picker is currently saving. The dialog comes back later; see onExportPicked. */
+    private var pendingExport: CharacterFolder? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -283,6 +297,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.rigReset).setOnClickListener { skeletonView.resetPose() }
         findViewById<View>(R.id.rigSavePose).setOnClickListener { askPoseName() }
         findViewById<View>(R.id.rigReference).setOnClickListener { askReference() }
+        findViewById<View>(R.id.rigResetBones).setOnClickListener { askResetRig() }
         // Adding, deleting or reparenting a bone redraws the list it was done from.
         skeletonView.onRigChanged = {
             refreshBoneList()
@@ -893,6 +908,25 @@ class MainActivity : AppCompatActivity() {
         petList.removeAllViews()
         petList.addView(label(getString(R.string.pets_subtitle), 12f, MUTED, bottom = 10))
 
+        // 新建 and 导入 at the TOP: the list is where somebody goes when they want another one,
+        // and both of these are about the list rather than about any pet in it.
+        val top = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val add = label(getString(R.string.pet_new), 13f, INK)
+        add.setPadding(dp(12), dp(8), dp(12), dp(8))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.setOnClickListener { askNewPet() }
+        top.addView(add)
+        val bring = label(getString(R.string.pet_import), 13f, INK)
+        bring.setPadding(dp(12), dp(8), dp(12), dp(8))
+        bring.background = getDrawable(R.drawable.menu_item_idle)
+        bring.setOnClickListener { askImportPet() }
+        top.addView(bring)
+        top.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(10) }
+        petList.addView(top)
+
         for (folder in characters) {
             val bones = boneNames(folder)
             val card = LinearLayout(this).apply {
@@ -929,6 +963,16 @@ class MainActivity : AppCompatActivity() {
             // A package is the one thing that had no way out. Everything inside it can be
             // deleted one piece at a time, which is no help when the whole thing was an
             // experiment.
+            val copy = label(getString(R.string.pet_copy), 11f, MUTED)
+            copy.setPadding(dp(10), dp(6), dp(10), dp(6))
+            copy.setOnClickListener { askCopyPet(folder) }
+            header.addView(copy)
+
+            val send = label(getString(R.string.pet_export), 11f, MUTED)
+            send.setPadding(dp(10), dp(6), dp(10), dp(6))
+            send.setOnClickListener { askExportPet(folder) }
+            header.addView(send)
+
             val remove = label(getString(R.string.action_delete), 11f, MUTED)
             remove.setPadding(dp(10), dp(6), dp(10), dp(6))
             remove.setOnClickListener { confirmDeletePet(folder, bones.size) }
@@ -1098,6 +1142,75 @@ class MainActivity : AppCompatActivity() {
             buildPartList(folder)
         }
         buildPetChooser()
+    }
+
+    /** ＋新建桌宠: a copy of the one that ships with the app, under a name of its own. */
+    private fun askNewPet() {
+        askText(getString(R.string.pet_new_name), store.freeId("pet")) { typed ->
+            val id = store.createCharacter(typed)
+            if (id == null) {
+                Toast.makeText(this, R.string.pet_new_failed, Toast.LENGTH_SHORT).show()
+            } else {
+                reloadCharacters()
+                Toast.makeText(this, getString(R.string.pet_new_done, id), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 复制: the same pet again, everything in the folder included -- art, rigs, rules, poses. */
+    private fun askCopyPet(folder: CharacterFolder) {
+        askText(getString(R.string.pet_copy_name), store.freeId(folder.id)) { typed ->
+            val id = store.createCharacter(typed, from = folder.id)
+            if (id == null) {
+                Toast.makeText(this, R.string.pet_new_failed, Toast.LENGTH_SHORT).show()
+            } else {
+                reloadCharacters()
+                Toast.makeText(this, getString(R.string.pet_new_done, id), Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /** 导出: the whole folder as one file, through the system's own "save as". */
+    private fun askExportPet(folder: CharacterFolder) {
+        pendingExport = folder
+        exportPackage.launch(folder.id + "." + PetPackage.EXTENSION)
+    }
+
+    private fun onExportPicked(uri: Uri?) {
+        val folder = pendingExport
+        pendingExport = null
+        if (uri == null || folder == null) return
+        val ok = try {
+            contentResolver.openOutputStream(uri)?.use { store.exportPackage(folder, it) } ?: false
+        } catch (e: Exception) {
+            false
+        }
+        Toast.makeText(
+            this,
+            getString(if (ok) R.string.pet_export_done else R.string.pet_export_failed, folder.id),
+            Toast.LENGTH_LONG,
+        ).show()
+    }
+
+    private fun askImportPet() {
+        importPackage.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+    }
+
+    /**
+     * 导入: always a NEW pet, never over one that is there.
+     *
+     * The name is the package's own, with a number if somebody here already used it -- two
+     * people calling their pet 小白 is not a reason to lose one of them.
+     */
+    private fun onImportPicked(uri: Uri?) {
+        if (uri == null) return
+        val id = store.importPackage { contentResolver.openInputStream(uri) }
+        if (id == null) {
+            Toast.makeText(this, R.string.pet_import_failed, Toast.LENGTH_LONG).show()
+        } else {
+            reloadCharacters()
+            Toast.makeText(this, getString(R.string.pet_import_done, id), Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun openPet(folder: CharacterFolder) {
@@ -2802,6 +2915,83 @@ class MainActivity : AppCompatActivity() {
             row.setOnClickListener { if (onPick(name)) dialog.dismiss() }
         }
         return row
+    }
+
+    /**
+     * 重置骨骼: the way back for the one screen that edits the rig for good.
+     *
+     * 「改骨骼」 drags joints, adds and deletes bones, and 保存骨骼 writes it: the only ways out
+     * of a rig somebody has made a mess of were 清空（只留根） and deleting the whole pet --
+     * and deleting the pet throws away the drawings, the rules and the particles with it. So
+     * this is one entry with three named answers, because "reset" means three different things
+     * and the difference matters:
+     *
+     *   1. throw away what has not been SAVED yet (the file is the truth, so this cannot lose
+     *      anything that was ever kept);
+     *   2. put the SKELETON back to the one that ships with the app, keeping this rig's
+     *      drawings, its poses and everything that belongs to the pet;
+     *   3. clear down to a single root bone -- the same thing the bone list already offers,
+     *      put here so that "start over" is one place.
+     */
+    private fun askResetRig() {
+        val folder = opened ?: return
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.rig_reset_bones)
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+
+        fun row(title: Int, hint: Int, tap: () -> Unit) {
+            val v = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            v.setPadding(dp(12), dp(10), dp(12), dp(10))
+            v.background = getDrawable(R.drawable.menu_item_idle)
+            v.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+            v.addView(label(getString(title), 13f, INK))
+            v.addView(label(getString(hint), 11f, MUTED, top = 2))
+            v.setOnClickListener {
+                tap()
+                dialog.dismiss()
+            }
+            box.addView(v)
+        }
+
+        box.addView(label(getString(R.string.rig_reset_hint), 11f, MUTED, bottom = 8))
+        row(R.string.rig_reset_undo, R.string.rig_reset_undo_hint) {
+            // Re-read from disk: the editor's copy is thrown away, the file is not touched.
+            skeletonView.load(folder)
+            rigBoneMode = false
+            skeletonView.setBoneEditMode(false)
+            applyRigMode()
+            Toast.makeText(this, R.string.rig_reset_done, Toast.LENGTH_SHORT).show()
+        }
+        row(R.string.rig_reset_factory, R.string.rig_reset_factory_hint) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.rig_reset_factory)
+                .setMessage(R.string.rig_reset_factory_confirm)
+                .setPositiveButton(R.string.rig_reset_factory) { _, _ -> resetRigToFactory(folder) }
+                .setNegativeButton(R.string.depth_cancel, null)
+                .show()
+        }
+        row(R.string.rig_reset_clear, R.string.rig_reset_clear_hint) { confirmKeepOnlyRoot() }
+        dialog.show()
+    }
+
+    private fun resetRigToFactory(folder: CharacterFolder) {
+        if (!store.resetRig(folder)) {
+            Toast.makeText(this, R.string.rig_reset_failed, Toast.LENGTH_LONG).show()
+            return
+        }
+        skeletonView.load(folder)
+        rigBoneMode = false
+        skeletonView.setBoneEditMode(false)
+        applyRigMode()
+        buildRigBonePanel()
+        reloadSummoned(folder)
+        Toast.makeText(this, R.string.rig_reset_done, Toast.LENGTH_SHORT).show()
     }
 
     /**
