@@ -16,6 +16,72 @@ import kotlin.math.max
 class Hit(val prop: Prop, val bone: Bone, val value: Float, val part: String = bone.name)
 
 /**
+ * One prop's closest approach to the body: [bone] is the part it is nearest to, and [gap] is the
+ * clear air between the two surfaces in px — 0 or less means they are touching.
+ *
+ * Measured with the same capsule the contact uses. See [PropWorld.nearMisses].
+ */
+class Near(val prop: Prop, val bone: Bone, val gap: Float)
+
+/**
+ * 靠近 or 走开, as it just happened: [arriving] is true for the moment a prop first came inside
+ * [PropWorld.NEAR_SLACK], false for the moment the same prop was let go of. [part] is the bone it
+ * was nearest to, which is what a rule's 部位 is matched against.
+ */
+class NearChange(val prop: Prop, val part: String, val gap: Float, val arriving: Boolean)
+
+/**
+ * Which props are near the figure right now, and the two moments worth telling the rules about.
+ *
+ * A rule is woken by a CHANGE ("it came close"), not by a state ("it is close"): a state would be
+ * an event every frame, and a rule with no cooldown would fire sixty times a second for the one
+ * thing that visibly happened once. It is deliberately a class of its own rather than five lines
+ * inside the bench's frame, because this is the part that is easy to get wrong and impossible to
+ * see — a flapping prop looks like a rule with a hair trigger.
+ *
+ * The band between [PropWorld.NEAR_SLACK] and NEAR_SLACK × [PropWorld.NEAR_HYSTERESIS] is what
+ * keeps that from happening: a prop resting at the edge, with the body breathing underneath it,
+ * can cross the line back and forth all day and still arrive exactly once.
+ *
+ * A prop that leaves the WORLD — a bullet expiring, a candle burnt out — is forgotten without an
+ * event: 走开 is a place the prop went to, and a prop that no longer exists did not go anywhere.
+ */
+class NearWatch {
+    /** serial -> the bone it was last nearest to, for the props currently announced. */
+    private val tracked = HashMap<Int, String>()
+
+    fun clear() = tracked.clear()
+
+    fun update(measured: List<Near>): List<NearChange> {
+        val out = mutableListOf<NearChange>()
+        val seen = HashSet<Int>()
+        for (m in measured) {
+            val serial = m.prop.serial
+            seen.add(serial)
+            val known = tracked[serial]
+            when {
+                known == null && m.gap <= PropWorld.NEAR_SLACK -> {
+                    tracked[serial] = m.bone.name
+                    out.add(NearChange(m.prop, m.bone.name, m.gap, true))
+                }
+                // Announced and still inside the band: it stays announced, and the bone follows
+                // it, so 走开 names the place it was actually near when it did leave.
+                known != null && m.gap <= PropWorld.NEAR_SLACK * PropWorld.NEAR_HYSTERESIS -> {
+                    tracked[serial] = m.bone.name
+                }
+                known != null -> {
+                    tracked.remove(serial)
+                    out.add(NearChange(m.prop, m.bone.name, m.gap, false))
+                }
+            }
+        }
+        // Anything not measured this frame is not in the world any more. Silently, as above.
+        tracked.keys.retainAll(seen)
+        return out
+    }
+}
+
+/**
  * A named point on the body, as the world sees it: what a NodeSpec is once the rig is built.
  *
  * It is felt as a circle and it is not a shape the solver knows about -- a node has no length
@@ -392,6 +458,37 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
         }
     }
 
+    /**
+     * How close each prop has come to the body, for the rules that care about NEAR rather than
+     * touching. Every prop in the world gets an answer, however far away it is: "how far is the
+     * hammer" is one question, and a caller that had to guess the radius first could not say
+     * "it left" with a measured number.
+     *
+     * The measure is the same capsule the contact uses — nearest point on each solid bone, minus
+     * both radii — so 靠近 and 碰到 cannot disagree about what "the same place" means. A bone
+     * with `collides = false` is skipped exactly as it is in [collide]: a part that is not there
+     * as far as the world is concerned is not somewhere a prop can be near either.
+     */
+    fun nearMisses(skeleton: Skeleton, radiusOf: (Bone) -> Float): List<Near> {
+        val out = mutableListOf<Near>()
+        for (p in live) {
+            var best: Bone? = null
+            var bestGap = Float.MAX_VALUE
+            for (bone in skeleton.bones) {
+                val r = radiusOf(bone)
+                if (r <= 0f) continue
+                val closest = closestOnSegment(p.position, bone.worldPosition, bone.tipPosition())
+                val gap = (p.position - closest).length() - p.spec.radius - r
+                if (gap < bestGap) {
+                    bestGap = gap
+                    best = bone
+                }
+            }
+            if (best != null) out.add(Near(p, best, bestGap))
+        }
+        return out
+    }
+
     private fun closestOnSegment(p: Vec2, a: Vec2, b: Vec2): Vec2 {
         val abx = b.x - a.x
         val aby = b.y - a.y
@@ -412,5 +509,19 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
         private const val MIN_HIT = 220f
         private const val CONTACT_PERIOD = 0.25f
         private const val TRANSIENT_LIFE = 8f
+
+        /**
+         * How much clear air still counts as 靠近, in px: about a hand's length on this rig
+         * (hand_L is a hundred px from wrist to fingertip). That is the distance at which
+         * somebody watching says "it is right next to it" rather than "it is over there".
+         *
+         * A fixed number rather than a per-rule one, because nothing in the engine can compare
+         * an event's value yet — a rule that could say "nearer than 40" would need a threshold
+         * field on the rule, and that is a feature with its own name, not a knob to sneak in.
+         */
+        const val NEAR_SLACK = 90f
+
+        /** How much further out a prop has to get before it can arrive a second time. */
+        const val NEAR_HYSTERESIS = 1.6f
     }
 }

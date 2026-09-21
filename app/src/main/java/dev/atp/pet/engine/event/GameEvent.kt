@@ -23,6 +23,29 @@ enum class EventType(val id: String, val label: String, val unit: String) {
     PROP_HIT("propHit", "被道具碰到", "力度"),
 
     /**
+     * A prop came CLOSE, without touching. `value` = the gap in px between the two surfaces.
+     *
+     * 「当某个物品靠近时」 was the missing detector: 被道具碰到 only exists once the prop has
+     * already arrived, so "back away from the hammer" could not be written at all — by the time
+     * the rule ran, the hammer was on it. [GameEvent.part] is the bone the prop came closest to,
+     * so naming a part (or a prefix like `hand`) means "this part is the one it is near".
+     *
+     * It fires on the way IN only, once per approach, and [PROP_AWAY] is when that approach
+     * ends: "near" as a state would be a rule every frame, and the way back out is the other
+     * half of the same measurement rather than a second feature.
+     */
+    PROP_NEAR("propNear", "有东西靠近", "距离"),
+
+    /**
+     * The prop that had come close is gone again. `value` = how far away it was when it turned
+     * around, which is not the same number as the one it arrived at: the gap has to open up
+     * noticeably before this fires, or a prop resting at the edge would flap in and out.
+     *
+     * See [PROP_NEAR].
+     */
+    PROP_AWAY("propAway", "有东西走开", "距离"),
+
+    /**
      * A signal a rule raised.
      *
      * The one event with no physics behind it: something else in the character's own logic

@@ -28,6 +28,7 @@ import dev.atp.pet.engine.math.Transform
 import dev.atp.pet.engine.math.normalizeAngle
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.physics.Ragdoll
+import dev.atp.pet.engine.prop.NearWatch
 import dev.atp.pet.engine.prop.NodePoint
 import dev.atp.pet.engine.prop.Prop
 import dev.atp.pet.engine.prop.PropKind
@@ -100,6 +101,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Props whose landing has already been reported, so it is a transition and not a state. */
     private val propLanded = HashSet<Int>()
+
+    /**
+     * Which props are near the body, and the 靠近 / 走开 moments still to report.
+     *
+     * See [NearWatch] for why "near" is two transitions rather than one state, and
+     * PropWorld.NEAR_SLACK for what counts as near.
+     */
+    private val nearWatch = NearWatch()
 
     /**
      * The app's own switches: gravity, what is drawn, and whether the effects run.
@@ -642,6 +651,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         this.objectLogic = objectLogic
         objectEngines.clear()
         propLanded.clear()
+        nearWatch.clear()
         clock = 0f
         prevRootY = built.root.worldPosition.y
         wasGrounded = true
@@ -691,6 +701,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propSpecs = emptyList()
         objectEngines.clear()
         propLanded.clear()
+        nearWatch.clear()
         heldBones.clear()
         heldTargets.clear()
         emitters.clear()
@@ -1559,13 +1570,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
         recordFrame(dt, s, rag, sk, turn)
 
         world?.let { w ->
+            // A part with collides = false is invisible to the props: same bone, same mass,
+            // same swing, radius zero. See BoneSpec.collides. Named once because 靠近 has to
+            // agree with 碰到 about which parts are there at all -- a bone the world skips is
+            // not somewhere a prop can be near either.
+            val solidRadius = { bone: Bone ->
+                if (rag.isSolid(bone.name)) rag.colliderRadius(bone) else 0f
+            }
             val hits = w.step(
                 dt,
                 s.gravity * settings.gravityScale,
                 sk,
-                // A part with collides = false is invisible to the props: same bone, same
-                // mass, same swing, radius zero. See BoneSpec.collides.
-                { bone -> if (rag.isSolid(bone.name)) rag.colliderRadius(bone) else 0f },
+                solidRadius,
                 { bone, dir, strength -> rag.impulse(bone, dir, strength) },
                 nodePoints(sk),
             )
@@ -1588,6 +1604,19 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 } else if (!prop.onFloor) {
                     propLanded.remove(prop.serial)
                 }
+            }
+            // 有东西靠近 / 有东西走开: how close the nearest prop is, and the two moments that
+            // are worth a rule. Measured for every prop every frame -- "how far is the hammer"
+            // has one answer -- and [NearWatch] decides which of those answers is a change.
+            for (change in nearWatch.update(w.nearMisses(sk, solidRadius))) {
+                fire(
+                    GameEvent(
+                        if (change.arriving) EventType.PROP_NEAR else EventType.PROP_AWAY,
+                        part = change.part,
+                        value = change.gap,
+                        prop = change.prop.spec.id,
+                    )
+                )
             }
         }
         stepObjects(dt)

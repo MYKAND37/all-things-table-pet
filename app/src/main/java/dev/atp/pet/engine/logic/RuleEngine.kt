@@ -193,6 +193,14 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
             // A branch with its own 当 is not driven by this one; it is waiting for its own
             // event and resolve() will hand it over when that arrives.
             if (branch.ownDetector) continue
+            // 分支自己的如果: the group has already said yes -- its detector fired and its own
+            // 如果 held -- so this is the question this executor asks about itself, and it can
+            // only ever narrow what this one branch does. The other branches are unaffected:
+            // 全部响 is about the fork, not about every executor doing the same thing.
+            if (!holdsConditions(branch.conditions)) {
+                log("  规则 " + (index + 1) + " 的分支 " + (bi + 2) + " → 如果不对，跳过")
+                continue
+            }
             out.addAll(follow(branch.actions, ran))
         }
         return out
@@ -203,10 +211,18 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
      *
      * It is the rule's 冷却 and 一次 that apply, not the branch's own: a group is one thing that
      * happens, and two executors of it getting out of step with each other is not a feature
-     * anybody asked for. Nothing else of the rule is checked -- the branch said WHEN, and the
-     * event has already matched it.
+     * anybody asked for. The branch's own 如果 IS checked here -- that one is the branch's, so
+     * it is asked before the group's cooldown is spent. 当 and 部位 are not: the branch said
+     * WHEN, and the event has already matched it.
      */
     private fun branchActions(index: Int, rule: RuleSpec, branch: Int): List<ActionSpec> {
+        // 分支自己的如果 comes first, and BEFORE the group's cooldown is spent: a branch that
+        // was looked at and said no has not had its turn, exactly like a rule whose conditions
+        // fail and which has no else. It can therefore fire the instant they become true.
+        if (!holdsConditions(rule.branches[branch].conditions)) {
+            log("  规则 " + (index + 1) + " 的分支 " + (branch + 2) + " → 如果不对，跳过")
+            return emptyList()
+        }
         val last = lastFired[index]
         if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) return emptyList()
         if (rule.once && index in firedOnce) return emptyList()
@@ -238,24 +254,25 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         return out
     }
 
+    /** Does this rule's own 如果 hold? The rule's clauses, and nothing else. */
+    private fun holds(rule: RuleSpec): Boolean = holdsConditions(rule.conditions)
+
     /**
-     * Every condition has to hold.
+     * One 如果, judged.
      *
-     * Two kinds, and they are the two things a character can be asked about: a number it
-     * carries ("is pain over 80") and a fact about it ("is it wearing clothes"). An
-     * unknown kind is false rather than fatal, so a rule from a newer version of the app
-     * cannot stop the rest of the file from running.
+     * A rule's own conditions and a branch's conditions are the same thing asked in two
+     * places, so there is one implementation of "does this list hold" and not two that can
+     * drift apart. No clause at all is "always", not "never": that is what makes 当……就 a
+     * rule somebody can write, and it is what a branch with no 如果 does too.
      */
-    private fun holds(rule: RuleSpec): Boolean {
-        // No IF at all is "always", not "never": that is what makes 当……就 a rule somebody
-        // can write, and it is the shape most rules in the defaults already have.
-        if (rule.conditions.isEmpty()) return true
+    private fun holdsConditions(conditions: List<ConditionSpec>): Boolean {
+        if (conditions.isEmpty()) return true
 
         // Left to right, 而且 binding tighter than 或者: a list of AND-groups, and the rule
         // runs if ANY of them holds. See Joins.
         var group = true
         var anyGroup = false
-        for ((i, c) in rule.conditions.withIndex()) {
+        for ((i, c) in conditions.withIndex()) {
             if (i > 0 && Joins.of(c.join) == Joins.OR) {
                 if (group) anyGroup = true
                 group = true

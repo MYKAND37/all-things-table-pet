@@ -205,12 +205,18 @@ class Engine:
         return self.states.get(sid, False)
 
     def holds(self, rule):
+        """规则自己的如果。分支的如果走同一个 holds_conditions，见那里。"""
+        return self.holds_conditions(rule.get("if", []))
+
+    def holds_conditions(self, conds):
         """
+        One 如果, judged -- the rule's own and a 并行分支's are the same question asked in two
+        places, so there is one implementation of it and not two that can drift apart.
+
         Left to right, 而且 binding tighter than 或者: a list of AND-groups, and the rule runs
         if ANY group holds. No conditions at all is "always", which is what makes 当……就 a
-        rule somebody can write.
+        rule somebody can write -- and a branch with no 如果 does the same.
         """
-        conds = rule.get("if", [])
         if not conds:
             return True
         group = True
@@ -328,12 +334,23 @@ class Engine:
             # 有自己的当的那一支不归这里管：它等自己的事件，resolve() 会交给它。
             if isinstance(b, dict) and b.get("on"):
                 continue
+            # 分支自己的如果：组已经说了"是"（侦测器响了、组自己的如果也成立），这一句是
+            # 这一支**自己**要问的，所以它只可能让这一支少做，不会影响别的支。
+            if isinstance(b, dict) and not self.holds_conditions(b.get("if", [])):
+                continue
             out.extend(self.follow(b.get("actions", []) if isinstance(b, dict) else b, ran))
         return out
 
     def branch_actions(self, index, rule, branch):
         """带自己的当的分支的执行器。用的是**规则自己的**冷却和一次：一个组是一件事，
-        两个执行器各走各的节奏不是谁要的功能。"""
+        两个执行器各走各的节奏不是谁要的功能。
+
+        分支自己的如果在**冷却之前**问：被看过又说了"不"的一支还没轮到过它，和一条没有
+        否则、条件不成立的规则一样，所以条件一成立就能立刻响。
+        """
+        b = rule["branches"][branch]
+        if not self.holds_conditions(b.get("if", [])):
+            return []
         last = self.last_fired.get(index)
         cd = rule.get("cooldown", 0.0)
         if cd > 0 and last is not None and self.clock - last < cd:
@@ -1042,6 +1059,32 @@ def main():
         ],
     }).resolve({"type": "landed", "particle": "dust"}) == [], "")
 
+    print("\n有东西靠近 / 有东西走开")
+    # 「当某个物品靠近时」。几何那一半在 tools/rig_prop_check.py（每帧量每个道具离身体多近），
+    # 逻辑这一半要能对它作答：点名是哪个道具、最近的是哪根骨头。
+    near = Engine({"stats": [], "states": [], "rules": [
+        {"on": "propNear", "part": "hand", "about": "hammer", "if": [],
+         "then": [{"kind": "say", "text": "别过来"}]},
+        {"on": "propAway", "part": "", "about": "", "if": [],
+         "then": [{"kind": "say", "text": "走了"}]},
+    ]})
+    report("锤子靠近手：响",
+           says(near.resolve({"type": "propNear", "part": "hand_L", "prop": "hammer",
+                              "value": 40.0})) == ["别过来"])
+    report("别的道具靠近不算",
+           says(near.resolve({"type": "propNear", "part": "hand_L", "prop": "ball",
+                              "value": 40.0})) == [])
+    report("靠近的是别的部位不算",
+           says(near.resolve({"type": "propNear", "part": "foot_L", "prop": "hammer",
+                              "value": 40.0})) == [])
+    report("走开是另一个事件，和靠近不互相触发",
+           says(near.resolve({"type": "propAway", "part": "hand_L", "prop": "hammer",
+                              "value": 200.0})) == ["走了"])
+    # 两个都必须是 Kotlin 里真的声明了的：一个不存在的 id 写进规则里，既不报错也不发生。
+    report("propNear / propAway 是 Kotlin 里声明的事件",
+           {"propNear", "propAway"} <= events,
+           "没声明: " + str({"propNear", "propAway"} - events))
+
     print("\n并行分支：一个侦测器，岔开的每一支都执行")
     # 「并行逻辑也有完整的侦测器和执行器，箭头是向下指过去的，就是岔开」。
     # 这条规则自己的「当」就是组的侦测器，自己的「就」是第一支执行器，branches 里每一
@@ -1106,6 +1149,86 @@ def main():
     report("条件不成立时只有「否则」响，分支一条都不跑",
            [a.get("text") for a in blocked.handle("tick")] == ["否则"],
            str([a.get("text") for a in blocked.handle("tick")]))
+
+    print("\n分支自己的如果：每个分支自己的判断器")
+    # 「每个分支自己的判断器（如果）」。分支先有了自己的当，然后还是文件里唯一一个不能问
+    # 问题的行 —— 这一步把那个问题补上。组说了"是"之后，这一支再问自己一句。
+    fork_if = Engine({
+        "stats": [{"id": "H", "name": "生命", "value": 100, "min": 0, "max": 100}],
+        "states": [], "rules": [{
+            "on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "就"}],
+            "branches": [
+                {"if": [{"kind": "stat", "stat": "H", "op": "<", "value": 50}],
+                 "actions": [{"kind": "say", "text": "疼"}]},
+                [{"kind": "say", "text": "总是"}],
+            ],
+        }]})
+    out = says(fork_if.handle("tick"))
+    report("条件不成立的那一支不跑，别的支照旧",
+           out == ["就", "总是"], str(out))
+    fork_if.set("H", 10)
+    out = says(fork_if.handle("tick"))
+    report("它自己的条件成立时，那一支在它的位置上响",
+           out == ["就", "疼", "总是"], str(out))
+
+    # 组自己的如果不过 = 走否则，分支一条都不跑（这条本来就有）；反过来，组的如果过了、
+    # 某一支自己的如果没过，也只有那一支安静 —— 「全部响」说的是岔开，不是每支做同一件事。
+    mix = Engine({
+        "stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100},
+                  {"id": "P", "name": "P", "value": 0, "min": 0, "max": 100}],
+        "states": [], "rules": [{
+            "on": "click", "part": "",
+            "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+            "then": [], "else": [{"kind": "say", "text": "否则"}],
+            "branches": [
+                {"if": [{"kind": "stat", "stat": "P", "op": ">", "value": 50}],
+                 "actions": [{"kind": "say", "text": "很疼"}]},
+                {"if": [{"kind": "stat", "stat": "P", "op": "<", "value": 50}],
+                 "actions": [{"kind": "say", "text": "不疼"}]},
+            ],
+        }]})
+    out = says(mix.handle("click"))
+    report("两支的条件互斥时只响成立的那一支", out == ["不疼"], str(out))
+    dead = Engine({
+        "stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],
+        "states": [], "rules": [{
+            "on": "click", "part": "",
+            "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+            "then": [], "else": [{"kind": "say", "text": "否则"}],
+            "branches": [[{"kind": "say", "text": "支1"}]],
+        }]})
+    report("组的如果不过：只有否则，分支一条都不跑",
+           says(dead.handle("click")) == ["否则"], str(says(dead.handle("click"))))
+
+    # 带自己的当的分支：如果不过就不响，而且**不消耗组的冷却**（和没有否则的规则一样，
+    # 被看过又跳过的不算轮到过它）。响了之后冷却照旧管着。
+    own_if = Engine({
+        "stats": [{"id": "H", "name": "生命", "value": 100, "min": 0, "max": 100}],
+        "states": [], "rules": [{
+            "on": "click", "part": "", "if": [], "then": [], "cooldown": 5.0,
+            "branches": [{
+                "on": "tick", "part": "",
+                "if": [{"kind": "stat", "stat": "H", "op": "<", "value": 50}],
+                "actions": [{"kind": "say", "text": "响"}],
+            }],
+        }]})
+    report("自己的当响了，但自己的如果不过：不响", says(own_if.handle("tick")) == [])
+    own_if.set("H", 10)
+    report("条件一成立就响，没有被组的冷却挡住",
+           says(own_if.handle("tick")) == ["响"], "跳过的不算轮到过它")
+    report("响了之后，组的冷却照旧管着", says(own_if.handle("tick")) == [])
+
+    # 文件格式的两半：解析读 branch 的 "if"，落盘写 branch 的 "if"，而且有如果的分支
+    # 不能退回裸数组那种写法（裸数组装不下一个如果）。这个项目踩过一次"只加了读、忘了写"，
+    # 而 Kotlin 的 toJson 本地跑不起来 —— 所以两半在源码里点名一次。
+    src = open(LOGIC_KT, encoding="utf-8").read()
+    report("解析：分支的如果从 \"if\" 读进来",
+           'conditions = condsOf(b.optJSONArray("if"))' in src)
+    report("落盘：分支的如果有值才写 \"if\"",
+           'if (b.conditions.isNotEmpty()) put("if", condJson(b.conditions))' in src)
+    report("形状：有如果的分支走长写法，不是裸数组",
+           re.search(r"if \(!b\.ownDetector && b\.part\.isEmpty\(\) && b\.about\.isEmpty\(\) &&"
+                     r"\s*\n?\s*b\.conditions\.isEmpty\(\)\s*\n?\s*\)", src) is not None)
 
     print("")
     if FAILURES:

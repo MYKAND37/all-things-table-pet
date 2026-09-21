@@ -8,7 +8,7 @@ as a hammer that sinks into the thing it hit.
 
     python3 tools/rig_prop_check.py
 """
-import math, os, sys, json
+import math, os, sys, json, re
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 
@@ -29,6 +29,12 @@ IMPULSE_GAIN = 0.22
 MIN_HIT = 220.0
 CONTACT_PERIOD = 0.25
 TRANSIENT_LIFE = 8.0
+#: 靠近的阈值，和 PropWorld.NEAR_SLACK 是同一个数。main() 里有一条断言把它和 Kotlin 源码
+#: 比一遍：这份镜像的职责就是"说出 app 会怎么做"，阈值漂了十像素，靠近就会在别的时候响，
+#: 而那正是最不容易被眼睛发现的一类漂移。
+NEAR_SLACK = 90.0
+NEAR_HYSTERESIS = 1.6
+PROP_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/prop/PropWorld.kt")
 
 
 class Spec:
@@ -301,6 +307,69 @@ def closest_on_segment(p, a, b):
     return (a[0] + abx * t, a[1] + aby * t)
 
 
+class Near:
+    """一个道具这一帧离身体最近的地方：哪根骨头，还有两个表面之间有多少空当。"""
+
+    def __init__(self, prop, bone, gap):
+        self.prop, self.bone, self.gap = prop, bone, gap
+
+
+def near_misses(live, bones, radius_of):
+    """镜像 PropWorld.nearMisses：每个道具都量，量的是和碰撞同一套胶囊。
+
+    用的是同一个 closest_on_segment、同样的两个半径、同样跳过 radius <= 0 的骨头，
+    否则"靠近"和"碰到"会对"在不在同一个地方"给出两个答案。
+    """
+    out = []
+    for p in live:
+        best, best_gap = None, float("inf")
+        for name, a, b in bones:
+            if radius_of(name) <= 0:
+                continue
+            c = closest_on_segment((p.x, p.y), a, b)
+            gap = math.hypot(p.x - c[0], p.y - c[1]) - p.spec.radius - radius_of(name)
+            if gap < best_gap:
+                best_gap, best = gap, name
+        if best is not None:
+            out.append(Near(p, best, best_gap))
+    return out
+
+
+class NearWatch:
+    """镜像 PropWorld.NearWatch：靠近/走开是两个**变化**，不是一个状态。
+
+    一个状态就是每帧一个事件，而没有冷却的规则会为一件事响六十次。中间的带回差那段
+    就是为了让停在边界上的道具（身体还在呼吸）只到达一次。
+    """
+
+    def __init__(self):
+        self.tracked = {}
+
+    def clear(self):
+        self.tracked.clear()
+
+    def update(self, measured):
+        out = []
+        seen = set()
+        for m in measured:
+            serial = m.prop.serial
+            seen.add(serial)
+            known = self.tracked.get(serial)
+            if known is None and m.gap <= NEAR_SLACK:
+                self.tracked[serial] = m.bone
+                out.append((m.prop, m.bone, m.gap, True))
+            elif known is not None and m.gap <= NEAR_SLACK * NEAR_HYSTERESIS:
+                self.tracked[serial] = m.bone
+            elif known is not None:
+                del self.tracked[serial]
+                out.append((m.prop, m.bone, m.gap, False))
+        # 这一帧没量到的道具已经不在世界里了（子弹过期、蜡烛烧完）：安静地忘掉。
+        # 走开是"它去了别处"，而不存在了的东西没去任何地方。
+        for serial in [s for s in self.tracked if s not in seen]:
+            del self.tracked[serial]
+        return out
+
+
 BONES = [("torso", (500.0, 500.0), (500.0, 900.0))]
 
 
@@ -356,6 +425,72 @@ def main():
         hits += w.step(1 / 60, 2400.0, BONES, radius_of, lambda *a: None)
     report("half a second of contact is two events, not thirty",
            len(hits) == 2, str(len(hits)))
+
+    print("\n有东西靠近 / 有东西走开")
+    # 「当某个物品靠近时」：碰到是**接触之后**才存在的事，所以"躲开锤子"以前根本写不出来 ——
+    # 规则跑起来的时候锤子已经砸上了。靠近量的是还没有碰到的那段空当。
+    src = open(PROP_KT, encoding="utf-8").read()
+    for name, py in (("NEAR_SLACK", NEAR_SLACK), ("NEAR_HYSTERESIS", NEAR_HYSTERESIS)):
+        m = re.search(r"const val %s = ([0-9.]+)f" % name, src)
+        report("%s 和 Kotlin 里是同一个数" % name,
+               m is not None and abs(float(m.group(1)) - py) < 1e-9,
+               "%s vs %s" % (m.group(1) if m else "没了", py))
+    report("镜像里有个带名字的阈值可用（不是 None）",
+           NEAR_SLACK is not None and NEAR_HYSTERESIS is not None)
+
+    def parked(gap, serial=1, radius=60.0):
+        """A prop sitting exactly `gap` px of clear air from the bone."""
+        w = World(2000.0, 3000.0)
+        centre = 500.0 + 40.0 + radius + gap          # bone radius + prop radius + the gap
+        return w, w.spawn(Spec("hammer", radius=radius), (centre, 700.0))
+
+    w, p = parked(50.0)
+    near = near_misses(w.live, BONES, radius_of)
+    report("量的就是碰撞那套胶囊：空当 = 圆心距 - 两个半径",
+           len(near) == 1 and abs(near[0].gap - 50.0) < 1e-6, str(near[0].gap if near else None))
+    report("并且说出最近的是哪根骨头", near and near[0].bone == "torso")
+
+    watch = NearWatch()
+    first = watch.update(near_misses(w.live, BONES, radius_of))
+    report("第一次进到阈值以内 = 一次靠近",
+           len(first) == 1 and first[0][3] is True and abs(first[0][2] - 50.0) < 1e-6,
+           str(first))
+    report("还在旁边就不再报了（变化才报，不是状态）",
+           watch.update(near_misses(w.live, BONES, radius_of)) == [])
+
+    p.x = 500.0 + 40.0 + p.spec.radius + NEAR_SLACK * NEAR_HYSTERESIS + 20.0
+    away = watch.update(near_misses(w.live, BONES, radius_of))
+    report("走远到带外 = 一次走开，带着它离开时的距离",
+           len(away) == 1 and away[0][3] is False and
+           abs(away[0][2] - (NEAR_SLACK * NEAR_HYSTERESIS + 20.0)) < 1e-6, str(away))
+    report("走开之后不再重复报", watch.update(near_misses(w.live, BONES, radius_of)) == [])
+
+    p.x = 500.0 + 40.0 + p.spec.radius + NEAR_SLACK - 5.0
+    report("回来了可以再靠近一次（不是一辈子只报一次）",
+           len(watch.update(near_misses(w.live, BONES, radius_of))) == 1)
+
+    # 带内来回：停在边界上的道具，身体还在呼吸，不能一进一出地抖。
+    watch = NearWatch()
+    p.x = 500.0 + 40.0 + p.spec.radius + NEAR_SLACK - 5.0
+    watch.update(near_misses(w.live, BONES, radius_of))
+    quiet = []
+    for offset in (15.0, -15.0, 25.0, -25.0):
+        p.x = 500.0 + 40.0 + p.spec.radius + NEAR_SLACK + offset
+        quiet += watch.update(near_misses(w.live, BONES, radius_of))
+    report("在阈值附近来回抖，只算一次靠近", quiet == [], str(quiet))
+
+    # 半径 0 的骨头 = 碰撞关掉了 = 道具靠近不了它（和 collide 同一条约定）。
+    report("关掉碰撞的骨头不算靠近",
+           near_misses(w.live, BONES, lambda name: 0.0) == [])
+
+    # 道具从世界里消失（子弹过期）：安静忘掉，不走开。
+    watch = NearWatch()
+    p.x = 500.0 + 40.0 + p.spec.radius + 20.0
+    watch.update(near_misses(w.live, BONES, radius_of))
+    w.live.clear()
+    report("道具没了不算走开（它没去任何地方）",
+           watch.update(near_misses(w.live, BONES, radius_of)) == [])
+    report("而且被忘掉了，不是一直记着", watch.tracked == {})
 
     print("\nfloor and walls")
     w = World(2000.0, 3000.0)

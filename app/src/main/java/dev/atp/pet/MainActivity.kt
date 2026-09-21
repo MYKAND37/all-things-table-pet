@@ -231,7 +231,19 @@ class MainActivity : AppCompatActivity() {
         logicFolderBar = findViewById(R.id.logicFolderBar)
         logicBar = findViewById(R.id.logicBar)
         logicGraph.onTap = { rule, node ->
-            when (node.role) {
+            // A box on a 并行分支 row: the same three boxes as the rule's own row, belonging to
+            // a different line. See LogicGraphView.Node.branch.
+            if (node.branch >= 0) {
+                when (node.role) {
+                    LogicGraphView.Node.WHEN -> askBranch(rule, node.branch)
+                    LogicGraphView.Node.IF -> askCondition(rule, node.index, node.branch)
+                    LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index, node.branch)
+                    LogicGraphView.Node.ADD -> addModule(rule, node.index, node.branch)
+                    // The row's own label ("分支 2 · 都会响") is the way into the branch.
+                    LogicGraphView.Node.ELSE -> askBranch(rule, node.branch)
+                    else -> askAction(rule, node.index, branch = node.branch)
+                }
+            } else when (node.role) {
                 LogicGraphView.Node.WHEN -> askRuleSettings(rule)
                 LogicGraphView.Node.IF -> askCondition(rule, node.index)
                 LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index)
@@ -3275,7 +3287,7 @@ class MainActivity : AppCompatActivity() {
                     bRow.add(
                         LogicGraphView.Node(
                             LogicGraphView.Node.WHEN,
-                            listOf(EventType.of(branch.on).label + where), -1,
+                            listOf(EventType.of(branch.on).label + where), -1, bi,
                         )
                     )
                 }
@@ -3283,18 +3295,48 @@ class MainActivity : AppCompatActivity() {
                     LogicGraphView.Node(
                         LogicGraphView.Node.ELSE,
                         listOf(getString(R.string.logic_branch) + " " + (bi + 2), "都会响"),
-                        -1,
+                        -1, bi,
+                    )
+                )
+                // 分支自己的如果：the same boxes the rule's own 如果 is made of, because it is the
+                // same question asked one line down -- and a branch with none reads as 总是,
+                // for the same reason a rule with none does.
+                if (branch.conditions.isEmpty()) {
+                    bRow.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, bi))
+                } else {
+                    for ((ci, c) in branch.conditions.withIndex()) {
+                        if (ci > 0) {
+                            bRow.add(
+                                LogicGraphView.Node(
+                                    LogicGraphView.Node.CONNECTOR, listOf(Joins.label(c.join)),
+                                    ci, bi,
+                                )
+                            )
+                        }
+                        bRow.add(
+                            LogicGraphView.Node(
+                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, bi,
+                            )
+                        )
+                    }
+                }
+                bRow.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
+                        LogicGraphView.Node.ADD_CONDITION, bi,
                     )
                 )
                 for ((ai, a) in branch.actions.withIndex()) {
                     bRow.add(
-                        LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai)
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.THEN, listOf(actionText(a)), ai, bi,
+                        )
                     )
                 }
                 bRow.add(
                     LogicGraphView.Node(
                         LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                        LogicGraphView.Node.ADD_ELSE,
+                        LogicGraphView.Node.ADD_ACTION, bi,
                     )
                 )
                 graph.add(bRow)
@@ -3587,8 +3629,11 @@ class MainActivity : AppCompatActivity() {
         }
         // 「事件侦测器：应能选取主体」——事件里一直带着是哪个道具/哪种粒子（日志现在也写出来了），
         // 这一行是让规则能**点名**它。只在真能带着主语的几种事件上出现，别的时候是噪音。
+        // 靠近/走开 事件当然也带着是哪个道具 —— 而且它比别的更需要点名："有东西靠近" 而不说
+        // 是谁，写出来的规则就是"任何东西靠近都躲"。
         if (rule.on == EventType.PROP_HIT.id || rule.on == EventType.IMPACT.id ||
-            rule.on == EventType.LANDED.id
+            rule.on == EventType.LANDED.id || rule.on == EventType.PROP_NEAR.id ||
+            rule.on == EventType.PROP_AWAY.id
         ) {
             row(
                 getString(R.string.logic_about) + "：" +
@@ -3608,6 +3653,11 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.logic_branch) + " " + (bi + 2) + " · " +
                     (if (b.ownDetector) getString(R.string.logic_when) + EventType.of(b.on).label
                     else getString(R.string.logic_branch_same_when)) +
+                    // 分支自己的如果, said out loud on the card: a branch that only runs when
+                    // something is true is a different line from one that always runs, and the
+                    // card is where somebody decides whether to open it.
+                    (if (b.conditions.isEmpty()) " · 没有如果"
+                    else " · " + b.conditions.size + " 个如果") +
                     " · " + b.actions.size + " 个动作"
             ) { askBranch(index, bi) }
         }
@@ -4964,12 +5014,13 @@ class MainActivity : AppCompatActivity() {
      * connector is a module that was added on its own, and the connector is the only thing
      * that says how they go together — so it gets a box of its own and a tap of its own.
      */
-    private fun flipJoin(index: Int, condIndex: Int) {
+    private fun flipJoin(index: Int, condIndex: Int, branch: Int = -1) {
         val rule = logicRules.getOrNull(index) ?: return
-        val clause = rule.conditions.getOrNull(condIndex) ?: return
-        val conditions = rule.conditions.toMutableList()
+        val list = editConditions(rule, branch) ?: return
+        val clause = list.getOrNull(condIndex) ?: return
+        val conditions = list.toMutableList()
         conditions[condIndex] = clause.copy(join = Joins.flip(clause.join))
-        putRule(index, rule.copy(conditions = conditions))
+        putConditions(index, conditions, branch)
     }
 
     /**
@@ -4978,9 +5029,37 @@ class MainActivity : AppCompatActivity() {
      * It lands with a default value and the editor opens straight away, because "add a
      * module" and "say what it does" are one action as far as anybody using this is
      * concerned.
+     *
+     * [branch] >= 0 says the module belongs to a 并行分支 instead of to the rule: another
+     * 如果 for that executor, or another action for it. 否则 is the rule's own -- there is
+     * nothing to fork from a detector that did not fire -- so a branch asking for one gets an
+     * action, which is the only sensible reading of the tap.
      */
-    private fun addModule(index: Int, what: Int) {
+    private fun addModule(index: Int, what: Int, branch: Int = -1) {
         val rule = logicRules.getOrNull(index) ?: return
+        if (branch >= 0) {
+            val b = rule.branches.getOrNull(branch) ?: return
+            if (what == LogicGraphView.Node.ADD_CONDITION) {
+                val conditions = b.conditions.toMutableList()
+                conditions.add(
+                    ConditionSpec(
+                        kind = "stat",
+                        stat = logicStats.firstOrNull()?.id ?: "",
+                        op = ">=",
+                        value = 0f,
+                        join = Joins.AND,
+                    )
+                )
+                putConditions(index, conditions, branch)
+                askCondition(index, conditions.size - 1, branch)
+            } else {
+                val actions = b.actions.toMutableList()
+                actions.add(ActionSpec("say", text = "……"))
+                putActions(index, actions, isElse = false, branch = branch)
+                askAction(index, actions.size - 1, branch = branch)
+            }
+            return
+        }
         when (what) {
             LogicGraphView.Node.ADD_CONDITION -> {
                 val conditions = rule.conditions.toMutableList()
@@ -5018,6 +5097,23 @@ class MainActivity : AppCompatActivity() {
         logicRules[index] = rule
         saveLogic()
         buildLogicPane()
+    }
+
+    /** Which 如果 an edit is about: a 并行分支's own, or the rule's. */
+    private fun editConditions(rule: RuleSpec, branch: Int): List<ConditionSpec>? =
+        if (branch >= 0) rule.branches.getOrNull(branch)?.conditions else rule.conditions
+
+    /** Write a 如果 back to wherever it came from: a branch's list, or the rule's. */
+    private fun putConditions(index: Int, conditions: List<ConditionSpec>, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        if (branch >= 0) {
+            val branches = rule.branches.toMutableList()
+            if (branch >= branches.size) return
+            branches[branch] = branches[branch].copy(conditions = conditions)
+            putRule(index, rule.copy(branches = branches))
+            return
+        }
+        putRule(index, rule.copy(conditions = conditions))
     }
 
     private fun askRuleEvent(index: Int) {
@@ -5069,10 +5165,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** [condIndex] of -1 means "add another", anything else replaces that one. */
-    private fun askCondition(index: Int, condIndex: Int) {
+    /**
+     * [condIndex] of -1 means "add another", anything else replaces that one.
+     *
+     * [branch] >= 0 means this 如果 is a 并行分支's own. The dialog is the same one in every
+     * other respect -- the same three kinds of clause, the same 而且/或者 connector -- and the
+     * only difference is which list the answer goes back into. See putConditions.
+     */
+    private fun askCondition(index: Int, condIndex: Int, branch: Int = -1) {
         val rule = logicRules.getOrNull(index) ?: return
-        val existing = rule.conditions.getOrNull(condIndex)
+        val conds = editConditions(rule, branch) ?: return
+        val existing = conds.getOrNull(condIndex)
         // Two things a character can be asked about: a number it carries, and a fact about
         // it. The kind chips switch between them; the rest of the dialog is the same shape.
         var kind = when (existing?.kind) {
@@ -5254,7 +5357,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle(R.string.logic_cond_kind)
             .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
-                val conditions = rule.conditions.toMutableList()
+                val list = conds.toMutableList()
                 val spec = when (kind) {
                     "state" -> ConditionSpec(
                         kind = "state", stat = "", op = if (stateOn) "on" else "off",
@@ -5267,15 +5370,15 @@ class MainActivity : AppCompatActivity() {
                         kind = "stat", stat = stat, op = op, value = valueOf(), join = join,
                     )
                 }
-                if (condIndex in conditions.indices) conditions[condIndex] = spec else conditions.add(spec)
-                putRule(index, rule.copy(conditions = conditions))
+                if (condIndex in list.indices) list[condIndex] = spec else list.add(spec)
+                putConditions(index, list, branch)
             }
             .setNegativeButton(R.string.depth_cancel, null)
         if (condIndex >= 0) {
             builder.setNeutralButton(R.string.depth_remove) { _, _ ->
-                val conditions = rule.conditions.toMutableList()
-                if (condIndex in conditions.indices) conditions.removeAt(condIndex)
-                putRule(index, rule.copy(conditions = conditions))
+                val list = conds.toMutableList()
+                if (condIndex in list.indices) list.removeAt(condIndex)
+                putConditions(index, list, branch)
             }
         }
         builder.show()
@@ -5290,10 +5393,20 @@ class MainActivity : AppCompatActivity() {
         chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
     }
 
-    private fun askAction(index: Int, actionIndex: Int, isElse: Boolean = false) {
+    private fun askAction(
+        index: Int,
+        actionIndex: Int,
+        isElse: Boolean = false,
+        branch: Int = -1,
+    ) {
         val rule = logicRules.getOrNull(index) ?: return
-        val branch = if (isElse) rule.elseActions else rule.actions
-        val existing = branch.getOrNull(actionIndex)
+        // Which list this editor is about, decided once HERE rather than when something is
+        // finally written: `branch` is -1 for the rule's own 就, 1 for its 否则 and a branch
+        // index for a 并行分支's executor, and every arm below ends in putAction(). See
+        // editingBranch for why it is a field.
+        editingBranch = branch
+        val list = editTarget(rule, isElse, branch) ?: return
+        val existing = list.getOrNull(actionIndex)
         pickList(
             title = getString(R.string.logic_pick_action),
             options = ActionKind.values().map { it.id to it.label },
@@ -5301,12 +5414,9 @@ class MainActivity : AppCompatActivity() {
             current = existing?.kind,
             onDelete = if (actionIndex >= 0) {
                 {
-                    val actions = branch.toMutableList()
+                    val actions = list.toMutableList()
                     if (actionIndex in actions.indices) actions.removeAt(actionIndex)
-                    putRule(
-                        index,
-                        if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
-                    )
+                    putActions(index, actions, isElse, branch)
                 }
             } else {
                 null
@@ -5546,9 +5656,38 @@ class MainActivity : AppCompatActivity() {
      * A field rather than a parameter, deliberately: askAction() is one long `when` with a
      * putAction() in every arm (twenty-odd of them), and threading a fifth parameter through
      * all of them is twenty chances to miss one. One action is edited at a time, so there is
-     * exactly one value, and askBranch() sets it around the call.
+     * exactly one value.
+     *
+     * It is set by **askAction() when the editor opens**, and that is the fix for a real bug:
+     * askBranch() used to set it around the call and clear it again (`= branch; askAction();
+     * = -1`), but every dialog below comes back LATER, so by the time anything was written the
+     * field was already -1 and a branch's action was saved onto the rule's own 就 instead --
+     * silently, because both lists are just lists. A value that has to survive a dialog belongs
+     * to the dialog, not to the call that opened it.
      */
     private var editingBranch = -1
+
+    /** Which action list an edit is about: a branch's, the rule's 否则, or the rule's 就. */
+    private fun editTarget(rule: RuleSpec, isElse: Boolean, branch: Int): List<ActionSpec>? =
+        if (branch >= 0) rule.branches.getOrNull(branch)?.actions
+        else if (isElse) rule.elseActions
+        else rule.actions
+
+    /** Write an action list back to wherever it came from. The one place that knows the three. */
+    private fun putActions(index: Int, actions: List<ActionSpec>, isElse: Boolean, branch: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        if (branch >= 0) {
+            val branches = rule.branches.toMutableList()
+            if (branch >= branches.size) return
+            branches[branch] = branches[branch].copy(actions = actions)
+            putRule(index, rule.copy(branches = branches))
+            return
+        }
+        putRule(
+            index,
+            if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
+        )
+    }
 
     private fun putAction(
         index: Int,
@@ -5558,29 +5697,13 @@ class MainActivity : AppCompatActivity() {
     ) {
         val rule = logicRules.getOrNull(index) ?: return
         val branch = editingBranch
-        if (branch >= 0 && !isElse) {
-            val branches = rule.branches.toMutableList()
-            if (branch >= branches.size) return
-            val list = branches[branch].actions.toMutableList()
-            if (actionIndex >= 0 && actionIndex < list.size) {
-                list[actionIndex] = action
-            } else {
-                list.add(action)
-            }
-            branches[branch] = branches[branch].copy(actions = list)
-            putRule(index, rule.copy(branches = branches))
-            return
-        }
-        val actions = (if (isElse) rule.elseActions else rule.actions).toMutableList()
-        if (actionIndex >= 0 && actionIndex < actions.size) {
-            actions[actionIndex] = action
+        val list = editTarget(rule, isElse, branch)?.toMutableList() ?: return
+        if (actionIndex >= 0 && actionIndex < list.size) {
+            list[actionIndex] = action
         } else {
-            actions.add(action)
+            list.add(action)
         }
-        putRule(
-            index,
-            if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
-        )
+        putActions(index, list, isElse, branch)
     }
 
     /** 加一个并行分支: another executor forked off this rule's own 当. */
@@ -5632,11 +5755,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * One 并行分支 opened for editing: its actions, and the same editor the rule's own 就 uses.
+     * One 并行分支 opened for editing: its own 当, its own 如果, and its actions.
      *
-     * 「并行逻辑也有完整的执行器」 is the whole point: a branch holds an action list exactly like
-     * the rule's own and is edited by the same screen, because a second kind of action editor
-     * would be a second set of actions that could do less.
+     * 「并行逻辑也有完整的执行器和侦测器」 is the whole point: a branch holds an action list
+     * exactly like the rule's own and is edited by the same screen, because a second kind of
+     * action editor would be a second set of actions that could do less. The 如果 followed the
+     * same road: the branch asks the same question the rule asks, with the same editor.
      */
     private fun askBranch(index: Int, branch: Int) {
         val rule = logicRules.getOrNull(index) ?: return
@@ -5693,6 +5817,39 @@ class MainActivity : AppCompatActivity() {
         }
         if (b.ownDetector) box.addView(partRow)
 
+        // 分支自己的如果: one row per clause, then the same "＋" the rule's own 如果 has. They sit
+        // above the actions because that is the order the branch happens in -- 当, 如果, 就 --
+        // and a branch with none says 总是, like a rule with none.
+        box.addView(
+            label(
+                "分支自己的如果：" + if (b.conditions.isEmpty()) "总是"
+                else b.conditions.size.toString() + " 条",
+                11f, MUTED, top = 8, bottom = 6,
+            )
+        )
+        for ((ci, c) in b.conditions.withIndex()) {
+            val view = label("如果：" + conditionText(c), 13f, INK)
+            view.setPadding(dp(12), dp(11), dp(12), dp(11))
+            view.background = getDrawable(R.drawable.menu_item_idle)
+            view.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+            view.setOnClickListener {
+                askCondition(index, ci, branch)
+                dialog.dismiss()
+            }
+            box.addView(view)
+        }
+        val addIf = label(getString(R.string.logic_module_if), 13f, INK)
+        addIf.setPadding(dp(12), dp(11), dp(12), dp(11))
+        addIf.background = getDrawable(R.drawable.menu_item_selected)
+        addIf.setOnClickListener {
+            addModule(index, LogicGraphView.Node.ADD_CONDITION, branch)
+            dialog.dismiss()
+        }
+        box.addView(addIf)
+
         for ((ai, a) in list.withIndex()) {
             val view = label(
                 getString(R.string.logic_module_action) + "：" + actionText(a), 13f, INK,
@@ -5704,9 +5861,7 @@ class MainActivity : AppCompatActivity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { bottomMargin = dp(4) }
             view.setOnClickListener {
-                editingBranch = branch
-                askAction(index, ai)
-                editingBranch = -1
+                askAction(index, ai, branch = branch)
             }
             box.addView(view)
         }
@@ -5714,9 +5869,7 @@ class MainActivity : AppCompatActivity() {
         add.setPadding(dp(12), dp(11), dp(12), dp(11))
         add.background = getDrawable(R.drawable.menu_item_selected)
         add.setOnClickListener {
-            editingBranch = branch
-            askAction(index, -1)
-            editingBranch = -1
+            askAction(index, -1, branch = branch)
         }
         box.addView(add)
         dialog.show()

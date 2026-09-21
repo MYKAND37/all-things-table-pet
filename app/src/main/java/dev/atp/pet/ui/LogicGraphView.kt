@@ -47,10 +47,19 @@ class LogicGraphView @JvmOverloads constructor(
      *     [index] says what to add — [ADD_CONDITION], [ADD_ACTION] or [ADD_ELSE] — because
      *     an action belongs to one of two branches and a box in a row cannot say which.
      *
+     * [branch] is which 并行分支 row the box sits on, or -1 for the rule's own row. Both rows
+     * hold the same three boxes -- a 当, an 如果, a 就 -- and they look identical on purpose, so
+     * "which row" is the one thing a box cannot say about itself and has to be told.
+     *
      * The view still does not know what any of it means; it reports the box and lets the
      * caller decide, which is the whole reason the drawing is testable by looking at it.
      */
-    class Node(val role: Int, val lines: List<String>, val index: Int) {
+    class Node(
+        val role: Int,
+        val lines: List<String>,
+        val index: Int,
+        val branch: Int = -1,
+    ) {
         companion object {
             const val WHEN = 0
             const val IF = 1

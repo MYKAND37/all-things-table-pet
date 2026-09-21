@@ -410,7 +410,7 @@
     <string name="logic_when">当：</string>
     <string name="logic_pick_part_hint">留「任何部位」就是全身都算。写个前缀（比如 hand）会同时匹配 hand_L 和 hand_R。</string>
     <string name="logic_delete_rule">删规则</string>
-    <string name="logic_branch_row_hint">第 %1$d 支，一共 %2$d 支。分支的「当」就是这条规则的「当」，每一支都会执行。</string>
+    <string name="logic_branch_row_hint">第 %1$d 支，一共 %2$d 支。分支的「当」和「如果」都可以是它自己的；每一支都会执行。</string>
     <string name="logic_branch_when">分支自己的当</string>
     <string name="logic_branch_same_when">跟组一样（同一个当）</string>
     <string name="logic_branch_when_hint">给这一支一个自己的侦测器：它就会对这一件事作答，而不是跟着组的「当」走。留空 = 跟组一样。</string>

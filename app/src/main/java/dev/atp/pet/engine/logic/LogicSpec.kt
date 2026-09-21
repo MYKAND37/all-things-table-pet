@@ -287,6 +287,19 @@ data class BranchSpec(
     val on: String = "",
     val part: String = "",
     val about: String = "",
+    /**
+     * 分支自己的如果: what has to be true for THIS executor to run.
+     *
+     * A branch is a line, and a line has three boxes, not two: it was given a 当 of its own and
+     * then it was still the only line in the file that could not ask a question. The owner asked
+     * for the missing one in as many words: 「每个分支自己的判断器（如果）」.
+     *
+     * Empty means "no question", exactly like a rule with no 如果: the branch runs whenever its
+     * detector fires. The branch's conditions are checked whether the branch brought its own 当
+     * or hangs off the group's -- in the second case the group's conditions have already held,
+     * and this is the extra one that belongs to this executor alone.
+     */
+    val conditions: List<ConditionSpec> = emptyList(),
     val actions: List<ActionSpec> = emptyList(),
 ) {
     /** Does this branch have a detector of its own, or does it hang off the group's? */
@@ -335,6 +348,10 @@ data class RuleSpec(
      *
      * [elseActions] is deliberately NOT forked: 否则 is the path where the conditions did not
      * hold, and there is nothing to fork from a detector that did not fire.
+     *
+     * The group's own 如果 is the group's condition. A branch may carry one of its own
+     * ([BranchSpec.conditions]) and that one belongs to the executor alone: it is asked after
+     * the group has already said yes, so it can only ever narrow what this one branch does.
      */
     val branches: List<BranchSpec> = emptyList(),
 )
@@ -586,6 +603,21 @@ class LogicSpec(
                     )
                 }
 
+            // Same argument as actionsOf, one box up the chain: a branch grew an 如果, which
+            // would have been the second place that knows how a condition is written down.
+            fun condsOf(arr: JSONArray?): List<ConditionSpec> =
+                (0 until (arr?.length() ?: 0)).map { j ->
+                    val c = arr!!.getJSONObject(j)
+                    ConditionSpec(
+                        kind = c.optString("kind", "stat"),
+                        stat = c.optString("stat", ""),
+                        op = c.optString("op", ">="),
+                        value = c.optDouble("value", 0.0).toFloat(),
+                        state = c.optString("state", ""),
+                        join = c.optString("join", Joins.AND),
+                    )
+                }
+
             val ruleArr = o.optJSONArray("rules")
             val rules = (0 until (ruleArr?.length() ?: 0)).map { i ->
                 val r = ruleArr!!.getJSONObject(i)
@@ -599,17 +631,7 @@ class LogicSpec(
                     // A file that says nothing gets "any of them", which is what every rule
                     // meant before this existed.
                     about = r.optString("about", ""),
-                    conditions = (0 until (condArr?.length() ?: 0)).map { j ->
-                        val c = condArr!!.getJSONObject(j)
-                        ConditionSpec(
-                            kind = c.optString("kind", "stat"),
-                            stat = c.optString("stat", ""),
-                            op = c.optString("op", ">="),
-                            value = c.optDouble("value", 0.0).toFloat(),
-                            state = c.optString("state", ""),
-                            join = c.optString("join", Joins.AND),
-                        )
-                    },
+                    conditions = condsOf(condArr),
                     actions = actionsOf(actArr),
                     branches = (0 until (branchArr?.length() ?: 0)).map { k ->
                         // A bare array is how branches were written before they could have a
@@ -624,6 +646,7 @@ class LogicSpec(
                                 on = b.optString("on", ""),
                                 part = b.optString("part", ""),
                                 about = b.optString("about", ""),
+                                conditions = condsOf(b.optJSONArray("if")),
                                 actions = actionsOf(b.optJSONArray("then")),
                             )
                         }
@@ -684,14 +707,17 @@ class LogicSpec(
 
             val rules = JSONArray()
             for (r in spec.rules) {
-                val conds = JSONArray()
-                for (c in r.conditions) {
-                    conds.put(
-                        JSONObject()
-                            .put("kind", c.kind).put("stat", c.stat)
-                            .put("op", c.op).put("value", c.value.toDouble())
-                            .put("state", c.state).put("join", c.join)
-                    )
+                fun condJson(list: List<ConditionSpec>): JSONArray {
+                    val arr = JSONArray()
+                    for (c in list) {
+                        arr.put(
+                            JSONObject()
+                                .put("kind", c.kind).put("stat", c.stat)
+                                .put("op", c.op).put("value", c.value.toDouble())
+                                .put("state", c.state).put("join", c.join)
+                        )
+                    }
+                    return arr
                 }
                 fun actionJson(list: List<ActionSpec>): JSONArray {
                     val arr = JSONArray()
@@ -714,9 +740,13 @@ class LogicSpec(
                 val acts = actionJson(r.actions)
                 val branches = JSONArray()
                 for (b in r.branches) {
-                    // A branch with no detector of its own stays a bare array: it is an
-                    // executor, and saying "when: nothing" in the file would be noise.
-                    if (!b.ownDetector && b.part.isEmpty() && b.about.isEmpty()) {
+                    // A branch with nothing of its own stays a bare array: it is an executor,
+                    // and saying "when: nothing" in the file would be noise. An 如果 is NOT
+                    // nothing -- it is a question the branch asks -- so it brings the long
+                    // form with it, and an empty 当 next to it still means 跟组一样.
+                    if (!b.ownDetector && b.part.isEmpty() && b.about.isEmpty() &&
+                        b.conditions.isEmpty()
+                    ) {
                         branches.put(actionJson(b.actions))
                     } else {
                         branches.put(
@@ -724,6 +754,9 @@ class LogicSpec(
                                 .put("on", b.on)
                                 .put("part", b.part)
                                 .apply { if (b.about.isNotEmpty()) put("about", b.about) }
+                                // Written only when it was chosen, like every other default:
+                                // a branch that asks nothing does not grow a key that says so.
+                                .apply { if (b.conditions.isNotEmpty()) put("if", condJson(b.conditions)) }
                                 .put("then", actionJson(b.actions))
                         )
                     }
@@ -733,7 +766,7 @@ class LogicSpec(
                     JSONObject()
                         .put("on", r.on).put("part", r.part)
                         .put("cooldown", r.cooldown.toDouble()).put("once", r.once)
-                        .put("if", conds).put("then", acts).put("else", elses)
+                        .put("if", condJson(r.conditions)).put("then", acts).put("else", elses)
                         // Only when it was chosen: a rule that is about anything does not
                         // grow a key that says "anything", and a rule with no branches does
                         // not grow an empty fork.
