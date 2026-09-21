@@ -28,15 +28,59 @@ import java.io.InputStream
  */
 const val VARIANT_SEPARATOR = "__"
 
-/** One character package on disk. */
-class CharacterFolder(val dir: File) {
+/**
+ * One character package on disk — and WHICH of its rigs.
+ *
+ * A pet can have more than one 骨骼套: a different skeleton with its own artwork, the way a
+ * character in a game has forms. The first one is the package itself, exactly where it has
+ * always been, so every file written by an older version is already the default rig and
+ * nothing has to be migrated. The others live one folder down, in `rigs/<名字>/`, each with
+ * its own [specFile] and [partsDir] — the same two things, one level in.
+ *
+ * Everything the PET owns rather than the rig — its rules and numbers, its particles, its
+ * liquids — stays at the top of the folder and is reached through [dir], not through [rigDir].
+ * That split is the whole point of the feature: swapping a rig changes what it looks like,
+ * not who it is.
+ */
+class CharacterFolder(val dir: File, val rig: String = "") {
     val id: String get() = dir.name
-    val specFile: File get() = File(dir, SPEC_FILE)
-    val partsDir: File get() = File(dir, "parts")
+
+    /**
+     * The folder this rig's own files are in: the package itself for the default rig, and
+     * `rigs/<名字>/` for the others.
+     *
+     * Public because two things outside this class need to say where a rig lives: the store,
+     * when it copies or deletes one, and the editor, when it lists them.
+     */
+    val rigDir: File get() = if (rig.isEmpty()) dir else File(File(dir, RIGS_DIR), rig)
+
+    val specFile: File get() = File(rigDir, SPEC_FILE)
+    val partsDir: File get() = File(rigDir, PARTS_DIR)
 
     fun partFile(bone: String): File = File(partsDir, bone + ".png")
 
+    /**
+     * The saved poses, which belong to the RIG and not to the pet: a pose is a set of bone
+     * angles, and a rig whose bones are named differently cannot hold the same ones. The
+     * default rig's file stays where it always was, so nobody's saved poses move.
+     */
+    val posesFile: File get() = File(rigDir, POSES_FILE)
+
     fun specText(): String = specFile.readText()
+
+    /** The same pet, looking at another of its rigs. Empty means the one at the top. */
+    fun withRig(name: String): CharacterFolder = CharacterFolder(dir, name)
+
+    /**
+     * Every rig this pet has, the default one first.
+     *
+     * A named folder only counts if it has a spec in it: a half-made rig with no skeleton is
+     * not something to offer somebody in a list, and it would fail the moment it was picked.
+     */
+    fun rigs(): List<String> {
+        val named = File(dir, RIGS_DIR).listFiles { f -> f.isDirectory } ?: return listOf("")
+        return listOf("") + named.filter { File(it, SPEC_FILE).isFile }.map { it.name }.sorted()
+    }
 
     /**
      * The names of the files INSIDE a character's folder.
@@ -48,6 +92,15 @@ class CharacterFolder(val dir: File) {
      */
     companion object {
         val SPEC_FILE = "character.json"
+
+        /** Where the drawings are: beside the spec, so a rig is one folder with two things in it. */
+        val PARTS_DIR = "parts"
+
+        /** The extra rigs of one pet. See [rigDir]. */
+        val RIGS_DIR = "rigs"
+
+        /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
+        val POSES_FILE = "poses.json"
 
         /** One folder per KIND of particle (not per drop). See Subjects. */
         val PARTICLES_DIR = "particles"
@@ -151,6 +204,67 @@ class CharacterStore(private val context: Context) {
         return if (File(dir, CharacterFolder.SPEC_FILE).isFile) CharacterFolder(dir) else null
     }
 
+    // ── 骨骼套 ──────────────────────────────────────────────────────────────
+
+    /**
+     * Another rig for one pet: a different skeleton, with its own artwork.
+     *
+     * [from] is the rig to copy, or empty for "the default one"; [art] says whether the
+     * drawings come along. Both answers are things somebody actually wants: 「同一个身体的机械
+     * 形态」 is a copy of everything, and 「骨架先搭好，图我自己再画」 is the skeleton alone.
+     *
+     * The name becomes a folder name, so it goes through the same filter bone names do -- a
+     * rig is a folder, and a folder with a slash in its name cannot exist. Returns the name
+     * that was actually used, or null when there is already a rig with it.
+     */
+    fun addRig(id: String, name: String, from: String = "", art: Boolean = true): String? {
+        val pet = folder(id) ?: return null
+        val clean = RigEdit.sanitise(name)
+        if (clean.isEmpty()) return null
+        val source = pet.withRig(from)
+        if (!source.specFile.isFile) return null
+        val target = pet.withRig(clean)
+        if (target.rigDir.exists()) return null
+        return try {
+            target.rigDir.mkdirs()
+            source.specFile.copyTo(target.specFile, overwrite = true)
+            if (art) copyDir(source.partsDir, target.partsDir)
+            clean
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Forget a rig: its skeleton, its drawings and its poses. The default one is not a folder. */
+    fun deleteRig(id: String, name: String): Boolean {
+        if (name.isEmpty()) return false
+        val pet = folder(id) ?: return false
+        val dir = pet.withRig(name).rigDir
+        if (!dir.isDirectory) return false
+        return dir.deleteRecursively()
+    }
+
+    /** Rename a rig: the whole folder moves, so the skeleton, the art and the poses move with it. */
+    fun renameRig(id: String, from: String, to: String): String? {
+        if (from.isEmpty()) return null
+        val pet = folder(id) ?: return null
+        val clean = RigEdit.sanitise(to)
+        if (clean.isEmpty() || clean == from) return null
+        val source = pet.withRig(from).rigDir
+        val target = pet.withRig(clean).rigDir
+        if (!source.isDirectory || target.exists()) return null
+        return if (source.renameTo(target)) clean else null
+    }
+
+    /** One folder's files copied into another, all the way down. */
+    private fun copyDir(from: File, to: File) {
+        if (!from.isDirectory) return
+        to.mkdirs()
+        for (f in from.listFiles() ?: return) {
+            if (f.isDirectory) copyDir(f, File(to, f.name)) else f.copyTo(File(to, f.name), overwrite = true)
+        }
+    }
+
     /**
      * Write an imported image as the artwork for one bone.
      *
@@ -158,8 +272,7 @@ class CharacterStore(private val context: Context) {
      * bone name IS the contract that makes assembly work, so a file called holiday.jpg
      * still has to land as upperarm_L.png.
      */
-    fun importPart(id: String, bone: String, open: () -> InputStream?): Boolean {
-        val folder = folder(id) ?: return false
+    fun importPart(folder: CharacterFolder, bone: String, open: () -> InputStream?): Boolean {
         val stream = open() ?: return false
         val target = folder.partFile(bone)
         target.parentFile?.mkdirs()
@@ -182,8 +295,7 @@ class CharacterStore(private val context: Context) {
      * the picked image onto a full-canvas transparent bitmap at the position and scale
      * the user chose.
      */
-    fun savePart(id: String, bone: String, bitmap: android.graphics.Bitmap): Boolean {
-        val folder = folder(id) ?: return false
+    fun savePart(folder: CharacterFolder, bone: String, bitmap: android.graphics.Bitmap): Boolean {
         val target = folder.partFile(bone)
         target.parentFile?.mkdirs()
         return try {
@@ -204,8 +316,7 @@ class CharacterStore(private val context: Context) {
      * The base layer is put on "not [state]" at the same time. Without that both drawings
      * appear the instant the state turns on, which is the one thing a variant is for.
      */
-    fun addVariant(id: String, bone: String, state: String): Boolean {
-        val folder = folder(id) ?: return false
+    fun addVariant(folder: CharacterFolder, bone: String, state: String): Boolean {
         // Which LEVEL this state belongs to, decided by who declares it: a state the PART
         // declares is tagged with the bone ("hand_L:sweat"), a global one is just its name.
         // The two levels may share a name -- a hand that sweats and a character that sweats are
@@ -246,11 +357,10 @@ class CharacterStore(private val context: Context) {
      * hand-edit a single part in between later without renumbering everything.
      */
     fun saveDepth(
-        id: String,
+        folder: CharacterFolder,
         backToFront: List<LayerSpec>,
         swaps: List<SwapRuleSpec>,
     ): Boolean {
-        val folder = folder(id) ?: return false
         return try {
             val root = JSONObject(folder.specText())
 
@@ -281,7 +391,12 @@ class CharacterStore(private val context: Context) {
             }
             root.put("layerSwaps", rules)
 
-            val temp = File(folder.dir, "character.json.tmp")
+            // The temp file goes next to its TARGET, not next to the pet: with more than one
+            // rig the spec lives one folder in, and a temp file written at the top while the
+            // target is below it is a rename across two different directories that happens to
+            // work on the same filesystem -- until it does not.
+            folder.rigDir.mkdirs()
+            val temp = File(folder.rigDir, CharacterFolder.SPEC_FILE + ".tmp")
             temp.writeText(root.toString(2))
             if (folder.specFile.exists()) folder.specFile.delete()
             temp.renameTo(folder.specFile)
@@ -327,7 +442,7 @@ class CharacterStore(private val context: Context) {
         File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.ROPE_FILE)
 
     fun saveRig(
-        id: String,
+        folder: CharacterFolder,
         bones: List<BoneSpec>,
         backToFront: List<String>,
         renames: Map<String, String> = emptyMap(),
@@ -336,7 +451,6 @@ class CharacterStore(private val context: Context) {
         if (bones.isEmpty()) return false
         if (RigEdit.problem(bones) != null) return false
         if (RigEdit.nodeProblem(bones, nodes) != null) return false
-        val folder = folder(id) ?: return false
         // A bone missing from the list has been deleted — unless it was renamed, in which
         // case the name it used to have is the one that is missing.
         val wasRenamed = renames.values.toSet()
@@ -555,9 +669,13 @@ class CharacterStore(private val context: Context) {
     /** A saved pose: the joint angles the character holds while it is "doing" this action. */
     data class Pose(val name: String, val angles: Map<String, Float>)
 
-    fun loadPoses(id: String): List<Pose> {
-        val folder = folder(id) ?: return emptyList()
-        val file = File(folder.dir, POSES_FILE)
+    /**
+     * The poses of ONE RIG of one pet. The folder says which, so the caller cannot forget:
+     * poses are bone angles, and asking for them by pet id alone was a question that no
+     * longer has one answer.
+     */
+    fun loadPoses(folder: CharacterFolder): List<Pose> {
+        val file = folder.posesFile
         if (!file.isFile) return emptyList()
         return try {
             val arr = JSONArray(file.readText())
@@ -574,19 +692,19 @@ class CharacterStore(private val context: Context) {
         }
     }
 
-    fun savePose(id: String, name: String, angles: Map<String, Float>): Boolean {
-        val folder = folder(id) ?: return false
+    fun savePose(folder: CharacterFolder, name: String, angles: Map<String, Float>): Boolean {
         return try {
-            val kept = loadPoses(id).filter { it.name != name }
+            val kept = loadPoses(folder).filter { it.name != name }
             val arr = JSONArray()
             for (p in kept + Pose(name, angles)) {
                 val a = JSONObject()
                 for ((bone, value) in p.angles) a.put(bone, value.toDouble())
                 arr.put(JSONObject().put("name", p.name).put("angles", a))
             }
-            val temp = File(folder.dir, POSES_FILE + ".tmp")
+            folder.rigDir.mkdirs()
+            val temp = File(folder.rigDir, CharacterFolder.POSES_FILE + ".tmp")
             temp.writeText(arr.toString(2))
-            val target = File(folder.dir, POSES_FILE)
+            val target = folder.posesFile
             if (target.exists()) target.delete()
             temp.renameTo(target)
         } catch (e: Exception) {
@@ -594,19 +712,18 @@ class CharacterStore(private val context: Context) {
         }
     }
 
-    fun deletePose(id: String, name: String): Boolean {
-        val folder = folder(id) ?: return false
+    fun deletePose(folder: CharacterFolder, name: String): Boolean {
         return try {
             val arr = JSONArray()
-            for (p in loadPoses(id)) {
+            for (p in loadPoses(folder)) {
                 if (p.name == name) continue
                 val a = JSONObject()
                 for ((bone, value) in p.angles) a.put(bone, value.toDouble())
                 arr.put(JSONObject().put("name", p.name).put("angles", a))
             }
-            val temp = File(folder.dir, POSES_FILE + ".tmp")
+            val temp = File(folder.rigDir, CharacterFolder.POSES_FILE + ".tmp")
             temp.writeText(arr.toString(2))
-            val target = File(folder.dir, POSES_FILE)
+            val target = folder.posesFile
             if (target.exists()) target.delete()
             temp.renameTo(target)
         } catch (e: Exception) {
@@ -837,7 +954,8 @@ class CharacterStore(private val context: Context) {
     }
 
     private fun writeSpec(folder: CharacterFolder, root: JSONObject): Boolean {
-        val temp = File(folder.dir, "character.json.tmp")
+        folder.rigDir.mkdirs()
+        val temp = File(folder.rigDir, CharacterFolder.SPEC_FILE + ".tmp")
         temp.writeText(root.toString(2))
         if (folder.specFile.exists()) folder.specFile.delete()
         return temp.renameTo(folder.specFile)
@@ -851,8 +969,7 @@ class CharacterStore(private val context: Context) {
      * a drawing nothing points at still shows up here — which is exactly the file somebody
      * copied into the folder by hand and now wants to assign to a state.
      */
-    fun partDrawings(id: String, bone: String): List<PartDrawing> {
-        val folder = folder(id) ?: return emptyList()
+    fun partDrawings(folder: CharacterFolder, bone: String): List<PartDrawing> {
         val files = folder.partsDir.listFiles() ?: return emptyList()
         return files
             .filter { it.isFile && it.name.endsWith(".png") }
@@ -871,8 +988,7 @@ class CharacterStore(private val context: Context) {
      * state was on, which reads as a bug in the app rather than as a drawing that was
      * removed.
      */
-    fun deleteDrawing(id: String, bone: String, artKey: String): Boolean {
-        val folder = folder(id) ?: return false
+    fun deleteDrawing(folder: CharacterFolder, bone: String, artKey: String): Boolean {
         return try {
             File(folder.partsDir, artKey + ".png").delete()
             val root = JSONObject(folder.specText())
@@ -921,8 +1037,7 @@ class CharacterStore(private val context: Context) {
             }
     }
 
-    fun clearPart(id: String, bone: String): Boolean {
-        val folder = folder(id) ?: return false
+    fun clearPart(folder: CharacterFolder, bone: String): Boolean {
         return folder.partFile(bone).delete()
     }
 
@@ -965,9 +1080,6 @@ class CharacterStore(private val context: Context) {
 
     private companion object {
         const val BUNDLED_ROOT = "characters"
-
-        /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
-        const val POSES_FILE = "poses.json"
 
         /** Rules and numbers are the user's too, for the same reason. */
         const val LOGIC_FILE = "logic.json"

@@ -237,6 +237,23 @@ def main():
     report("变身先记账，帧首再做", "pendingMorph" in bench)
     report("而且两次变身之间有最短间隔", "MORPH_PERIOD" in bench)
 
+    print("== 换骨骼套：同样的两个机制，外加「不动这只桌宠」 ==")
+    # 换骨骼套比变身便宜（它是同一只桌宠的另一个身体），但"一帧里换好几次"和"在动作表
+    # 中间换掉身体"这两个坑是一样的，所以两个机制一个都不能少。第三条是这一版真正要的
+    # 东西：换完之后，这一只的规则、数值、状态、粒子和液体必须还在。
+    report("换骨骼套先记账，帧首再做", "pendingRig" in bench)
+    report("两次换骨骼套之间有最短间隔", "RIG_PERIOD" in bench)
+    # 一个函数的正文：从它的签名到下一个四空格缩进的右括号为止（里面的大括号都更深）。
+    swap = bench[bench.find("fun swapRig"):]
+    end = swap.find("\n    }")
+    swap = swap[:end] if end >= 0 else swap
+    report("而且它不重新造引擎（数值和状态留在这一只身上）", "RuleEngine(" not in swap)
+    report("也不清粒子（它们也是这只桌宠的）", "particles.clear()" not in swap)
+    # 液体和道具只在"新那套的屋子不一样"时才重建 —— 那是唯一一条会丢东西的路，而它是
+    # 有意的：道具会跟着搬过去，水不会（它的每一滴都在旧屋子的坐标里）。
+    report("液体只在房间真的换了的时候才重建",
+           swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
+
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
     decl = re.compile(

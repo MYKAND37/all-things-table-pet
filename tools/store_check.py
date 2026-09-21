@@ -149,6 +149,51 @@ def save_rig(root, bones, order, renames=None, nodes=None):
     return root
 
 
+def kotlin_val(name, fallback, path=STORE_KT):
+    """One `val NAME = "..."` read back out of the Kotlin.
+
+    `val` and not `const val`: the folder-level names (RIGS_DIR, PARTS_DIR, POSES_FILE) live in
+    CharacterFolder's companion as plain vals, because a const would have to be duplicated at
+    every use site to stay readable. A mirror that hard-codes them is a mirror that keeps
+    saying "fine" after somebody renames one.
+    """
+    text = open(path, encoding="utf-8").read()
+    m = re.search(r'val %s = "([^"]+)"' % name, text)
+    return m.group(1) if m else fallback
+
+
+def spec_file_name():
+    return kotlin_val("SPEC_FILE", "character.json")
+
+
+def rigs_dir():
+    return kotlin_val("RIGS_DIR", "rigs")
+
+
+def poses_file_name():
+    return kotlin_val("POSES_FILE", "poses.json")
+
+
+def rig_dir(character_id, rig=""):
+    """Mirror of CharacterFolder.rigDir: the package itself, or one folder in for a named rig."""
+    if not rig:
+        return "characters/" + character_id
+    return "characters/%s/%s/%s" % (character_id, rigs_dir(), rig)
+
+
+def rig_spec(character_id, rig=""):
+    return rig_dir(character_id, rig) + "/" + spec_file_name()
+
+
+def rig_parts(character_id, rig=""):
+    return rig_dir(character_id, rig) + "/parts"
+
+
+def rig_poses(character_id, rig=""):
+    """Poses belong to the RIG: a pose is a set of bone angles, and bones get renamed."""
+    return rig_dir(character_id, rig) + "/" + poses_file_name()
+
+
 def logic_file_name():
     """The file name every subject's rules go in, read back out of the Kotlin."""
     text = open(STORE_KT, encoding="utf-8").read()
@@ -436,6 +481,46 @@ def main():
     report("a liquid without a character has nowhere to live",
            object_logic_path("liquid:slime", None) is None,
            "liquids belong to a character; a prop belongs to everybody")
+
+    print("\n骨骼套：路径规则，和「默认那一套一个字节都不搬」")
+    # 一只桌宠可以有多套骨骼：默认那套就是包裹本身（老文件因此零迁移），别的套各占
+    # rigs/<名字>/ 一层。这一节把三条路径钉住 —— 默认套必须还在老地方，因为全世界的存档
+    # 都在那儿；命名套必须各在各的文件夹里，否则两套骨骼会互相覆盖对方的 character.json。
+    spec = spec_file_name()
+    report("默认套的骨架还在老地方（零迁移）",
+           rig_spec("female_base") == "characters/female_base/" + spec, rig_spec("female_base"))
+    report("默认套的部位图还在老地方",
+           rig_parts("female_base") == "characters/female_base/parts", rig_parts("female_base"))
+    report("命名套各占一层",
+           rig_spec("female_base", "mech") ==
+           "characters/female_base/%s/mech/%s" % (rigs_dir(), spec),
+           rig_spec("female_base", "mech"))
+    report("它的部位图跟着它走，不和默认套共用",
+           rig_parts("female_base", "mech") == "characters/female_base/%s/mech/parts" % rigs_dir(),
+           rig_parts("female_base", "mech"))
+    report("两套骨骼的骨架不是同一个文件",
+           rig_spec("female_base") != rig_spec("female_base", "mech"))
+    report("动作跟着骨骼套（骨头名字换了，同一套角度就不是同一个动作）",
+           rig_poses("female_base", "mech") ==
+           "characters/female_base/%s/mech/%s" % (rigs_dir(), poses_file_name()),
+           rig_poses("female_base", "mech"))
+    report("而默认套的动作也还在老地方",
+           rig_poses("female_base") == "characters/female_base/" + poses_file_name())
+    # 其余的东西是桌宠的，不跟着骨骼走：规则、数值、状态、粒子、液体都住在包裹顶层。
+    # 这一条是"换骨骼套不动内在"在文件层面的那一半。
+    report("规则/粒子/液体不跟着骨骼套走（它们住在桌宠顶层）",
+           object_logic_path("liquid:slime", "female_base") ==
+           "characters/female_base/liquids/slime/" + logic_file_name() and
+           object_logic_path("particle:spark", "female_base") ==
+           "characters/female_base/particles/spark/" + logic_file_name())
+    # saveRig/saveDepth 落盘时写的临时文件：它必须和它要换掉的那个文件在同一个目录里，
+    # 否则换套之后 .tmp 会留在桌宠根目录，而 rename 是跨目录的。
+    kt = open(STORE_KT, encoding="utf-8").read()
+    body = kt[kt.find("private fun writeSpec"):]
+    body = body[:body.find("\n    }")]
+    report("落盘的临时文件跟着那一套的目录走，不是桌宠根目录",
+           "folder.rigDir" in body and "folder.dir" not in body,
+           body.strip().splitlines()[1] if len(body.strip().splitlines()) > 1 else "")
 
     print("\n搬迁：新位置赢，旧文件兜底，空文件不算没有")
     old = {"prop:candle": '{"rules": ["old"]}', "liquid:slime": '{"rules": ["old"]}'}

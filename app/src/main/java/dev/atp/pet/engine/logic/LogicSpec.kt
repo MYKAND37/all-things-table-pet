@@ -425,6 +425,20 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
      * 哪儿。测试场只说"变成这个"，然后被整个重新装载一次。
      */
     MORPH("morph", "变身", "character"),
+
+    /**
+     * 换骨骼套：同一只桌宠的另一套骨架和另一套图。
+     *
+     * 和 [MORPH] 是两件不同的事，所以是两个动作。变身换的是**谁**——另一只桌宠、它自己的
+     * 规则和数值，世界整个重新装载一次；换骨骼套换的是**长什么样**——同一只桌宠、同一套
+     * 规则和数值、同一批粒子和液体，只有身体换掉。前者是"变成别的角色"，后者是"变成另一
+     * 个形态"，而"肚子痛到一半变成机械形态还是痛"正是这一版要的东西。
+     *
+     * 目标写在 [ActionSpec.text] 里，是那一套的名字（空 = 默认那套）。和变身一样由宿主动手：
+     * 骨骼套是文件夹，只有 Activity 知道它们在哪儿。
+     */
+    SET_RIG("setRig", "换骨骼套", "rig"),
+
     WAIT("wait", "等一会儿", "seconds"),
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),

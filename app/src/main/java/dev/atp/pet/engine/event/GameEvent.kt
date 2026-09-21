@@ -10,6 +10,16 @@ package dev.atp.pet.engine.event
  */
 enum class EventType(val id: String, val label: String, val unit: String) {
     SPAWN("spawn", "出现时", ""),
+
+    /**
+     * The body just changed to another rig of the same pet. Nothing else did.
+     *
+     * A new event rather than a second meaning for 出现时: 出现时 is "this pet is here", and a
+     * rig that a rule can listen for is how "变成机械形态 → 说一句话" is written as two rules
+     * instead of one action list. The numbers, the states, the rules, the particles and the
+     * liquids all carry straight through it -- see ActionKind.SET_RIG.
+     */
+    RIG_SWAP("rigSwap", "换了骨骼套", ""),
     TICK("tick", "每隔一会儿", ""),
     GRAB("grab", "被抓起", ""),
     RELEASE("release", "被放下", ""),

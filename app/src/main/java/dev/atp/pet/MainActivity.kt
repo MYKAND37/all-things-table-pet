@@ -338,6 +338,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // A rule asked for another body. Done here rather than in the bench because the rig is
+        // a folder and only the host knows where folders are; the bench keeps the pet -- its
+        // numbers, states, particles and liquids -- exactly as it was. See swapRig.
+        sandboxView.onRigSwitch = { name -> switchRig(name) }
+
         // ── 这份清单就是「哪些项能点」。列进来的才会挂上 setOnClickListener，也只有它们
         //    才走得到 select()。布局里多一项、这里少一项，就是一个点了没反应的按钮 ——
         //    menuParticles 就这么漏过一次：布局里有它，select() 里也有它的分支，但它从没
@@ -387,7 +392,7 @@ class MainActivity : AppCompatActivity() {
      * character is a second thing that can disagree with itself.
      */
     private fun reloadSandbox(folder: CharacterFolder): Boolean {
-        sandboxView.setPoseNames(store.loadPoses(folder.id).associate { it.name to it.angles })
+        sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
         // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
         // match: two places that say what the stiffness is would otherwise disagree the moment
         // somebody changed the setting.
@@ -412,7 +417,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Reload the bench, but only if that is the character currently on it. */
     private fun reloadSummoned(folder: CharacterFolder) {
-        if (summoned?.id == folder.id) reloadSandbox(folder)
+        // The folder that comes in is the one that was edited; the bench is showing whichever
+        // rig it is wearing, and an edit to another rig must not silently change that.
+        summoned?.let { if (it.id == folder.id) reloadSandbox(it) }
     }
 
     private fun select(item: TextView) {
@@ -616,7 +623,7 @@ class MainActivity : AppCompatActivity() {
 
         // Actions live behind one button rather than a row of chips: a character can have
         // any number of them, and the list needs room to show what each one looks like.
-        val poses = summoned?.let { store.loadPoses(it.id) } ?: emptyList()
+        val poses = summoned?.let { store.loadPoses(it) } ?: emptyList()
         val action = label(
             if (activePose == null) getString(R.string.sandbox_actions) + " (" + poses.size + ")"
             else getString(R.string.sandbox_actions) + " · " + activePose,
@@ -722,7 +729,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun fillActionList(box: LinearLayout, folder: CharacterFolder) {
         box.removeAllViews()
-        val poses = store.loadPoses(folder.id)
+        val poses = store.loadPoses(folder)
         // The preview is drawn from the skeleton alone; a spec that will not parse just
         // means the list comes up without pictures.
         val spec = CharacterSpec.parseOrNull(folder.specText())
@@ -844,8 +851,8 @@ class MainActivity : AppCompatActivity() {
                 val next = input.text.toString().trim()
                 if (next.isEmpty() || next == name) return@setPositiveButton
                 // Written under the new name first, so a failure cannot lose the action.
-                if (store.savePose(folder.id, next, angles)) {
-                    store.deletePose(folder.id, name)
+                if (store.savePose(folder, next, angles)) {
+                    store.deletePose(folder, name)
                     if (activePose == name) activePose = next
                     Toast.makeText(this, getString(R.string.action_renamed), Toast.LENGTH_SHORT).show()
                 }
@@ -860,7 +867,7 @@ class MainActivity : AppCompatActivity() {
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.action_delete) + " · " + name)
             .setPositiveButton(R.string.depth_remove) { _, _ ->
-                store.deletePose(folder.id, name)
+                store.deletePose(folder, name)
                 if (activePose == name) {
                     activePose = null
                     sandboxView.applyPose(null)
@@ -960,9 +967,137 @@ class MainActivity : AppCompatActivity() {
         if (logicPane.visibility == View.VISIBLE) openLogic()
     }
 
-    private fun openPet(folder: CharacterFolder) {
+    /** 默认骨骼套 or a name -- one place that decides what a rig is called on screen. */
+    private fun rigLabel(name: String): String =
+        if (name.isEmpty()) getString(R.string.rig_default) else name
+
+    /**
+     * Look at another rig of this pet: in the editor, and on the bench when it is on the bench.
+     *
+     * The bench follows, because "the body I am editing" and "the body on the table" being two
+     * different answers is how somebody spends ten minutes drawing on the wrong one. The swap
+     * keeps the pet: numbers, states, rules, particles, liquids and the props on the table are
+     * all untouched. See PhysicsSandboxView.swapRig.
+     */
+    private fun chooseRig(pane: CharacterFolder, name: String) {
+        val pet = pane.withRig("")
+        val folder = pet.withRig(name)
+        if (summoned?.id == pet.id && !sandboxView.swapRig(folder)) {
+            Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
+                .show()
+            buildPartList(pane)
+            return
+        }
+        if (summoned?.id == pet.id) {
+            sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
+            summoned = folder
+        }
         opened = folder
+        buildPetChooser()
         buildPartList(folder)
+    }
+
+    /** ＋ on the rig row: another body for this pet -- a copy of one, or a bare skeleton. */
+    private fun askNewRig(pane: CharacterFolder) {
+        val pet = pane.withRig("")
+        pickList(
+            title = getString(R.string.rig_new),
+            options = listOf(
+                "copy" to getString(R.string.rig_new_copy),
+                "empty" to getString(R.string.rig_new_empty),
+            ),
+            hint = getString(R.string.rig_new_hint),
+            current = null,
+        ) { what ->
+            askText(getString(R.string.rig_new_name), "") { typed ->
+                val used = store.addRig(pet.id, typed, from = pane.rig, art = what == "copy")
+                if (used == null) {
+                    Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                } else {
+                    chooseRig(pet, used)
+                }
+            }
+            true
+        }
+    }
+
+    /** A long press on a named rig: the two other things that can happen to one. */
+    private fun askRigManage(pane: CharacterFolder, name: String) {
+        val pet = pane.withRig("")
+        pickList(
+            title = getString(R.string.rig_manage_title, name),
+            options = listOf(
+                "rename" to getString(R.string.rig_rename),
+                "delete" to getString(R.string.rig_delete),
+            ),
+            hint = getString(R.string.rig_manage_hint),
+            current = null,
+        ) { what ->
+            if (what == "rename") {
+                askText(getString(R.string.rig_rename), name) { typed ->
+                    val used = store.renameRig(pet.id, name, typed)
+                    if (used == null) {
+                        Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                    } else {
+                        // The bench is wearing it, the editor is looking at it, or neither --
+                        // and each of those is a folder that has to be told the new name.
+                        if (summoned?.rig == name) summoned = summoned?.withRig(used)
+                        if (opened?.rig == name) opened = pet.withRig(used)
+                        buildPartList(pet.withRig(used))
+                    }
+                }
+            } else {
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.rig_delete_confirm, name))
+                    .setPositiveButton(R.string.depth_remove) { _, _ ->
+                        store.deleteRig(pet.id, name)
+                        // Deleting the body that is on the bench puts the default one on: an
+                        // empty bench where a pet used to be is not something to leave behind.
+                        if (summoned?.rig == name) {
+                            summoned = pet
+                            reloadSandbox(pet)
+                        }
+                        opened = pet
+                        buildPetChooser()
+                        buildPartList(pet)
+                    }
+                    .setNegativeButton(R.string.depth_cancel, null)
+                    .show()
+            }
+            true
+        }
+    }
+
+    /**
+     * A rule asked for another body: put it on the bench without disturbing the pet.
+     *
+     * Called from the bench at the top of a frame, because the action that asked for it ran in
+     * the middle of one. A rig whose file cannot be read changes nothing and says so: a pet
+     * that turns into nothing is worse than a switch that did not happen.
+     */
+    private fun switchRig(name: String) {
+        val pet = summoned ?: return
+        val folder = pet.withRig(name)
+        if (!sandboxView.swapRig(folder)) {
+            Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
+                .show()
+            return
+        }
+        sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
+        summoned = folder
+        if (opened?.id == pet.id) {
+            opened = folder
+            buildPartList(folder)
+        }
+        buildPetChooser()
+    }
+
+    private fun openPet(folder: CharacterFolder) {
+        // The pet that is ON THE BENCH is opened in the body it is wearing, not in its default
+        // one: the parts list is where somebody goes to look at what they can see.
+        val same = summoned?.takeIf { it.id == folder.id }
+        opened = same ?: folder
+        buildPartList(opened ?: folder)
         show(Pane.PET_PARTS)
     }
 
@@ -977,6 +1112,29 @@ class MainActivity : AppCompatActivity() {
         header.addView(back)
         header.addView(label("  " + folder.id, 15f, INK))
         partList.addView(header)
+
+        // 骨骼套: which body this pet is wearing. The default one is the package itself; the
+        // others are folders inside it (see CharacterFolder.rigs). Tapping one looks at it and
+        // -- when this pet is the one on the bench -- puts it on, because the parts list is
+        // where somebody goes to see what they are drawing.
+        partList.addView(
+            label(getString(R.string.rig_row), 11f, MUTED, top = 8, bottom = 6)
+        )
+        val rigs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        for (name in folder.rigs()) {
+            val c = chip(rigLabel(name), name == folder.rig, 12f)
+            c.setOnClickListener { chooseRig(folder, name) }
+            if (name.isNotEmpty()) {
+                // Long press rather than another row of buttons: a rig has exactly two other
+                // things you can do to it, and they are not things anybody does twice a minute.
+                c.setOnLongClickListener { askRigManage(folder, name); true }
+            }
+            rigs.addView(c)
+        }
+        val addRig = chip("＋", false, 12f)
+        addRig.setOnClickListener { askNewRig(folder) }
+        rigs.addView(addRig)
+        partList.addView(rigs)
 
         // 节点 one button from the parts, not four screens deep inside the bone list: this is
         // where somebody is thinking about parts, and "a name for a place on a bone" is a
@@ -1101,7 +1259,7 @@ class MainActivity : AppCompatActivity() {
         // can be shown while "穿着" is on, or while this hand's own "出汗" is on -- and the
         // two may share a name, which is why addVariant tags the layer with the bone.
         val states = partsStates(folder, bone)
-        val drawings = store.partDrawings(folder.id, bone)
+        val drawings = store.partDrawings(folder, bone)
         if (drawings.isEmpty()) {
             partFilesList.addView(label(getString(R.string.part_files_none), 11f, MUTED, bottom = 10))
         }
@@ -1118,7 +1276,7 @@ class MainActivity : AppCompatActivity() {
             awaitingBone = bone
             awaitingVariant = if (state.isEmpty()) null else bone to artKey
             opened = folder
-            if (create && state.isNotEmpty() && !store.addVariant(folder.id, bone, state)) {
+            if (create && state.isNotEmpty() && !store.addVariant(folder, bone, state)) {
                 Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
                 return
             }
@@ -1172,7 +1330,7 @@ class MainActivity : AppCompatActivity() {
             val del = label(getString(R.string.part_files_delete), 11f, MUTED)
             del.setPadding(dp(8), dp(6), dp(8), dp(6))
             del.setOnClickListener {
-                store.deleteDrawing(folder.id, bone, drawing.artKey)
+                store.deleteDrawing(folder, bone, drawing.artKey)
                 buildPartFiles(folder)
                 reloadSummoned(folder)
                 if (rigRow.visibility == View.VISIBLE) skeletonView.load(folder)
@@ -1248,7 +1406,7 @@ class MainActivity : AppCompatActivity() {
         params.bottomMargin = dp(6)
         row.layoutParams = params
 
-        val count = store.partDrawings(folder.id, bone).size
+        val count = store.partDrawings(folder, bone).size
         val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         text.addView(label(bone, 13f, INK))
         text.addView(
@@ -1297,7 +1455,7 @@ class MainActivity : AppCompatActivity() {
             awaitingVariant = bone to (bone + "__" + state)
             awaitingBone = bone
             opened = folder
-            if (store.addVariant(folder.id, bone, state)) {
+            if (store.addVariant(folder, bone, state)) {
                 pickImage.launch(arrayOf("image/*"))
             } else {
                 Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
@@ -1360,7 +1518,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, getString(R.string.align_failed), Toast.LENGTH_SHORT).show()
             return
         }
-        val ok = store.savePart(folder.id, bone, baked)
+        val ok = store.savePart(folder, bone, baked)
         baked.recycle()
         Toast.makeText(
             this,
@@ -1758,7 +1916,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun saveDepth(folder: CharacterFolder) {
-        val ok = store.saveDepth(folder.id, depthLayers, depthRules)
+        val ok = store.saveDepth(folder, depthLayers, depthRules)
         Toast.makeText(
             this,
             getString(if (ok) R.string.depth_saved else R.string.depth_save_failed),
@@ -1865,7 +2023,7 @@ class MainActivity : AppCompatActivity() {
         val bones = skeletonView.rigBones()
         if (RigEdit.problem(bones) != null) return false
         val ok = store.saveRig(
-            folder.id, bones, skeletonView.rigLayers(), skeletonView.renames(),
+            folder, bones, skeletonView.rigLayers(), skeletonView.renames(),
             skeletonView.rigNodes(),
         )
         if (ok) reloadSummoned(folder)
@@ -1889,7 +2047,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         val ok = store.saveRig(
-            folder.id, bones, skeletonView.rigLayers(), skeletonView.renames(),
+            folder, bones, skeletonView.rigLayers(), skeletonView.renames(),
             skeletonView.rigNodes(),
         )
         Toast.makeText(
@@ -2635,7 +2793,7 @@ class MainActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton(R.string.depth_save) { _, _ ->
                 val name = input.text.toString().trim().ifEmpty { "动作" }
-                val ok = store.savePose(folder.id, name, skeletonView.currentAngles())
+                val ok = store.savePose(folder, name, skeletonView.currentAngles())
                 Toast.makeText(
                     this,
                     getString(if (ok) R.string.rig_pose_saved else R.string.rig_save_failed),
@@ -4558,7 +4716,7 @@ class MainActivity : AppCompatActivity() {
         if (folder != null) {
             actions.add(getString(R.string.state_use_art) to {
                 val hits = boneNames(folder).filter { bone ->
-                    store.partDrawings(folder.id, bone)
+                    store.partDrawings(folder, bone)
                         .any { it.artKey == store.variantKey(bone, state.id) }
                 }
                 if (hits.isEmpty()) {
@@ -5458,9 +5616,21 @@ class MainActivity : AppCompatActivity() {
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
                     true
                 }
+                // 换骨骼套: the bodies of the pet that is on the bench -- the same list the rig
+                // row shows. Empty means the default one, which is what a rule written before
+                // this existed would have meant anyway.
+                "rig" -> pickList(
+                    getString(R.string.logic_pick_rig),
+                    summoned?.rigs()?.map { it to rigLabel(it) } ?: emptyList(),
+                    getString(R.string.logic_no_rigs),
+                    existing?.text ?: "",
+                ) { id ->
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    true
+                }
                 "pose" -> pickList(
                     getString(R.string.logic_pick_pose),
-                    summoned?.let { store.loadPoses(it.id).map { p -> p.name to p.name } } ?: emptyList(),
+                    summoned?.let { store.loadPoses(it).map { p -> p.name to p.name } } ?: emptyList(),
                     getString(R.string.logic_no_poses),
                     existing?.text,
                 ) { name ->

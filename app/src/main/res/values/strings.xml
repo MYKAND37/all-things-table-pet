@@ -116,6 +116,20 @@
     <string name="rig_mode_bones">改骨骼</string>
     <string name="rig_save_bones">保存骨骼</string>
     <string name="rig_reset">复位</string>
+    <string name="rig_row">骨骼套（这只桌宠有哪几副身体）</string>
+    <string name="rig_default">默认骨骼套</string>
+    <string name="rig_new">新建骨骼套</string>
+    <string name="rig_new_copy">复制当前这套（骨架 + 部位图）</string>
+    <string name="rig_new_empty">只复制骨架（部位图自己再画）</string>
+    <string name="rig_new_hint">骨骼套 = 另一副骨架 + 它自己的一套部位图 + 它自己的动作。用规则里的「换骨骼套」切换，换的时候数值、状态、粒子和液体都不动。</string>
+    <string name="rig_new_name">这一套叫什么</string>
+    <string name="rig_manage_title">骨骼套「%1$s」</string>
+    <string name="rig_manage_hint">长按骨骼套就能看到这里。重命名会把它的骨架、图片和动作一起搬过去。</string>
+    <string name="rig_rename">重命名</string>
+    <string name="rig_delete">删掉这一套</string>
+    <string name="rig_delete_confirm">删掉骨骼套「%1$s」？它的骨架、部位图和动作一起没，不能撤销。</string>
+    <string name="logic_pick_rig">选一套骨骼</string>
+    <string name="logic_no_rigs">这只桌宠只有默认那一套</string>
     <string name="rig_save_pose">存为动作</string>
 
     <!--

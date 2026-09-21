@@ -469,6 +469,21 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** The 变身 that has been asked for and not done yet. See the morph action. */
     private var pendingMorph: String? = null
 
+    /** When the last 换骨骼套 happened, so a pair of rules cannot swap bodies every frame. */
+    private var lastRigAt = -999f
+
+    /** The 换骨骼套 that has been asked for and not done yet. See the setRig action. */
+    private var pendingRig: String? = null
+
+    /**
+     * Which of the summoned pet's rigs is on the bench, empty for the default one.
+     *
+     * The bench keeps this rather than asking the host, because the two questions the rules
+     * ask about a rig -- "is this already the one I am wearing" and "what do I call it in the
+     * log" -- are both about what is ON THE BENCH, not about what the editor has open.
+     */
+    private var rig: String = ""
+
     private var panning = false
     private var lastPanX = 0f
     private var lastPanY = 0f
@@ -572,6 +587,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     var onMorph: ((String) -> Unit)? = null
 
+    /** The host's way of putting another rig of the SAME pet on the bench. See [swapRig]. */
+    var onRigSwitch: ((String) -> Unit)? = null
+
     /**
      * Hand a finished CSV to the activity, which owns the share sheet. See MainActivity.
      *
@@ -652,6 +670,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         objectEngines.clear()
         propLanded.clear()
         nearWatch.clear()
+        rig = folder.rig
+        pendingRig = null
         clock = 0f
         prevRootY = built.root.worldPosition.y
         wasGrounded = true
@@ -674,6 +694,96 @@ class PhysicsSandboxView @JvmOverloads constructor(
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.SPAWN))
+        invalidate()
+        return true
+    }
+
+    /**
+     * 换骨骼套: the same pet, in another body.
+     *
+     * This is the one load that does NOT start the pet over. Its rules, numbers, states,
+     * particles and liquids belong to the PET, and they carry straight through -- that is the
+     * whole difference between this and 变身, which brings in a different pet and begins again.
+     * 「肚子痛到一半变成机械形态还是痛」 is the sentence this method exists to make true.
+     *
+     * What is left behind is everything that named a bone of the body being taken off: what it
+     * was holding, what was nailed to it, what had been torn off and what was being sprayed
+     * from it. Those names do not exist in the new skeleton, and a hand that keeps gripping a
+     * bone from the old one is a bug that looks like telekinesis.
+     *
+     * The room follows the rig only when the new spec actually asks for a different one. Two
+     * rigs of one pet almost always share a floor -- the scene is the pet's, not the body's --
+     * and rebuilding the world on every switch would drop whatever is on the table.
+     */
+    fun swapRig(folder: CharacterFolder): Boolean {
+        val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return false
+        val old = spec
+        val where = ragdoll?.rootPos
+        val built = parsed.buildSkeleton()
+        built.update()
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+
+        heldBones.clear()
+        heldTargets.clear()
+        heldOffsets.clear()
+        heldProp = null
+        nails.clear()
+        waitingPins.clear()
+        waitingRopes.clear()
+        lines.clear()
+        ropeDraft = null
+        pegHitAt.clear()
+        detached.clear()
+        debris.clear()
+        heldDebris = null
+        debrisPointer = -1
+        fingerOnDebris = null
+        twistPointer = -1
+        emitters.clear()
+        lastBoneAt.clear()
+        // 挂在节点上的道具（节点装道具）：那些节点属于旧身体，所以它们被放下了 —— 而不是
+        // 留在"肩膀原来在的地方"浮着。wearProps 下一帧会按新骨架的节点重新挂。
+        for (prop in worn.values) prop.planted = false
+        worn.clear()
+
+        library?.release()
+        spec = parsed
+        skeleton = built
+        library = loaded
+        renderer = if (loaded.isEmpty) null else PartRenderer(
+            built,
+            loaded,
+            parsed.drawOrder(),
+            parsed.swaps,
+        )
+        // 藏起来的部位跟着人走：那是一个开关（规则说的"手没了"），换一套图没有理由把它打开。
+        // 掉在地上的那一块不跟：它的碰撞箱是旧身体的一块，收进新身体里没有意义。
+        renderer?.hidden = broken
+        ragdoll = Ragdoll(built, parsed, stiffness)
+        layersNow = parsed.drawOrder()
+        // The pet does not teleport: the new body is put where the old one was standing.
+        if (where != null) ragdoll?.rootPos = where
+        prevRootY = ragdoll?.rootPos?.y ?: 0f
+        wasGrounded = true
+        framed = false
+
+        if (old == null || old.floorY != parsed.floorY || old.worldWidth != parsed.worldWidth) {
+            // A different room, so the world has to be rebuilt -- a prop falling towards a floor
+            // that is no longer there is worse than moving it. The loose props come along; the
+            // water does not, because its drops live in the old room's coordinates.
+            val loose = world?.live.orEmpty().filter { !it.planted }
+                .map { Triple(it.spec, it.position, it.velocity) }
+            world = PropWorld(parsed.floorY, parsed.worldWidth)
+            fluid = Fluid(parsed.floorY, parsed.worldWidth)
+            for ((propSpec, at, v) in loose) world?.spawn(propSpec, at, v)
+            propLanded.clear()
+            nearWatch.clear()
+        }
+
+        rig = folder.rig
+        lastFrameNs = System.nanoTime()
+        report()
+        fire(GameEvent(EventType.RIG_SWAP))
         invalidate()
         return true
     }
@@ -702,6 +812,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         objectEngines.clear()
         propLanded.clear()
         nearWatch.clear()
+        rig = ""
+        pendingRig = null
         heldBones.clear()
         heldTargets.clear()
         emitters.clear()
@@ -1125,6 +1237,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         pendingMorph = a.text
                     }
                 }
+                "setRig" -> {
+                    // 和变身同一个理由的限速：一套「换了这套 → 再换回去」的规则是两行就能写
+                    // 出来的东西，而每帧重建一次身体不是谁要的功能。
+                    val name = a.text
+                    if (name == rig) {
+                        // 已经是这一套了。写成"换成本来就是的那套"最常见的样子是一条「每隔一
+                        // 会儿」的规则，那不该每两秒把身体重建一次 —— 但也不是错误，所以不
+                        // 出声。
+                    } else if (clock - lastRigAt < RIG_PERIOD) {
+                        onInfo?.invoke("换骨骼套太快了，等一下")
+                    } else {
+                        lastRigAt = clock
+                        onInfo?.invoke("换骨骼套 · " + if (name.isEmpty()) "默认" else name)
+                        // Asked for here, done at the top of the next frame: the host re-reads
+                        // files and rebuilds the body, and doing that from inside the action
+                        // list that asked for it leaves the rest of the frame running against
+                        // a skeleton that has been swapped out from under it.
+                        pendingRig = name
+                    }
+                }
                 "clearPose" -> applyPose(null)
                 "spawn" -> propSpecs.firstOrNull { it.id == a.prop }?.let {
                     // From an object's own rules the new prop appears where that object is:
@@ -1510,6 +1642,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
         pendingMorph?.let { id ->
             pendingMorph = null
             onMorph?.invoke(id)
+            return
+        }
+        // 换骨骼套 asked for by a rule, done in the same place and for the same reason -- with
+        // a much smaller blast radius: the body is rebuilt, the pet is not.
+        pendingRig?.let { name ->
+            pendingRig = null
+            onRigSwitch?.invoke(name)
             return
         }
 
@@ -4162,6 +4301,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val NODE_GRAB_SLACK = 10f
         /** The shortest gap between two 变身. See the morph action. */
         private const val MORPH_PERIOD = 0.5f
+
+        /** The shortest gap between two 换骨骼套. See the setRig action. */
+        private const val RIG_PERIOD = 0.5f
 
         /**
          * How far a prop has to travel between two marks.

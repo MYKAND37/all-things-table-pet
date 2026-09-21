@@ -1085,6 +1085,20 @@ def main():
            {"propNear", "propAway"} <= events,
            "没声明: " + str({"propNear", "propAway"} - events))
 
+    print("\n换骨骼套：一个动作，和它换完之后发的那个事件")
+    # 引擎不认识"骨骼套"是什么：它把 setRig 原样交给测试场，由宿主去换（骨骼套是文件夹，
+    # 只有 Activity 知道它们在哪儿）。换完测试场发一个 rigSwap，规则就能接着反应 ——
+    # 「变成机械形态 → 说一句话」因此是两条规则，而不是一段藏起来的代码。
+    rig = Engine({"stats": [], "states": [], "rules": [
+        {"on": "click", "part": "", "if": [], "then": [{"kind": "setRig", "text": "mech"}]},
+        {"on": "rigSwap", "part": "", "if": [], "then": [{"kind": "say", "text": "换好了"}]},
+    ]})
+    out = rig.handle("click")
+    report("换骨骼套原样交给测试场去做（引擎不认识它，也不该认识）",
+           [(a["kind"], a.get("text")) for a in out] == [("setRig", "mech")], str(out))
+    report("换完发的 rigSwap 能被另一条规则听到", says(rig.handle("rigSwap")) == ["换好了"])
+    report("rigSwap 是 Kotlin 里声明的事件", "rigSwap" in events)
+
     print("\n并行分支：一个侦测器，岔开的每一支都执行")
     # 「并行逻辑也有完整的侦测器和执行器，箭头是向下指过去的，就是岔开」。
     # 这条规则自己的「当」就是组的侦测器，自己的「就」是第一支执行器，branches 里每一
