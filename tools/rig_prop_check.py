@@ -168,6 +168,10 @@ class World:
     def _collide(self, p, bones, radius_of, hits, on_impulse):
         speed = math.hypot(p.vx, p.vy)
         for name, a, b in bones:
+            # 半径 0 = 这根骨头对世界不存在（rig 的碰撞开关）。必须是**跳过**而不是半径 0：
+            # 半径 0 的骨头是一条无限细的线，道具照样被那条线推开。
+            if radius_of(name) <= 0:
+                continue
             c = closest_on_segment((p.x, p.y), a, b)
             gap = p.spec.radius + radius_of(name)
             ox, oy = p.x - c[0], p.y - c[1]
@@ -406,6 +410,24 @@ def main():
         w.step(1 / 60, 0.0, [], radius_of, lambda *a: None)
     report("a second on the floor takes most of the sideways speed away",
            slid.vx < 600.0 * 0.2, "vx=%.1f after a second, from 600" % slid.vx)
+
+    print("\n关掉碰撞的那根骨头，道具感觉不到（不是变成一条线）")
+    noop = lambda *a: None
+    # 这一条是用户报的"关闭骨骼碰撞无法正常使用"：rig 的碰撞开关以前是给世界一个**半径 0**，
+    # 而半径 0 的骨头是一条无限细的线 —— 道具照样被那条线推开，只是看不见推它的东西。
+    # 现在它整个跳过。radius_of 返回 0 = 这根骨头不存在。
+    w = World(2000.0, 3000.0)
+    off = lambda name: 0.0
+    stone = w.spawn(Spec("stone", radius=40.0), (1000.0, 1000.0))
+    hits = w.step(1 / 60, 0.0, [("hand_L", (900.0, 1000.0), (1100.0, 1000.0))], off, noop)
+    report("撞在关掉碰撞的骨头上：道具不动", abs(stone.x - 1000.0) < 1e-6, "x=%.4f" % stone.x)
+    report("而且一个事件都不报", hits == [], str(hits))
+
+    w = World(2000.0, 3000.0)
+    stone = w.spawn(Spec("stone", radius=40.0), (1000.0, 1000.0))
+    hits = w.step(1 / 60, 0.0, [("hand_L", (900.0, 1000.0), (1100.0, 1000.0))],
+                  lambda name: 20.0, noop)
+    report("同一根骨头开着碰撞时照旧被推开", stone.y != 1000.0 or stone.x != 1000.0)
 
     print("\nnodes are felt as points")
     noop = lambda *a: None

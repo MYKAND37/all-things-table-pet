@@ -237,7 +237,12 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
             // is a statement about the pet, not about the world.
             if (skeleton != null && drop.collides) {
                 for (bone in skeleton.bones) {
-                    pushOut(drop, bone.worldPosition, bone.tipPosition(), radiusOf(bone))
+                    // Zero means "not there" -- see PropWorld.collide. The liquid has to skip it
+                    // for the same reason a prop does: a zero-radius bone is a line, and a drop
+                    // is still held off a line.
+                    val r = radiusOf(bone)
+                    if (r <= 0f) continue
+                    pushOut(drop, bone.worldPosition, bone.tipPosition(), r)
                 }
             }
         }

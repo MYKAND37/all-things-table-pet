@@ -146,6 +146,9 @@ class Fluid:
             # character" is a statement about the pet, not about the world.
             if d.collides:
                 for (a, b, r) in bones:
+                    # 半径 0 = 这根骨头对世界不存在（rig 的碰撞开关）：跳过，不是当成一条线。
+                    if r <= 0:
+                        continue
                     self._bone(d, a, b, r)
 
         # Velocity is where the drop ENDED UP, not what it was pushed with.

@@ -310,6 +310,13 @@ class PropWorld(private val floorY: Float, private val worldWidth: Float) {
     ) {
         var speed = p.velocity.length()
         for (bone in skeleton.bones) {
+            // A radius of zero means "this part is not there as far as the world is concerned",
+            // which is what the rig's 碰撞 switch is for. It has to be a SKIP and not a zero
+            // radius: a zero-radius bone is an infinitely thin line, and a prop is still shoved
+            // off a line -- so "碰撞 off" used to leave the part bumping props with an invisible
+            // wire. The rig always derives a real radius (a file saying 0 means "work one out"),
+            // so nothing else can arrive here as zero.
+            if (radiusOf(bone) <= 0f) continue
             val head = bone.worldPosition
             val tip = bone.tipPosition()
             val closest = closestOnSegment(p.position, head, tip)
