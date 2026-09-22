@@ -1932,16 +1932,27 @@ class MainActivity : AppCompatActivity() {
     private fun recreateState(bone: String, id: String) {
         val folder = opened ?: return
         val clean = RigEdit.sanitise(id).ifEmpty { "state" }
+        // LogicSpec is not a data class (it is written by hand so that every field can say
+        // what it is for), so there is no copy(): the new spec is spelled out, which is also
+        // the only way to see at a glance what is being kept.
         val ok = if (bone.isEmpty()) {
             val spec = store.loadLogic(folder.id)
-            val next = spec.copy(states = spec.states + StateSpec(clean, clean, false))
-            store.saveLogic(folder.id, next)
+            store.saveLogic(
+                folder.id,
+                LogicSpec(
+                    spec.stats, spec.rules, spec.states + StateSpec(clean, clean, false),
+                    spec.liquids, spec.particles,
+                ),
+            )
         } else {
             val subject = Subjects.part(bone)
             val spec = store.loadObjectLogic(folder)[subject] ?: return
             store.saveObjectLogic(
                 folder, subject,
-                spec.copy(states = spec.states + StateSpec(clean, clean, false)),
+                LogicSpec(
+                    spec.stats, spec.rules, spec.states + StateSpec(clean, clean, false),
+                    spec.liquids, spec.particles,
+                ),
             )
         }
         if (ok) {
@@ -1959,7 +1970,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun moveDepth(index: Int, step: Int) {
-        val shown = depthLayers.indices.filter { depthShows(depthLayers[it]) }
+        val folder = opened ?: return
+        val shown = depthLayers.indices.filter { depthShows(folder, depthLayers[it]) }
         val here = shown.indexOf(index)
         if (here < 0) return
         val there = shown.getOrNull(here + step) ?: return
