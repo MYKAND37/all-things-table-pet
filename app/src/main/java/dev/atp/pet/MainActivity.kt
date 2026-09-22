@@ -107,6 +107,15 @@ class MainActivity : AppCompatActivity() {
     /** Set while importing a variant: the bone whose geometry to fit, and the file key. */
     private var awaitingVariant: Pair<String, String>? = null
 
+    /**
+     * Which group of layers 图层与深度 is showing: null = all of them, "" = the ones that always
+     * draw, anything else = one state (with its "!" drawing, which is the other half of it).
+     *
+     * A filter and not a second order: there is still ONE order, and this only decides which
+     * rows are on screen while it is edited. See buildDepthPane.
+     */
+    private var depthFilter: String? = null
+
     /** The rig editor's preview: which states are on, and whether the assembled pet is drawn. */
     private var previewStates: Map<String, Boolean> = emptyMap()
     private var previewParts = true
@@ -1766,9 +1775,37 @@ class MainActivity : AppCompatActivity() {
         }
         depthStates = store.loadLogic(folder.id).states
         depthRules = parsed.swaps.toMutableList()
+        depthFilter = null
         wizardStage = 0
         buildDepthPane()
         show(Pane.PET_DEPTH)
+    }
+
+    /** Does the current filter show this layer? See [depthFilter]. */
+    private fun depthShows(layer: LayerSpec): Boolean {
+        val f = depthFilter ?: return true
+        val key = layer.state.removePrefix("!")
+        return if (f.isEmpty()) key.isEmpty() else key == f
+    }
+
+    /**
+     * Move one layer one step through the rows that are ON SCREEN.
+     *
+     * Unfiltered this is the old behaviour exactly (swap with the neighbour). Filtered, "up"
+     * means "in front of the next row I can see": the rows that belong to other states stay
+     * where they are, which is what makes editing one state's depth possible at all -- stepping
+     * one place in a list of twenty, seventeen of which are hidden, looks like nothing
+     * happened.
+     */
+    private fun moveDepth(index: Int, step: Int) {
+        val shown = depthLayers.indices.filter { depthShows(depthLayers[it]) }
+        val here = shown.indexOf(index)
+        if (here < 0) return
+        val there = shown.getOrNull(here + step) ?: return
+        val moved = depthLayers[index]
+        depthLayers[index] = depthLayers[there]
+        depthLayers[there] = moved
+        buildDepthPane()
     }
 
     private fun buildDepthPane() {
@@ -1795,10 +1832,41 @@ class MainActivity : AppCompatActivity() {
 
         depthList.addView(label(getString(R.string.depth_hint), 11f, MUTED, top = 10, bottom = 10))
 
+        // 状态一多，这一页就变成"二十行里找三行"，而要找的那三行还是同一件衣服的三个部位。
+        // 所以先问一句"你在调哪一组"：过滤器只决定**看得见哪几行**，那份唯一的顺序不动，
+        // 而 ▲▼ 在这一组**内部**换位（跳过别的状态的行）—— 「改某个状态的图层深度」就是这
+        // 个意思，而不是给每个状态各存一份顺序（那是两套顺序，迟早对不上）。
+        val keys = previewStateKeys(folder)
+        val filterRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        fun filterChip(text: String, value: String?, count: Int) {
+            val on = depthFilter == value
+            val c = chip(text + " " + count, on, 11f)
+            c.setOnClickListener {
+                depthFilter = value
+                buildDepthPane()
+            }
+            filterRow.addView(c)
+        }
+        filterChip(getString(R.string.depth_filter_all), null, depthLayers.size)
+        filterChip(
+            getString(R.string.depth_filter_none), "",
+            depthLayers.count { it.state.isEmpty() },
+        )
+        for ((key, text) in keys) {
+            filterChip(text, key, depthLayers.count { it.state.removePrefix("!") == key })
+        }
+        depthList.addView(filterRow)
+        if (depthFilter != null) {
+            depthList.addView(
+                label(getString(R.string.depth_filter_hint), 10f, MUTED, top = 6, bottom = 6)
+            )
+        }
+
         // Front first: the top of the list is the part drawn last, so it covers the rest.
-        val frontFirst = depthLayers.reversed()
-        for ((i, layer) in frontFirst.withIndex()) {
-            val realIndex = depthLayers.size - 1 - i
+        // A filtered view keeps that order and drops the rows it is not about.
+        val shown = depthLayers.indices.filter { depthShows(depthLayers[it]) }
+        for (realIndex in shown.reversed()) {
+            val layer = depthLayers[realIndex]
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
@@ -1836,22 +1904,10 @@ class MainActivity : AppCompatActivity() {
 
             val up = label("▲", 13f, INK)
             up.setPadding(dp(10), dp(4), dp(10), dp(4))
-            up.setOnClickListener {
-                if (realIndex < depthLayers.size - 1) {
-                    val b = depthLayers.removeAt(realIndex)
-                    depthLayers.add(realIndex + 1, b)
-                    buildDepthPane()
-                }
-            }
+            up.setOnClickListener { moveDepth(realIndex, +1) }
             val down = label("▼", 13f, INK)
             down.setPadding(dp(10), dp(4), dp(10), dp(4))
-            down.setOnClickListener {
-                if (realIndex > 0) {
-                    val b = depthLayers.removeAt(realIndex)
-                    depthLayers.add(realIndex - 1, b)
-                    buildDepthPane()
-                }
-            }
+            down.setOnClickListener { moveDepth(realIndex, -1) }
             row.addView(up)
             row.addView(down)
             depthList.addView(row)

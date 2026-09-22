@@ -256,6 +256,17 @@ def main():
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
 
+    print("== 图层深度：状态多了先分组 ==")
+    # 「状态一多，改图层深度就很乱」：二十行里找三行，而 ▲▼ 一次只走一格，走的那一格还可能
+    # 是别的状态的。两条断言：这一页先给"你要调哪一组"，以及过滤时 ▲▼ 在**组内**换位。
+    report("深度页有状态过滤（先问调哪一组）",
+           "depthFilter" in activity and "private fun depthShows(" in activity)
+    report("▲▼ 按看得见的行换位，不是按整张表走一格",
+           "private fun moveDepth(" in activity and "shown.getOrNull(here + step)" in activity)
+    # 而它必须是**视图**，不是第二份顺序：写回文件的仍然只有 depthLayers 那一份。
+    report("过滤不产生第二份顺序（落盘的还是那一份列表）",
+           "store.saveDepth(folder, depthLayers, depthRules)" in activity)
+
     print("== 哪一只在场上：是用户说了算 ==")
     # 「选择场上存在哪一只桌宠」这一版加的东西里，最容易被悄悄破坏的一条：复制一只、导入一个包、
     # 改个名字之后，站在桌上的那只不能变成别人。`reloadCharacters` 里必须有"留住现在这只"的

@@ -109,6 +109,9 @@
     <string name="depth_title">图层与深度</string>
     <string name="depth_entry">图层与深度</string>
     <string name="depth_hint">上面的在前面（会盖住下面的）。点箭头调整。</string>
+    <string name="depth_filter_all">全部</string>
+    <string name="depth_filter_none">总是画的</string>
+    <string name="depth_filter_hint">上面这一行是过滤：只显示这一组。▲▼ 在这一组**内部**换位，别的状态的行原地不动 —— 顺序还是那一个顺序。</string>
     <string name="depth_rules">深度规则（同一个部位在不同姿势下换前后）</string>
     <string name="depth_no_rules">还没有规则</string>
     <string name="depth_add_rule">＋ 添加规则</string>
