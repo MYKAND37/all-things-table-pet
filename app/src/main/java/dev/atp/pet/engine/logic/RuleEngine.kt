@@ -18,26 +18,26 @@ import kotlin.random.Random
  * See tools/logic_check.py, which mirrors this file and carries the cases that matter:
  * cooldowns, once-only rules, part matching, delayed actions, and the order rules run in.
  */
-/**
- * 只有世界能回答的问题。
- *
- * The second kind of detector the owner asked for: 「手是否比肩膀高」「有没有被绳子连着」.
- * Neither is a number the character carries and neither is a state somebody declared -- they
- * are facts about where the parts ARE and what they are tied to, and the rule engine has no
- * business knowing how a skeleton is stored. So the world hands in an object that answers
- * exactly these questions, and the ENGINE keeps the comparison (which way round, how many
- * pixels of margin): that way "手比肩膀高 30px" is a rule, and a phone with no world attached
- * -- the mirror tests, the editor -- can still be asked what it would say.
- */
-interface Facts {
-    /** Where a part is, in world pixels, or null when there is no such part right now. */
-    fun at(bone: String): Vec2?
-
-    /** Is anything tied to this part by a rope? An empty [bone] asks about the whole body. */
-    fun tied(bone: String): Boolean
-}
-
 class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
+    /**
+     * 只有世界能回答的问题。
+     *
+     * The second kind of detector the owner asked for: 「手是否比肩膀高」「有没有被绳子连着」.
+     * Neither is a number the character carries and neither is a state somebody declared -- they
+     * are facts about where the parts ARE and what they are tied to, and the rule engine has no
+     * business knowing how a skeleton is stored. So the world hands in an object that answers
+     * exactly these questions, and the ENGINE keeps the comparison (which way round, how many
+     * pixels of margin): that way "手比肩膀高 30px" is a rule, and a phone with no world attached
+     * -- the mirror tests, the editor -- can still be asked what it would say.
+     */
+    interface Facts {
+        /** Where a part is, in world pixels, or null when there is no such part right now. */
+        fun at(bone: String): Vec2?
+
+        /** Is anything tied to this part by a rope? An empty [bone] asks about the whole body. */
+        fun tied(bone: String): Boolean
+    }
+
 
     val stats = StatSet(spec.stats)
 
