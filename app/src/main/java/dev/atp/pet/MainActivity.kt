@@ -5044,7 +5044,12 @@ class MainActivity : AppCompatActivity() {
             text.addView(
                 label(
                     "代号 " + liquid.id + " · 黏度 " + "%.2f".format(liquid.viscosity) +
-                        " · " + (if (liquid.viscosity >= 0.6f) "抱团" else if (liquid.viscosity <= 0.2f) "摊开" else "半稠"),
+                        " · " + (if (liquid.viscosity >= 0.6f) "抱团" else if (liquid.viscosity <= 0.2f) "摊开" else "半稠") +
+                        // Only when they are not the default: a row that reads the same for
+                        // every liquid is a row nobody reads. 大小 and 透明度 are what the
+                        // user just changed, so they are the two worth printing.
+                        (if (liquid.size != 1f) " · " + "%.2f×".format(liquid.size) else "") +
+                        (if (liquid.opacity != 1f) " · " + (liquid.opacity * 100).toInt() + "%" else ""),
                     10f, MUTED,
                 )
             )
@@ -5170,6 +5175,17 @@ class MainActivity : AppCompatActivity() {
             getString(R.string.logic_liquid_viscosity), existing?.viscosity ?: 0f, 0.1f, 0f, 1f,
         ) { "%.2f".format(it) }
 
+        // 大小 and 透明度 sit next to 黏度 because they answer the same kind of question --
+        // what does this stuff look like when it comes out -- and because both are a number
+        // you have to see to judge. 大小 goes down to a quarter and up to four times the
+        // drop; 透明度 stops at 10%, where a drop is still a drop and not a rumour.
+        val (sizeRow, sizeOf) = stepperRow(
+            getString(R.string.logic_liquid_size), existing?.size ?: 1f, 0.25f, 0.25f, 4f,
+        ) { "%.2f×".format(it) }
+        val (opacityRow, opacityOf) = stepperRow(
+            getString(R.string.logic_liquid_opacity), existing?.opacity ?: 1f, 0.1f, 0.1f, 1f,
+        ) { "${(it * 100).toInt()}%" }
+
         // The same one-chip switch the particle editor uses, for the same reason: it is one
         // yes/no about what this stuff IS, and the wording carries the state.
         val collideChip = label(getString(R.string.liquid_collides_on), 12f, INK)
@@ -5194,6 +5210,9 @@ class MainActivity : AppCompatActivity() {
         box.addView(label(getString(R.string.logic_liquid_colour), 11f, MUTED, top = 8, bottom = 6))
         box.addView(chips)
         box.addView(viscosityRow)
+        box.addView(sizeRow)
+        box.addView(opacityRow)
+        box.addView(label(getString(R.string.logic_liquid_size_hint), 10f, MUTED, top = 6))
         box.addView(label(getString(R.string.logic_liquid_kind), 11f, MUTED, top = 10, bottom = 6))
         box.addView(collideChip)
         box.addView(label(getString(R.string.logic_liquid_collides_hint), 10f, MUTED, top = 6))
@@ -5206,7 +5225,10 @@ class MainActivity : AppCompatActivity() {
                 val name = nameInput.text.toString().trim().ifEmpty { id }
                 logicLiquids.removeAll { it.id == id || (existing != null && it.id == existing.id) }
                 logicLiquids.add(
-                    LiquidSpec(id, name, colour, viscosityOf(), collides = collides)
+                    LiquidSpec(
+                        id, name, colour, viscosityOf(),
+                        collides = collides, size = sizeOf(), opacity = opacityOf(),
+                    )
                 )
                 saveLiquids()
                 refreshLiquids()
@@ -7398,11 +7420,14 @@ class MainActivity : AppCompatActivity() {
         const val REPO_URL = "https://github.com/MYKAND37/all-things-table-pet"
 
         /** The stick figure in an action-list row: solid when it is the one being held. */
-        /** The colours a liquid can be. A palette, not a picker: eight swatches is a
-         *  decision, a colour wheel is a hobby. */
+        /** The colours a liquid can be. A palette, not a picker: nine swatches is a
+         *  decision, a colour wheel is a hobby. White is in it because milk, cloud and
+         *  牛奶 are not a shade of grey, and because a white drop on a light bench is the
+         *  one colour where the opacity switch is doing the work. */
         val LIQUID_PALETTE = listOf(
             0xFFB4212B.toInt(), 0xFFE2557B.toInt(), 0xFFE08A2E.toInt(), 0xFFE8C33C.toInt(),
             0xFF5FA83C.toInt(), 0xFF3D8FD1.toInt(), 0xFF6C4CE0.toInt(), 0xFF23202E.toInt(),
+            0xFFFFFFFF.toInt(),
         )
 
         /** Which way "推一下" pushes. "away" is the only one that needs the event. */

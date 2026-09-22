@@ -187,7 +187,14 @@ class Particles {
      */
     var shapes: Map<String, Bitmap> = emptyMap()
 
-    fun draw(canvas: Canvas, paint: Paint) {
+    /**
+     * 地上的印子。画在**最底下** —— 它是地面的一部分，宠物踩在自己的印子上。
+     *
+     * 这个函数和 [drawLive] 以前是同一个 draw()，而那一份被放在所有东西的**下面**：
+     * 于是空中的火花被宠物和道具挡住。用户报的是「粒子效果应能显示在最高层」——
+     * 印子和火花是两件事，分开画之后它们各自在自己该在的层上。
+     */
+    fun drawStains(canvas: Canvas, paint: Paint) {
         for (s in stains) {
             // A mark on the floor is the same shape as the thing that made it, faded: that is
             // what makes a stain look like it belongs to the drop it came from.
@@ -201,6 +208,18 @@ class Particles {
                 canvas.drawCircle(s.x, s.y, s.r, paint)
             }
         }
+        // 和 [drawLive] 一样把 alpha 还回去。这两半原来是一个函数，而它结尾会复位成 255；
+        // 分开之后不复位的话，后面每一个用同一支笔的画法（拖尾、绳子、角色……）都会继承
+        // 最后一块印子的透明度 —— 一个"只在有印子的时候才出现"的 bug。
+        paint.alpha = 255
+    }
+
+    /**
+     * 空中的那些。画在**最上层**：火花、汗、血都该盖在宠物和道具上面。
+     *
+     * 一滴在自己身上溅开的血如果被自己的身体挡住，读起来就是"没喷"。
+     */
+    fun drawLive(canvas: Canvas, paint: Paint) {
         for (p in particles) {
             val shape = shapes[p.kind]
             paint.alpha = ((p.life / p.maxLife).coerceIn(0f, 1f) * 255f).toInt()

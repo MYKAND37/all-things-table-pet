@@ -418,6 +418,9 @@
     <string name="logic_add_liquid">＋ 加液体</string>
     <string name="logic_liquid_colour">颜色</string>
     <string name="logic_liquid_viscosity">黏度（0 像水，1 像史莱姆）</string>
+    <string name="logic_liquid_size">液滴大小（1 是原来的大小）</string>
+    <string name="logic_liquid_opacity">透明度（100% 是不透明）</string>
+    <string name="logic_liquid_size_hint">大小会真的变大：水滴大了，地面和身体照样托得住它，一滩水也跟着变宽。透明度越低越能看见后面的桌宠——想让白色液滴在浅色背景上看得见，就靠它。</string>
     <string name="logic_liquids_hint">液体是规则能"喷"出来的东西。黏度决定它是摊开还是抱成一团。</string>
     <string name="logic_liquid_kind">性质</string>
     <string name="liquid_collides_on">和角色碰撞</string>

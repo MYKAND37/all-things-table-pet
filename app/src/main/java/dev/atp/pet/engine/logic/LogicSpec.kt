@@ -1,6 +1,7 @@
 package dev.atp.pet.engine.logic
 
 import dev.atp.pet.engine.event.GameEvent
+import dev.atp.pet.engine.fluid.Fluid
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.fluid.Liquids
 import dev.atp.pet.engine.fluid.parseColour
@@ -604,6 +605,13 @@ class LogicSpec(
                         // A file written before this switch existed gets true, which is what
                         // every liquid did then.
                         collides = l.optBoolean("collides", true),
+                        // The same rule for the two looks: absent means the drop this app has
+                        // always drawn -- one radius, solid paint -- so an old file is not
+                        // silently restyled by an upgrade.
+                        size = l.optDouble("size", 1.0).toFloat()
+                            .coerceIn(Fluid.MIN_SIZE, Fluid.MAX_SIZE),
+                        opacity = l.optDouble("opacity", 1.0).toFloat()
+                            .coerceIn(Fluid.MIN_OPACITY, 1f),
                     )
                 }
             }
@@ -737,6 +745,13 @@ class LogicSpec(
                         .put("colour", String.format("#%06X", l.colour and 0xFFFFFF))
                         .put("viscosity", l.viscosity.toDouble())
                         .put("collides", l.collides)
+                        // Rounded to three decimals through a Double, not written as the raw
+                        // Float: a Float 0.7 serialises as 0.699999988079071, and this file is
+                        // meant to be read by a person. Not "%.3f" either -- that formats with
+                        // the phone's locale, and on a phone that writes 0,700 the read-back
+                        // throws.
+                        .put("size", round3(l.size))
+                        .put("opacity", round3(l.opacity))
                 )
             }
             root.put("liquids", liquids)
@@ -967,3 +982,12 @@ class LogicSpec(
 """
     }
 }
+
+/**
+ * A Float as a Double rounded to three decimals, for the file.
+ *
+ * `0.7f.toDouble()` is 0.699999988079071 and a file full of those is a file nobody reads.
+ * Through the rounded Double it comes out 0.7 exactly, and the round trip is lossless for
+ * every value the editors can produce -- they all step in quarters and tenths.
+ */
+private fun round3(v: Float): Double = Math.round(v * 1000f).toDouble() / 1000.0

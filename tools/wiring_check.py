@@ -354,6 +354,60 @@ def main():
     report("上传的参考图会在骨架下面画出来",
            "reference" in view and "drawBitmap" in view)
 
+    print("== 液滴大小 / 透明度 / 白色：写进文件、喷得出来、画得淡 ==")
+    # 三个开关都很容易做成"只有对话框里那个数字会动"：编辑器的 stepper 改了内存里的一份
+    # 临时值，喷出来的每一滴却还是老样子。所以四句分开盯：文案在编辑器里、白色在色板里、
+    # 保存时进了 spec、以及每一次喷（按钮 / 规则 / 发射器）都把这两个数交给了液体。
+    report("液体编辑器有「液滴大小」和「透明度」两行",
+           "logic_liquid_size" in activity and "logic_liquid_opacity" in activity)
+    palette = re.search(r"val LIQUID_PALETTE = listOf\((.*?)\n\s*\)", activity, re.S)
+    body = palette.group(1) if palette else ""
+    report("白色是色板里的一员（九个色板，白在最右边）",
+           "0xFFFFFFFF.toInt()" in body and body.count("0x") == 9,
+           "%d 个色板，白色%s" % (body.count("0x"),
+                                 "在" if "0xFFFFFFFF.toInt()" in body else "不在"))
+    report("保存时写进 spec，不是只改了对话框",
+           "size = sizeOf(), opacity = opacityOf()" in activity and "LiquidSpec(" in activity)
+    spills = bench.count("size = liquid.size, opacity = liquid.opacity")
+    report("每一次喷都带着这两个数（按钮 + 规则 + 发射器）", spills >= 3,
+           "%d 处传了 size/opacity" % spills)
+    report("透明度乘进两次绘制（光晕和本体一起变淡，不是只淡主体）",
+           "(120f * d.alpha)" in bench and "(215f * d.alpha)" in bench)
+    # 而大小必须真的改半径：改半径就改了地面/墙/身体的碰撞，这才是"液滴变大"而不是"贴图
+    # 放大"。同一句断言也盯住 crowdScale —— 半径变了而人群间距没变，大液滴会互相穿模。
+    fluid_kt = next((t for p, t in files.items() if p.endswith("engine/fluid/Fluid.kt")), "")
+    report("液滴半径和人群间距都由 size 决定",
+           "RADIUS * size.coerceIn(MIN_SIZE, MAX_SIZE)" in fluid_kt
+           and "widest / RADIUS" in fluid_kt)
+    report("透明度在 spec 解析时会读回（旧文件没有这两个键也不报错）",
+           'optDouble("size", 1.0)' in next(
+               (t for p, t in files.items() if p.endswith("LogicSpec.kt")), "")
+           and '"opacity", 1.0' in next(
+               (t for p, t in files.items() if p.endswith("LogicSpec.kt")), ""))
+
+    print("== 粒子画在最上层，印子画在最下层 ==")
+    # 「粒子效果应能显示在最高层」：原来的粒子是**一层**，画在角色之前，所以火花、汗、血
+    # 全都被宠物和道具盖住。分成两层之后，"在上面"是一个顺序问题 —— 而顺序是那种改一行
+    # 就悄悄变回去的东西。
+    report("粒子分成两层（印子 / 活粒子）",
+           "particles.drawStains(" in bench and "particles.drawLive(" in bench)
+    stains_at = bench.find("particles.drawStains(")
+    live_at = bench.find("particles.drawLive(")
+    report("活粒子画在宠物、道具、钉子、等待提示之后",
+           live_at > max(bench.find("drawCharacter(canvas, sk)"), bench.find("drawProps(canvas)"),
+                         bench.find("drawNails(canvas)"), bench.find("drawWaiting(canvas)")))
+    report("印子画在一切之前（它算地面的一部分）",
+           0 <= stains_at < bench.find("drawFluid(canvas)"))
+    report("气泡和平衡读数仍在粒子上面（一个是台词，一个是调试读数）",
+           bench.find("drawBubble(canvas, sk)") > live_at)
+    # 两半各自都要把 alpha 还回去。它原来是一个函数，结尾复位一次；拆成两半之后只留一处，
+    # 后面每个用同一支笔的画法（拖尾、绳子、角色）就会继承最后一块印子的透明度 ——
+    # 一个**只在有印子的时候**才出现的 bug。
+    particles_kt = next((t for p, t in files.items() if p.endswith("render/Particles.kt")), "")
+    report("两层各自把 paint 的 alpha 复位（不然下一层继承印子的透明度）",
+           particles_kt.count("paint.alpha = 255") >= 2,
+           "%d 处复位" % particles_kt.count("paint.alpha = 255"))
+
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
     decl = re.compile(

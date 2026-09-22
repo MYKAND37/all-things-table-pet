@@ -940,6 +940,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         fluid?.spill(
             liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity,
             liquid = id, collides = liquid.collides,
+            size = liquid.size, opacity = liquid.opacity,
         )
         invalidate()
     }
@@ -1344,6 +1345,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         liquid.colour, pointOf(event),
                         a.value.toInt(), liquid.viscosity, liquid = liquid.id,
                         collides = liquid.collides,
+                        size = liquid.size, opacity = liquid.opacity,
                     )
                 }
                 // 流液体 / 持续喷粒子: registered rather than done. A second stream of the same
@@ -2140,11 +2142,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         fluid?.pour(
                             liquid.colour, at, n, liquid.viscosity,
                             liquid = liquid.id, collides = liquid.collides,
+                            size = liquid.size, opacity = liquid.opacity,
                         )
                     } else {
                         fluid?.spill(
                             liquid.colour, at, n, liquid.viscosity,
                             liquid = liquid.id, collides = liquid.collides,
+                            size = liquid.size, opacity = liquid.opacity,
                         )
                     }
                 } else {
@@ -2757,7 +2761,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         canvas.translate(-panX * viewScale, -panY * viewScale)
         canvas.scale(viewScale, viewScale)
 
-        if (settings.particles) particles.draw(canvas, worldPaint)
+        if (settings.particles) particles.drawStains(canvas, worldPaint)
 
         if (settings.liquid) drawFluid(canvas)
         drawTrails(canvas)
@@ -2768,6 +2772,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         drawProps(canvas)
         drawNails(canvas)
         drawWaiting(canvas)
+        // 粒子在最上层：火花、汗、血都盖在宠物和道具上面。印子在最底下（见 onDraw 开头），
+        // 因为那是地面的一部分。气泡和平衡指示还在它上面 —— 一个是台词，一个是调试读数。
+        if (settings.particles) particles.drawLive(canvas, worldPaint)
         if (settings.showBalance) drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
@@ -2897,9 +2904,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         worldPaint.style = Paint.Style.FILL
         for (d in f.drops) {
             worldPaint.color = d.colour
-            worldPaint.alpha = 120
+            // The drop's own see-throughness, multiplied into BOTH passes rather than only
+            // the body: the halo is half the blob, and a clear middle inside a solid rim is
+            // a soap bubble, not a liquid.
+            worldPaint.alpha = (120f * d.alpha).toInt()
             canvas.drawCircle(d.x, d.y, d.radius * 1.9f, worldPaint)
-            worldPaint.alpha = 215
+            worldPaint.alpha = (215f * d.alpha).toInt()
             canvas.drawCircle(d.x, d.y, d.radius, worldPaint)
         }
         worldPaint.alpha = 255

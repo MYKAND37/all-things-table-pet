@@ -541,6 +541,44 @@ def main():
     report("and at least one of them floats",
            any(p["gravity"] is False for p in default.get("particles", [])),
            "a star drifts, dust falls")
+
+    # 写出去的和读回来的必须是同一批键。
+    #
+    # 这一版给液滴加的两个键（size / opacity）正好是最容易只做一半的那种：写进文件了、
+    # 读的时候键名拼错一个字母，或者反过来 —— 两种都不会报错。症状只有"我改了它，喷出来
+    # 还是老样子"，而且它出现在保存一次之后：内存里的 LiquidSpec 是对的，磁盘上的那份被
+    # 写成了读不回来的东西。所以两边各抄一遍键名，然后比。
+    kt = open(LOGIC_KT, encoding="utf-8").read()
+
+    def spec_keys(read_from, read_to, write_from, write_to):
+        def keys(start, end, pattern):
+            i = kt.find(start)
+            j = kt.find(end, i)
+            return set(re.findall(pattern, kt[i:j])) if i >= 0 and 0 <= i < j else None
+        read = keys(read_from, read_to, r'(?:optString|optDouble|optBoolean|optInt)\("(\w+)"')
+        write = keys(write_from, write_to, r'\.put\("(\w+)"')
+        return read, write
+
+    for what, window in (
+        ("液体", ('val liquidArr = o.optJSONArray("liquids")',
+                 "// The same rule as liquids: a file that says nothing",
+                 "val liquids = JSONArray()", 'root.put("liquids"')),
+        ("粒子", ('val particleArr = o.optJSONArray("particles")',
+                 "// One place that knows how an action is written down",
+                 "val particles = JSONArray()", 'root.put("particles"')),
+    ):
+        read, write = spec_keys(*window)
+        report("每个%s字段都写得出去、也读得回来" % what,
+               read is not None and write is not None and read == write,
+               "写 %s / 读 %s" % (sorted(write or []), sorted(read or [])))
+    # And the two new ones have to be in there by name, not just "the sets happen to agree":
+    # a pair of typos that agree with each other would pass the check above.
+    read, write = spec_keys('val liquidArr = o.optJSONArray("liquids")',
+                            "// The same rule as liquids: a file that says nothing",
+                            "val liquids = JSONArray()", 'root.put("liquids"')
+    report("液滴大小和透明度这两个键真的在文件里",
+           {"size", "opacity"} <= (read or set()) and {"size", "opacity"} <= (write or set()),
+           "写 %s" % sorted(write or []))
     # The kinds a condition can be are a closed set in the Kotlin (see ConditionSpec), and a
     # file with a fourth kind in it would simply never fire. The shipped defaults are the
     # example everybody reads, so they are where a typo in one gets caught.

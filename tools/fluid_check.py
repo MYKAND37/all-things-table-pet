@@ -8,7 +8,10 @@ and the liquid is a pile of balls, too strong and it detonates.
 
     python3 tools/fluid_check.py
 """
-import math, random, sys
+import math, os, random, re, sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(HERE)
 
 FAILURES = []
 
@@ -33,6 +36,13 @@ MAX_CORRECTION = 0.5   # one pass may not move a drop further than this, in spac
 #: that it does not read as a spray. Mirrors Fluid.COLUMN_SPREAD.
 COLUMN_SPREAD = 0.05
 
+#: How far the 液滴大小 switch goes, and the floor under 透明度. Mirrors Fluid.MIN_SIZE /
+#: MAX_SIZE / MIN_OPACITY, and main() reads those three out of the Kotlin rather than trusting
+#: these numbers -- a clamp is exactly the kind of thing that silently drifts.
+MIN_SIZE = 0.2
+MAX_SIZE = 4.0
+MIN_OPACITY = 0.05
+
 # The range at which a drop stops being pushed away and starts being pulled back. Without
 # it the drops only ever push, nothing ever pulls, and a puddle spreads until it hits a
 # wall: it is not surface tension, but it is the same job, and a liquid without it looks
@@ -43,11 +53,16 @@ FLOOR_FRICTION = 6.0
 AIR_DRAG = 0.4
 
 
+def clamp(v, lo, hi):
+    """The switch's range, applied where the drop is born -- Fluid.add in Fluid.kt."""
+    return min(hi, max(lo, v))
+
+
 class Drop:
     __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy",
-                 "liquid", "landed", "collides")
+                 "liquid", "landed", "collides", "alpha")
 
-    def __init__(self, x, y, vx, vy, colour, r, liquid="", collides=True):
+    def __init__(self, x, y, vx, vy, colour, r, liquid="", collides=True, alpha=1.0):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.px, self.py = x, y
         self.dx, self.dy = 0.0, 0.0
@@ -61,6 +76,10 @@ class Drop:
         # Whether the character's body is solid to this drop. Copied from the kind at spill
         # time; the floor and the walls ignore it. Mirrors Drop.collides in Fluid.kt.
         self.collides = collides
+        # How solid this one drop is drawn, 0..1. Mirrors Drop.alpha in Fluid.kt: copied from
+        # the kind when it is spilled, so editing a liquid does not restyle the puddle that is
+        # already on the bench.
+        self.alpha = alpha
 
 
 class Fluid:
@@ -86,34 +105,40 @@ class Fluid:
         self.drops = [d for d in self.drops if d.liquid != liquid]
 
     def pour(self, x, y, count, colour, speed=320.0, liquid="", collides=True,
-             spread=None):
+             size=1.0, opacity=1.0, spread=None):
         """A COLUMN: every drop the same direction (down) with a few degrees of jitter, and
         spawned along the emitter rather than in a 12 px ball, so they travel together and
         land as one line. Mirrors Fluid.pour in Fluid.kt; main() measures the landing width
         of this against a spill, which is the whole difference between 柱状 and 乱撒."""
         if spread is None:
             spread = COLUMN_SPREAD
+        size = clamp(size, MIN_SIZE, MAX_SIZE)
+        opacity = clamp(opacity, MIN_OPACITY, 1.0)
         for _ in range(count):
             a = math.pi / 2 + self.rng.uniform(-spread, spread)
             v = speed * self.rng.uniform(0.9, 1.1)
             self.drops.append(
                 Drop(x + self.rng.uniform(-1, 1), y + self.rng.uniform(-1, 1),
-                     math.cos(a) * v, math.sin(a) * v, colour, RADIUS, liquid, collides)
+                     math.cos(a) * v, math.sin(a) * v, colour, RADIUS * size, liquid, collides,
+                     opacity)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
 
-    def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid="", collides=True):
+    def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid="", collides=True,
+              size=1.0, opacity=1.0):
         # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
         # bleeding has to keep bleeding, and a spill that silently does nothing because the
         # pool is full is worse than one that pushes the old liquid out.
+        size = clamp(size, MIN_SIZE, MAX_SIZE)
+        opacity = clamp(opacity, MIN_OPACITY, 1.0)
         for _ in range(count):
             a = self.rng.uniform(0, math.tau)
             v = speed * self.rng.uniform(0.2, 1.0) * spread
             self.drops.append(
                 Drop(x + self.rng.uniform(-6, 6), y + self.rng.uniform(-6, 6),
-                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS, liquid,
-                     collides)
+                     math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS * size, liquid,
+                     collides, opacity)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
@@ -136,8 +161,9 @@ class Fluid:
             d.y += d.vy * dt
 
         # Crowding first: it is what makes a heap into a puddle.
+        scale = self._crowd_scale()
         for _ in range(PASSES):
-            self._separate()
+            self._separate(scale)
 
         for d in self.drops:
             if self._borders(d) and d.liquid:
@@ -165,9 +191,31 @@ class Fluid:
                 d.vy = (d.y - d.py) / dt
         return landed
 
-    def _separate(self):
+    def _crowd_scale(self):
+        """How much further apart this bench's drops want to sit, as a multiple of SPACING.
+
+        One number for the whole puddle, taken from the BIGGEST drop on it, and 1 whenever
+        everything on the bench is an ordinary drop -- which is what keeps this invisible to
+        every liquid that never touches the size switch. Both directions count: bigger drops
+        want more room or they draw on top of each other, smaller ones want LESS or a mist of
+        tiny drops spreads into a film of separate beads.
+
+        Mirrors Fluid.crowdScale in Fluid.kt, including the approximation: two liquids of
+        different sizes on one bench share the bigger spacing, and the small drops pay for it
+        by sitting a little airier.
+        """
+        widest = 0.0
+        for d in self.drops:
+            if d.r > widest:
+                widest = d.r
+        return widest / RADIUS if widest > 0 else 1.0
+
+    def _separate(self, scale=1.0):
         """
         One relaxation pass, as a Jacobi step with a speed limit.
+
+        ``scale`` widens the spacing, the reach and the speed limit together, so a pass over
+        big drops is the same pass as over small ones, only further apart.
 
         Every pair contributes to a total displacement per drop which is applied at the
         end, rather than each pair moving the drop as it is found. Both halves matter:
@@ -182,11 +230,11 @@ class Fluid:
         and a grenade.
         """
         grid = {}
-        cell = SPACING
+        spacing = SPACING * scale
         for d in self.drops:
             d.dx = 0.0
             d.dy = 0.0
-            grid.setdefault((int(d.x // cell), int(d.y // cell)), []).append(d)
+            grid.setdefault((int(d.x // spacing), int(d.y // spacing)), []).append(d)
 
         for (gx, gy), bucket in grid.items():
             for ox in (-1, 0, 1):
@@ -200,26 +248,26 @@ class Fluid:
                                 continue
                             dx, dy = o.x - d.x, o.y - d.y
                             dist = math.hypot(dx, dy)
-                            if dist < 1e-5 or dist >= SPACING * COHESION_RANGE:
+                            if dist < 1e-5 or dist >= spacing * COHESION_RANGE:
                                 continue
                             ux, uy = dx / dist, dy / dist
-                            if dist < SPACING:
-                                move = (SPACING - dist) * 0.5 * STIFFNESS
+                            if dist < spacing:
+                                move = (spacing - dist) * 0.5 * STIFFNESS
                                 d.dx -= ux * move
                                 d.dy -= uy * move
                                 o.dx += ux * move
                                 o.dy += uy * move
                             else:
                                 # Apart, so pull them together -- but with a force that goes
-                                # to zero exactly at SPACING, so the resting distance is the
-                                # spacing and not a point.
-                                move = (dist - SPACING) * 0.5 * COHESION
+                                # to zero exactly at the spacing, so the resting distance is
+                                # the spacing and not a point.
+                                move = (dist - spacing) * 0.5 * COHESION
                                 d.dx += ux * move
                                 d.dy += uy * move
                                 o.dx -= ux * move
                                 o.dy -= uy * move
 
-        limit = SPACING * MAX_CORRECTION
+        limit = spacing * MAX_CORRECTION
         for d in self.drops:
             m = math.hypot(d.dx, d.dy)
             if m > limit:
@@ -491,6 +539,130 @@ def main():
     blues = sum(1 for d in f.drops if d.colour == 0x0000FF)
     report("and it is the older liquid that was dropped", greens < blues,
            "green %d blue %d" % (greens, blues))
+
+    # ── 液滴大小 / 透明度 ─────────────────────────────────────────────────────────
+    #
+    # 液滴大小 is not a drawing scale, and the test that says so is not "the radius grew" --
+    # it is that a drop twice as wide is twice as wide TO THE WORLD: the floor holds it off
+    # by its own radius, and the crowd it sits in keeps twice the distance, which is the
+    # number that decides whether a pool of them reads as one body of liquid or as a heap of
+    # separate balls.
+    #
+    # What is measured here is the SETTLED SPACING, not the width of the puddle. Width was
+    # the obvious thing to measure and it is useless: a spilled crowd spreads into a film
+    # until it hits a wall, so every size measured 3000 px across and the only number that
+    # changed was how hard it was pressing on the walls. The spacing is the mechanism, and it
+    # is the thing that would silently stop scaling if the radius were ever threaded through
+    # the drawing without being threaded through the crowding.
+    print("a drop can be told how big it is")
+
+    def settled_spacing(size, count=40, frames=1200):
+        """Median nearest-neighbour distance in a crowd that has come to rest.
+
+        Born at rest in a tight cluster rather than spilled from a height: a splash measures
+        how the drops flew, and this is about where they end up. A 20000 px arena so nothing
+        is decided by a wall, and a fixed seed so the number is the same every run.
+        """
+        f = Fluid(2000.0, 20000.0)
+        rng = random.Random(7)
+        for _ in range(count):
+            f.drops.append(Drop(10000.0 + rng.uniform(-8, 8), 1900.0 + rng.uniform(-8, 8),
+                                0.0, 0.0, 0xFF0000, RADIUS * size, "blood", True, 1.0))
+        for _ in range(frames):
+            f.step(1 / 60, 2400.0)
+        gaps = []
+        for d in f.drops:
+            gaps.append(min(math.hypot(o.x - d.x, o.y - d.y)
+                            for o in f.drops if o is not d))
+        gaps.sort()
+        moving = len([d for d in f.drops if math.hypot(d.vx, d.vy) > 40.0])
+        return gaps[len(gaps) // 2], moving, f
+
+    for size, want in ((0.5, 0.5), (1.0, 1.0), (2.0, 2.0)):
+        gap, moving, _ = settled_spacing(size)
+        report("a %sx drop keeps %sx the distance" % (size, want),
+               abs(gap - SPACING * want) < SPACING * want * 0.15,
+               "median gap %.1f px, expected %.1f" % (gap, SPACING * want))
+    # Both ends of the switch, on the same measurement, so neither direction can drift alone.
+    quarter, quarter_moving, _ = settled_spacing(0.25)
+    big, big_moving, big_f = settled_spacing(4.0)
+    report("a quarter-size drop is a mist, not a scatter of beads",
+           abs(quarter - SPACING * 0.25) < SPACING * 0.25 * 0.15,
+           "median gap %.2f px, expected %.2f" % (quarter, SPACING * 0.25))
+    report("a four-times drop is a pool of blobs",
+           abs(big - SPACING * 4.0) < SPACING * 4.0 * 0.15,
+           "median gap %.1f px, expected %.1f" % (big, SPACING * 4.0))
+    report("and neither end detonates",
+           quarter_moving == 0 and big_moving == 0
+           and all(-1 <= d.x <= 20001 and d.y <= 2000.5 for d in big_f.drops),
+           "%d and %d still moving" % (quarter_moving, big_moving))
+
+    # A single drop is the clean version of the same claim: the floor holds it off by its own
+    # radius, which is why a big drop sits its whole width higher out of the puddle.
+    for size in (0.5, 2.0):
+        f = Fluid(2000.0, 3000.0)
+        f.spill(1500, 200, 1, 0xFF0000, size=size)
+        d = f.drops[0]
+        d.vx = d.vy = 0.0
+        for _ in range(120):
+            f.step(1 / 60, 2400.0)
+        report("a %sx drop rests on its own radius" % size,
+               abs(d.y - (2000.0 - RADIUS * size)) < 0.5,
+               "y=%.1f, floor 2000, radius %.1f" % (d.y, RADIUS * size))
+
+    # The approximation, asserted as a decision rather than left to be discovered: one big
+    # liquid widens the spacing for everything on the bench, because there is one grid and
+    # one spacing for the whole puddle.
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 300, 2, 0xFF0000, size=1.0)
+    f.spill(1500, 300, 2, 0x00FF00, size=3.0)
+    report("the biggest drop on the bench sets the spacing", abs(f._crowd_scale() - 3.0) < 1e-6,
+           "scale %.2f with a 1x and a 3x liquid on the bench" % f._crowd_scale())
+    f.clear_of("")  # Python-side name for "everything"
+    f.spill(1500, 300, 2, 0xFF0000, size=1.0)
+    report("and a bench of ordinary drops is untouched", f._crowd_scale() == 1.0,
+           "scale %.2f" % f._crowd_scale())
+
+    print("and how solid it is drawn")
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 200, 3, 0xFF0000, opacity=0.5)
+    report("the see-throughness is copied onto every drop",
+           all(abs(d.alpha - 0.5) < 1e-6 for d in f.drops),
+           str([d.alpha for d in f.drops]))
+    # The two passes the bench draws a drop with, as arithmetic: 120 halo, 215 body, both
+    # multiplied by the drop. A half-transparent drop is drawn at 60 and 107 -- dimmer than
+    # the solid one on both passes, and still visible on both.
+    solid = (int(120 * 1.0), int(215 * 1.0))
+    half = (int(120 * 0.5), int(215 * 0.5))
+    report("both of the bench's passes dim with it",
+           half[0] < solid[0] and half[1] < solid[1] and half[0] > 0,
+           "halo/body %s solid vs %s at 50%%" % (solid, half))
+    report("and a solid drop is drawn exactly as it always was", solid == (120, 215),
+           str(solid))
+    # The floor under the switch, and the ceiling on the size: a typed 0 is a drop somebody
+    # would swear was not there, and a typed 99 is a beach ball.
+    f = Fluid(2000.0, 3000.0)
+    f.spill(1500, 200, 1, 0xFF0000, size=0.0, opacity=0.0)
+    f.spill(1500, 200, 1, 0xFF0000, size=99.0, opacity=99.0)
+    report("a size typed out of range is clamped, not obeyed",
+           abs(f.drops[0].r - RADIUS * MIN_SIZE) < 1e-6
+           and abs(f.drops[1].r - RADIUS * MAX_SIZE) < 1e-6,
+           "radii %.1f and %.1f" % (f.drops[0].r, f.drops[1].r))
+    report("and a drop asked to be invisible is still drawn",
+           f.drops[0].alpha >= MIN_OPACITY and f.drops[1].alpha == 1.0,
+           "alpha %.2f and %.2f" % (f.drops[0].alpha, f.drops[1].alpha))
+
+    # The three numbers the clamps use, read out of the Kotlin rather than trusted. A clamp
+    # that drifts is invisible from both sides: the Python tests keep passing because they
+    # test the Python.
+    kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/fluid/Fluid.kt"),
+              encoding="utf-8").read()
+    for name, mine in (("MIN_SIZE", MIN_SIZE), ("MAX_SIZE", MAX_SIZE),
+                       ("MIN_OPACITY", MIN_OPACITY)):
+        m = re.search(r"const val %s = ([0-9.]+)f" % name, kt)
+        theirs = float(m.group(1)) if m else None
+        report("%s matches Fluid.kt" % name, theirs == mine,
+               "Kotlin %s vs Python %s" % (theirs, mine))
 
     print("")
     if FAILURES:

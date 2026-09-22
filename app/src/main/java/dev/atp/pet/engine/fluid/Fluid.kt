@@ -32,6 +32,26 @@ data class LiquidSpec(
      * only thing the drops were ever pushed out of.
      */
     val collides: Boolean = true,
+    /**
+     * How big one drop of this is, as a multiple of [Fluid.RADIUS].
+     *
+     * A droplet is a thing people have opinions about: blood beads, slime comes in lumps,
+     * rain is a mist of small ones. At 1 it is exactly the drop the simulator has always
+     * drawn, so every liquid written before this switch existed still looks the same.
+     *
+     * It is not a drawing trick. The radius is what the floor, the walls and the body hold a
+     * drop off by, and the crowd sits further apart in proportion, so a liquid set to 2 is a
+     * puddle of big blobs rather than the old puddle with fatter circles painted over it.
+     */
+    val size: Float = 1f,
+    /**
+     * How see-through the drops are: 1 is solid paint, 0.5 you can see the pet through.
+     *
+     * Multiplied into BOTH alphas the bench draws a drop with -- the soft halo and the body --
+     * so it dims the whole blob instead of bleaching a bright rim onto it. Never taken all
+     * the way to zero: a drop nobody can see is a drop somebody will swear is not there.
+     */
+    val opacity: Float = 1f,
 )
 
 /** One blob of liquid. Drawn as a circle; only the crowding between them makes it fluid. */
@@ -53,6 +73,16 @@ class Drop(
     val liquid: String = "",
     /** Whether the body pushes this drop around. Copied from the kind when it is spilled. */
     val collides: Boolean = true,
+    /**
+     * How solid this one drop is drawn, 0..1. Copied from the kind when it is spilled.
+     *
+     * On the drop and not looked up from the kind at draw time for the same reason [colour]
+     * is: a drop outlives the liquid it came from. Editing 血 to be see-through must not
+     * retroactively make the puddle already on the bench transparent -- and it must not fail
+     * to, either, which is why the editor spills nothing and the next 喷一把 is the one that
+     * looks different.
+     */
+    val alpha: Float = 1f,
 ) {
     var prevX = x
     var prevY = y
@@ -129,6 +159,8 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         speed: Float = 260f,
         liquid: String = "",
         collides: Boolean = true,
+        size: Float = 1f,
+        opacity: Float = 1f,
     ) {
         val n = count.coerceIn(0, 200)
         for (i in 0 until n) {
@@ -138,7 +170,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 colour, at.x + (random.nextFloat() - 0.5f) * 12f,
                 at.y + (random.nextFloat() - 0.5f) * 12f,
                 cos(angle) * v, sin(angle) * v - 120f,
-                viscosity, liquid, collides,
+                viscosity, liquid, collides, size, opacity,
             )
         }
         while (drops.size > MAX_DROPS) drops.removeAt(0)
@@ -164,6 +196,8 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         speed: Float = 320f,
         liquid: String = "",
         collides: Boolean = true,
+        size: Float = 1f,
+        opacity: Float = 1f,
         spread: Float = COLUMN_SPREAD,
     ) {
         val n = count.coerceIn(0, 200)
@@ -174,7 +208,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 colour, at.x + (random.nextFloat() - 0.5f) * 2f,
                 at.y + (random.nextFloat() - 0.5f) * 2f,
                 cos(angle) * v, sin(angle) * v,
-                viscosity, liquid, collides,
+                viscosity, liquid, collides, size, opacity,
             )
         }
         while (drops.size > MAX_DROPS) drops.removeAt(0)
@@ -184,12 +218,14 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
     private fun add(
         colour: Int, x: Float, y: Float, vx: Float, vy: Float,
         viscosity: Float, liquid: String, collides: Boolean,
+        size: Float = 1f, opacity: Float = 1f,
     ) {
         drops.add(
             Drop(
                 x = x, y = y, vx = vx, vy = vy,
-                colour = colour, radius = RADIUS, viscosity = viscosity,
-                liquid = liquid, collides = collides,
+                colour = colour, radius = RADIUS * size.coerceIn(MIN_SIZE, MAX_SIZE),
+                viscosity = viscosity, liquid = liquid, collides = collides,
+                alpha = opacity.coerceIn(MIN_OPACITY, 1f),
             )
         )
     }
@@ -228,7 +264,8 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         }
 
         // Crowding first: it is what turns a heap into a puddle.
-        for (pass in 0 until PASSES) separate()
+        val scale = crowdScale()
+        for (pass in 0 until PASSES) separate(scale)
 
         for (drop in drops) {
             if (borders(drop, d) && drop.liquid.isNotEmpty()) landed.add(drop.liquid)
@@ -258,15 +295,45 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
     }
 
     /**
+     * How much further apart this bench's drops want to sit, as a multiple of [SPACING].
+     *
+     * One number for the whole puddle, taken from the BIGGEST drop on it, and 1 whenever
+     * everything on the bench is an ordinary drop -- which is what makes this invisible to
+     * every liquid that does not touch the size switch. It has to be shared: the spacing is
+     * what turns a heap into a puddle, and two drops that both want the same room cannot each
+     * have their own answer to where the middle is.
+     *
+     * Both directions count. Bigger drops want more room or they draw on top of each other;
+     * smaller ones want LESS, or a mist of tiny drops spreads into a film of separate beads
+     * -- the spacing is what makes them merge into one body, and that is as true at half size
+     * as it is at one. The floor of [MIN_SIZE] is the only limit, and [add] applies it.
+     *
+     * Sizing ONE liquid is exact: its drops keep their relative spacing and the puddle is the
+     * same puddle, drawn and collided twice as wide. Sizing two liquids differently on one
+     * bench is the approximation -- both crowds use the bigger spacing -- and the cost is paid
+     * by the SMALL drops, which sit a little airier than they asked to. The alternative is a
+     * grid per size class, which is a lot of machinery for a bench most people never mix.
+     */
+    private fun crowdScale(): Float {
+        var widest = 0f
+        for (drop in drops) if (drop.radius > widest) widest = drop.radius
+        return if (widest <= 0f) 1f else widest / RADIUS
+    }
+
+    /**
      * One relaxation pass: every pair contributes to a total displacement, applied at the
      * end, capped in size.
+     *
+     * [scale] widens the spacing, the reach and the speed limit together, so a pass over big
+     * drops is the same pass as over small ones, only further apart.
      */
-    private fun separate() {
+    private fun separate(scale: Float) {
+        val spacing = SPACING * scale
         grid.clear()
         for (drop in drops) {
             drop.pushX = 0f
             drop.pushY = 0f
-            grid.getOrPut(cellOf(drop.x, drop.y)) { mutableListOf() }.add(drop)
+            grid.getOrPut(cellOf(drop.x, drop.y, spacing)) { mutableListOf() }.add(drop)
         }
 
         for ((key, bucket) in grid) {
@@ -281,10 +348,10 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                             val dx = o.x - drop.x
                             val dy = o.y - drop.y
                             val dist = hypot(dx, dy)
-                            if (dist < 1e-4f || dist >= SPACING * COHESION_RANGE) continue
+                            if (dist < 1e-4f || dist >= spacing * COHESION_RANGE) continue
                             val ux = dx / dist
                             val uy = dy / dist
-                            val reach = SPACING * (1f + 0.9f * o.viscosity)
+                            val reach = spacing * (1f + 0.9f * o.viscosity)
                             if (dist < reach) {
                                 val move = (reach - dist) * 0.5f * STIFFNESS
                                 drop.pushX -= ux * move
@@ -307,7 +374,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
             }
         }
 
-        val limit = SPACING * MAX_CORRECTION
+        val limit = spacing * MAX_CORRECTION
         for (drop in drops) {
             val m = hypot(drop.pushX, drop.pushY)
             if (m > limit) {
@@ -323,8 +390,8 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
     private fun cohesionOf(a: Drop, b: Drop): Float =
         COHESION + COHESION * minOf(a.viscosity, b.viscosity)
 
-    private fun cellOf(x: Float, y: Float): Long =
-        cellKey((x / SPACING).toInt(), (y / SPACING).toInt())
+    private fun cellOf(x: Float, y: Float, spacing: Float): Long =
+        cellKey((x / spacing).toInt(), (y / spacing).toInt())
 
     private fun cellKey(x: Int, y: Int): Long = (x.toLong() shl 32) or (y.toLong() and 0xFFFFFFFFL)
 
@@ -411,6 +478,27 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
          * COLUMN_SPREAD in tools/fluid_check.py, where the landing spread is measured.
          */
         const val COLUMN_SPREAD = 0.05f
+
+        /**
+         * How far the size switch goes: a drop a fifth of the base width, up to four times it.
+         *
+         * The top end is where a single drop is 60 px across -- a blob you can see the pet
+         * behind, which is as big as "液滴" means anything. The bottom end is a mist fine
+         * enough that a hundred drops read as one spray. Past either end the drops stop being
+         * drops: below, the 12 px spawn ball is wider than the drop and a spill is one dot.
+         */
+        const val MIN_SIZE = 0.2f
+        const val MAX_SIZE = 4f
+
+        /**
+         * The floor under the opacity switch.
+         *
+         * 0.05 still draws: a drop at a twentieth is a ghost, but it is a ghost somebody chose,
+         * and 0 is a drop that is on the bench, that a rule can find, that the pet can be
+         * standing in -- and that nobody can see. Refusing to go all the way to invisible is a
+         * smaller surprise than a liquid that is there and cannot be found.
+         */
+        const val MIN_OPACITY = 0.05f
         private const val TWO_PI = 6.2831855f
     }
 }
