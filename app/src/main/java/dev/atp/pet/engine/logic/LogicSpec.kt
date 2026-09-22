@@ -35,6 +35,27 @@ data class ConditionSpec(
     /** For kind = "state": which state, and [op] is "on" or "off". */
     val state: String = "",
     /**
+     * For kind = "pose" and kind = "tied": WHICH PART.
+     *
+     * A field of its own rather than a second meaning for [stat], for the reason this file
+     * keeps repeating: `"stat": "hand_L"` is a file where a number and a bone are the same
+     * word, and the person reading it has to know which line of code decided that.
+     */
+    val bone: String = "",
+    /**
+     * For kind = "pose": the part it is compared AGAINST — 「手 比 肩膀 高」 names two bones.
+     */
+    val other: String = "",
+    /**
+     * For kind = "pose": which way the comparison goes — "up" or "left".
+     *
+     * Two answers rather than four: 「A 在 B 上面」 and 「B 在 A 上面」 are the same question
+     * asked twice, and a menu with 上下左右 in it invites writing the same rule two ways.
+     * [value] is the margin in pixels, so 「高过 30 像素」 is a real rule and 「差不多高」 is
+     * not something you have to hand-tune.
+     */
+    val axis: String = "",
+    /**
      * How this clause joins the one BEFORE it: [Joins.AND] or [Joins.OR].
      *
      * A clause is a module, and the connector is the thing that was missing: with only one
@@ -388,6 +409,17 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     /** 持续喷粒子：同上，喷的是粒子。 */
     STREAM("stream", "持续喷粒子", "burstStream"),
     IMPULSE("impulse", "推一下", "boneValue"),
+
+    /**
+     * 改变部位深度：把这一节拉到最前面（或者压到最后面）。
+     *
+     * 图层深度本来是文件里的一行（`layers` 的 z），规则改不了它 —— 而"这一截现在在前面还是
+     * 在后面"恰恰是很多动作要的效果：抬手时袖子该在胸前面，手放下时该在后面。所以这是一个
+     * **运行时的**顺序：动的是这一次会话里怎么画，不动文件，收回/换骨骼套就回到原样。
+     *
+     * 参数：哪根骨头（[ActionSpec.bone]），以及往前还是往后（[ActionSpec.text]，"front"/"back"）。
+     */
+    DEPTH("depth", "改变部位深度", "boneFront"),
     /**
      * 隐藏部位：把一根骨头的图藏起来。
      *
@@ -628,6 +660,9 @@ class LogicSpec(
                         op = c.optString("op", ">="),
                         value = c.optDouble("value", 0.0).toFloat(),
                         state = c.optString("state", ""),
+                        bone = c.optString("bone", ""),
+                        other = c.optString("other", ""),
+                        axis = c.optString("axis", "up"),
                         join = c.optString("join", Joins.AND),
                     )
                 }
@@ -729,6 +764,9 @@ class LogicSpec(
                                 .put("kind", c.kind).put("stat", c.stat)
                                 .put("op", c.op).put("value", c.value.toDouble())
                                 .put("state", c.state).put("join", c.join)
+                                .apply { if (c.bone.isNotEmpty()) put("bone", c.bone) }
+                                .apply { if (c.other.isNotEmpty()) put("other", c.other) }
+                                .apply { if (c.axis.isNotEmpty()) put("axis", c.axis) }
                         )
                     }
                     return arr

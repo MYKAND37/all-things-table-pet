@@ -45,8 +45,9 @@
     <string name="pet_summon_state">切换状态…</string>
     <string name="pet_summon_rig">换骨骼套…</string>
     <string name="pet_summon_must_run">先把桌宠召唤到桌面上</string>
-    <string name="overlay_grab">⠿ 拖这里挪位置</string>
     <string name="overlay_close">收回</string>
+    <string name="overlay_mode_touchable">可摸宠物（点这里切成穿透）</string>
+    <string name="overlay_mode_through">点得穿（点这里切回可摸）</string>
     <string name="overlay_channel">桌面上的桌宠</string>
     <string name="overlay_channel_hint">桌宠浮在别的应用上面的时候，这里一直有一条通知</string>
     <string name="overlay_title">桌宠在桌面上</string>
@@ -57,8 +58,9 @@
     <string name="settings_repo_hint">点一下地址就在浏览器里打开仓库</string>
     <string name="settings_repo_failed">这台设备上没有能打开网页的应用</string>
     <string name="settings_hint">这些是应用自己的开关，不属于任何一只桌宠。改完立刻生效，写进 settings.json。</string>
+    <string name="settings_gravity_zero">零重力</string>
     <string name="settings_gravity">重力</string>
-    <string name="settings_gravity_hint">1.0 是角色自己那个重力。往下调，甩出去的东西会飘；往上调，什么都砸得很实。</string>
+    <string name="settings_gravity_hint">1.0 是角色自己那个重力。往下调，甩出去的东西会飘；往上调，什么都砸得很实；「零重力」是 0 —— 宠物浮着不落。</string>
     <string name="settings_stiffness">测试场默认刚度</string>
     <string name="settings_stiffness_hint">打开测试场时从那根手指开始。0 是松垮的布娃娃，1 是撑着姿势。</string>
     <string name="settings_view">画面</string>
@@ -424,6 +426,24 @@
     <string name="logic_cond_kind">测什么</string>
     <string name="logic_cond_stat">数值</string>
     <string name="logic_cond_state">状态</string>
+    <string name="logic_cond_pose">部位</string>
+    <string name="logic_cond_tied">绳子</string>
+    <string name="logic_cond_pose_hint">比的是屏幕上的位置（y 越小越靠上）。「手比肩膀高」这种问题只有世界答得出来，所以是测试场在答。</string>
+    <string name="logic_pose_bone">哪一节</string>
+    <string name="logic_pose_than">比哪一节</string>
+    <string name="logic_pose_axis">比什么</string>
+    <string name="logic_pose_axis_up">更高</string>
+    <string name="logic_pose_axis_left">更靠左</string>
+    <string name="logic_pose_margin">至少差多少</string>
+    <string name="logic_tied_bone">哪一节被连着</string>
+    <string name="logic_tied_is">连没连着</string>
+    <string name="logic_tied_on">连着</string>
+    <string name="logic_tied_off">没连着</string>
+    <string name="logic_tied_hint">留「任何部位」= 身上随便哪一处被绳子连着都算。钉子不算 —— 钉子钉住的是位置，绳子拴住的是两点之间。</string>
+    <string name="logic_depth_bone">哪一节</string>
+    <string name="logic_depth_way">往哪边</string>
+    <string name="logic_depth_front">拉到最前面</string>
+    <string name="logic_depth_back">压到最后面</string>
     <string name="logic_cond_chance">概率</string>
     <string name="logic_cond_chance_hint">每次判到这条规则都掷一次，所以配「每隔一会儿」最像掷骰子；0% 永不、100% 必定。</string>
     <string name="logic_cond_chance_text">有 %1$s%% 的概率</string>

@@ -2,6 +2,7 @@ package dev.atp.pet.engine.logic
 
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
+import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.state.StatSet
 import kotlin.math.abs
 import kotlin.random.Random
@@ -17,6 +18,25 @@ import kotlin.random.Random
  * See tools/logic_check.py, which mirrors this file and carries the cases that matter:
  * cooldowns, once-only rules, part matching, delayed actions, and the order rules run in.
  */
+/**
+ * 只有世界能回答的问题。
+ *
+ * The second kind of detector the owner asked for: 「手是否比肩膀高」「有没有被绳子连着」.
+ * Neither is a number the character carries and neither is a state somebody declared -- they
+ * are facts about where the parts ARE and what they are tied to, and the rule engine has no
+ * business knowing how a skeleton is stored. So the world hands in an object that answers
+ * exactly these questions, and the ENGINE keeps the comparison (which way round, how many
+ * pixels of margin): that way "手比肩膀高 30px" is a rule, and a phone with no world attached
+ * -- the mirror tests, the editor -- can still be asked what it would say.
+ */
+interface Facts {
+    /** Where a part is, in world pixels, or null when there is no such part right now. */
+    fun at(bone: String): Vec2?
+
+    /** Is anything tied to this part by a rope? An empty [bone] asks about the whole body. */
+    fun tied(bone: String): Boolean
+}
+
 class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
 
     val stats = StatSet(spec.stats)
@@ -41,6 +61,14 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
     init {
         for (s in spec.states) states[s.id] = s.initial
     }
+
+    /**
+     * Who answers the questions this engine cannot: see [Facts]. Null means "nobody has
+     * attached a world", and every fact condition then reads as false -- the same answer an
+     * unknown condition kind gets, and for the same reason: a rule from a newer version of the
+     * app must not stop the rest of the file.
+     */
+    var facts: Facts? = null
 
     fun stateOn(id: String): Boolean = states[id] == true
 
@@ -304,6 +332,26 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
             val on = stateOn(c.state)
             val want = c.op != "off"
             return on == want
+        }
+        if (c.kind == "pose") {
+            // 「手是否比肩膀高」: two parts, one axis, a margin. Screen coordinates: y grows
+            // downwards, so "higher up" is a SMALLER y -- which is exactly the kind of sign
+            // that is invisible in a still pose and backwards in every other one.
+            val f = facts ?: return false
+            val a = f.at(c.bone) ?: return false
+            val b = f.at(c.other) ?: return false
+            return when (c.axis) {
+                "left" -> b.x - a.x >= c.value
+                "right" -> a.x - b.x >= c.value
+                else -> b.y - a.y >= c.value
+            }
+        }
+        if (c.kind == "tied") {
+            // 「有没有被绳子连着」. [op] is the state convention: "on" (the default) asks
+            // whether it IS tied, "off" asks whether it is free.
+            val f = facts ?: return false
+            val on = f.tied(c.bone)
+            return on == (c.op != "off")
         }
         if (c.kind != "stat") return false
         val v = stats.get(c.stat)

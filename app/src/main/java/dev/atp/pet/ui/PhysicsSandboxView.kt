@@ -125,6 +125,27 @@ class PhysicsSandboxView @JvmOverloads constructor(
         invalidate()
     }
 
+    /**
+     * 世界的回答：只有世界知道的事（手在哪儿、有没有被绳子连着）。See RuleEngine.Facts.
+     *
+     * Attached to every engine this bench runs -- the character's and each object's -- because
+     * a rule on the candle may perfectly well ask where the hand is: the question is about the
+     * world, not about whose rules are asking.
+     */
+    private val worldFacts = object : RuleEngine.Facts {
+        override fun at(bone: String): Vec2? {
+            if (bone.isEmpty()) return ragdoll?.rootPos
+            return skeleton?.find(bone)?.worldPosition
+        }
+
+        override fun tied(bone: String): Boolean = lines.any { line ->
+            // 部位按前缀匹配，和规则里别的"部位"一样：写 hand 管左右两只手。
+            fun hit(name: String?): Boolean = name != null && name.isNotEmpty() &&
+                (bone.isEmpty() || name == bone || name.startsWith(bone))
+            hit(line.a.bone) || hit(line.b.bone)
+        }
+    }
+
     /** Which subject every action currently being performed belongs to. See perform. */
     private var acting: String = Subjects.PET
 
@@ -684,7 +705,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // Seeded from the clock, so that two summons of the same character do not roll the
         // same dice in the same order. Only the rules that use 概率 and 数值随机 can tell;
         // everything else is exactly as reproducible as it was.
-        engine = RuleEngine(logic, seed = System.nanoTime())
+        engine = RuleEngine(logic, seed = System.nanoTime()).also { it.facts = worldFacts }
         this.objectLogic = objectLogic
         objectEngines.clear()
         propLanded.clear()
@@ -1154,6 +1175,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         fluid?.clear()
         broken.clear()
         renderer?.hidden = broken
+        // 规则拉过的层次是这次会话的，不是这个角色的：重开一局就回到文件里的顺序。
+        renderer?.clearDepth()
         engine?.reset()
         clock = 0f
         wasGrounded = true
@@ -1275,6 +1298,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         // a skeleton that has been swapped out from under it.
                         pendingRig = name
                     }
+                }
+                // 改变部位深度：只动"这一次会话里怎么画"。主体是部件时不必写骨头 —— 那条
+                // 规则本来就长在这一节上。
+                "depth" -> {
+                    val bone = a.bone.ifEmpty {
+                        if (Subjects.isPart(acting)) Subjects.partId(acting) else ""
+                    }
+                    renderer?.setDepth(bone, a.text != "back")
                 }
                 "clearPose" -> applyPose(null)
                 "spawn" -> propSpecs.firstOrNull { it.id == a.prop }?.let {
@@ -2162,7 +2193,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             if (spec.rules.isEmpty() && spec.states.isEmpty()) continue
             // One generator per subject, and a different one each time the subject appears:
             // see the note on the character's own engine.
-            val engine = RuleEngine(spec, seed = System.nanoTime())
+            val engine = RuleEngine(spec, seed = System.nanoTime()).also { it.facts = worldFacts }
             objectEngines[subject] = engine
             fireTo(subject, GameEvent(EventType.SPAWN))
         }
@@ -3967,9 +3998,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     // Nothing under the finger. With a 绳段 waiting, the drag is drawing that
                     // rope rather than moving the window -- the tool is the reason the finger
                     // came down, and the camera can still be moved with two fingers.
-                    panning = true
-                    lastPanX = event.x
-                    lastPanY = event.y
+                    //
+                    // 桌面模式（悬浮桌宠）里不平移：那一层世界就是整块屏幕，没有"窗外"
+                    // 可看，而在全屏的透明层上拖空白处如果会挪镜头，宠物就会莫名其妙地
+                    // 飘走 —— 手指在那边只是想把底下的 App 点开。
+                    if (!desktop) {
+                        panning = true
+                        lastPanX = event.x
+                        lastPanY = event.y
+                    }
                 }
                 lastFrameNs = System.nanoTime()
                 postInvalidateOnAnimation()

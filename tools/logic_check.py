@@ -158,6 +158,28 @@ def hears(subject, event):
     return False
 
 
+class Facts:
+    """Mirror of RuleEngine.Facts: 只有世界知道的事。
+
+    手在哪儿、有没有被绳子连着 —— 这两样既不是角色身上的数字，也不是谁声明的状态，
+    所以引擎问、世界答。没有世界（facts is None）时，这两种条件一律读作**不成立**：
+    和"未知种类的条件"同一条规矩，新版本写的规则不能让老版本整个文件停摆。
+    """
+
+    def __init__(self, positions=None, tied=()):
+        self.positions = dict(positions or {})
+        self.tied_bones = set(tied)
+
+    def at(self, bone):
+        return self.positions.get(bone)
+
+    def tied(self, bone):
+        # 部位按前缀匹配，和规则里别的"部位"一样：写 hand 管左右两只手。
+        if not bone:
+            return bool(self.tied_bones)
+        return any(b == bone or b.startswith(bone) for b in self.tied_bones)
+
+
 class Engine:
     def __init__(self, spec, seed=20260915):
         self.spec = spec
@@ -172,6 +194,8 @@ class Engine:
         self.tick_accum = 0.0
         self.last_fired = {}
         self.fired_once = set()
+        #: 世界的回答，见 Facts。默认没有世界，两种"问世界"的条件读作不成立。
+        self.facts = None
         self.pending = []
         #: 跳到了不存在的规则号。引擎会记一条日志，这里记下来给测试断言 —— 带编号的跳转
         #: 是唯一一种错了也不出声的动作。
@@ -238,6 +262,28 @@ class Engine:
             # A state the character does not declare reads as off, not as an error:
             # deleting a state should not make every rule that mentioned it explode.
             return self.state_on(c.get("state", "")) == (c.get("op", "on") != "off")
+        if c.get("kind") == "pose":
+            # 「手是否比肩膀高」：两节、一个方向、一点余量。屏幕坐标 y 向下，"更高"是
+            # y **更小** —— 这种符号在静止姿势里看不出来，换一个姿势就全反。
+            f = self.facts
+            if f is None:
+                return False
+            a = f.at(c.get("bone", ""))
+            b = f.at(c.get("other", ""))
+            if a is None or b is None:
+                return False
+            margin = c.get("value", 0.0)
+            axis = c.get("axis", "up")
+            if axis == "left":
+                return b[0] - a[0] >= margin
+            if axis == "right":
+                return a[0] - b[0] >= margin
+            return b[1] - a[1] >= margin
+        if c.get("kind") == "tied":
+            f = self.facts
+            if f is None:
+                return False
+            return f.tied(c.get("bone", "")) == (c.get("op", "on") != "off")
         if c.get("kind") != "stat":
             return False
         v = self.value.get(c.get("stat"), 0.0)
@@ -499,7 +545,7 @@ def main():
     # file with a fourth kind in it would simply never fire. The shipped defaults are the
     # example everybody reads, so they are where a typo in one gets caught.
     cond_kinds = {c.get("kind") for r in default["rules"] for c in r.get("if", [])}
-    known = {"stat", "state", "chance"}
+    known = {"stat", "state", "chance", "pose", "tied"}
     report("every condition kind is one the engine knows", cond_kinds <= known,
            "unknown: " + str(cond_kinds - known))
     action_kinds = {a["kind"] for r in default["rules"] for a in r.get("then", [])}
@@ -1084,6 +1130,65 @@ def main():
     report("propNear / propAway 是 Kotlin 里声明的事件",
            {"propNear", "propAway"} <= events,
            "没声明: " + str({"propNear", "propAway"} - events))
+
+    print("\n侦测器：部位比位置、绳子连没连着")
+    # 「手是否比肩膀高」和「有没有被绳子连着」：都不是角色身上的数字、也不是谁声明的状态，
+    # 它们在世界里 —— 所以引擎问、世界答（RuleEngine.Facts / 这里的 Facts）。
+    def pose_engine(positions, **cond):
+        facts = Facts(positions=positions)
+        spec = {"stats": [], "states": [], "rules": [
+            {"on": "tick", "if": [dict(kind="pose", **cond)],
+             "then": [{"kind": "say", "text": "举手"}]},
+        ]}
+        e = Engine(spec)
+        e.facts = facts
+        return e, facts
+
+    e, facts = pose_engine({"hand_L": (500.0, 300.0), "shoulder_L": (500.0, 600.0)},
+                           bone="hand_L", other="shoulder_L", axis="up", value=0)
+    report("手比肩膀高 → 成立", says(e.handle("tick")) == ["举手"])
+    facts.positions["hand_L"] = (500.0, 700.0)
+    report("手放到下面 → 不成立（y 越小越靠上）", says(e.handle("tick")) == [])
+
+    e, facts = pose_engine({"hand_L": (500.0, 590.0), "shoulder_L": (500.0, 600.0)},
+                           bone="hand_L", other="shoulder_L", axis="up", value=30)
+    report("只高 10px、要求 30px → 不成立", says(e.handle("tick")) == [])
+    facts.positions["hand_L"] = (500.0, 560.0)
+    report("高到 40px → 成立", says(e.handle("tick")) == ["举手"])
+
+    e, _ = pose_engine({"hand_L": (300.0, 600.0), "hand_R": (500.0, 600.0)},
+                       bone="hand_L", other="hand_R", axis="left", value=0)
+    report("「更靠左」比的是 x", says(e.handle("tick")) == ["举手"])
+
+    e, facts = pose_engine({"shoulder_L": (500.0, 600.0)},
+                           bone="hand_L", other="shoulder_L", axis="up", value=0)
+    report("有一节不在场上 → 不成立（不是崩）", says(e.handle("tick")) == [])
+
+    no_world = Engine({"stats": [], "states": [], "rules": [
+        {"on": "tick", "if": [{"kind": "pose", "bone": "a", "other": "b", "axis": "up"}],
+         "then": [{"kind": "say", "text": "?"}]},
+    ]})
+    report("没有世界可问 → 不成立（和未知种类的条件同一条规矩）",
+           says(no_world.handle("tick")) == [])
+
+    def tied_engine(tied, bone, op="on"):
+        spec = {"stats": [], "states": [], "rules": [
+            {"on": "tick", "if": [{"kind": "tied", "bone": bone, "op": op}],
+             "then": [{"kind": "say", "text": "拴着"}]},
+        ]}
+        e = Engine(spec)
+        e.facts = Facts(tied=tied)
+        return e
+
+    report("hand_L 上拴着绳 → 成立", says(tied_engine(["hand_L"], "hand_L").handle("tick")) == ["拴着"])
+    report("写前缀 hand 也认（左右两只手）",
+           says(tied_engine(["hand_R"], "hand").handle("tick")) == ["拴着"])
+    report("没拴 → 不成立", says(tied_engine([], "hand").handle("tick")) == [])
+    report("「没连着」在没拴时成立",
+           says(tied_engine([], "hand", op="off").handle("tick")) == ["拴着"])
+    report("留空 = 身上任何一处被连着都算",
+           says(tied_engine(["foot_L"], "").handle("tick")) == ["拴着"] and
+           says(tied_engine([], "").handle("tick")) == [])
 
     print("\n长按：和「点一下」共用一条线，是两件事")
     # 手指落在宠物身上，短于阈值 = 被点一下，长于阈值 = 被长按；所以一次按压有且只有一种结果。

@@ -3612,6 +3612,11 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /** 「哪一节：hand_L」这种一行的字，空的时候说"任何部位"。 */
+    private fun poseRowText(labelText: String, bone: String): String =
+        labelText + "：" +
+            if (bone.isEmpty()) getString(R.string.logic_pick_any_part) else partText(bone)
+
     /** Every state that can gate a layer of this rig: the pet's own, and each part's own. */
     private fun previewStateKeys(folder: CharacterFolder): List<Pair<String, String>> {
         val out = mutableListOf<Pair<String, String>>()
@@ -4823,6 +4828,11 @@ class MainActivity : AppCompatActivity() {
             settings = next
             settingsStore.save(next)
             sandboxView.applySettings(next)
+            // 全局设置本来就该是全局的：桌面上那只也得跟着换，不然"设置里选了半软、
+            // 桌面上还是垮的"会让人以为是同一个 bug 没修好。
+            if (PetOverlayService.running) {
+                PetOverlayService.send(this, PetOverlayService.ACTION_SETTINGS, "")
+            }
             buildSettingsPane()
         }
 
@@ -4877,7 +4887,12 @@ class MainActivity : AppCompatActivity() {
         section(R.string.settings_gravity, R.string.settings_gravity_hint)
         val gravityChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val gravityViews = mutableListOf<TextView>()
-        val gravities = listOf(0.5f to "飘", 0.75f to "轻", 1f to "标准", 1.5f to "重", 2f to "很重")
+        // 0 是**零重力**：宠物浮着不落，尾巴和绳子拉不直，甩出去的锤子一直飞。
+        // 它排在最前面，因为"没有重力"是一个类别，不是"比飘更飘一点"。
+        val gravities = listOf(
+            0f to getString(R.string.settings_gravity_zero),
+            0.5f to "飘", 0.75f to "轻", 1f to "标准", 1.5f to "重", 2f to "很重",
+        )
         for ((value, name) in gravities) {
             val chip = label(name, 12f, INK)
             chip.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -6250,6 +6265,8 @@ class MainActivity : AppCompatActivity() {
         var kind = when (existing?.kind) {
             "state" -> "state"
             "chance" -> "chance"
+            "pose" -> "pose"
+            "tied" -> "tied"
             else -> "stat"
         }
         var stat = existing?.stat ?: logicStats.firstOrNull()?.id ?: ""
@@ -6257,19 +6274,36 @@ class MainActivity : AppCompatActivity() {
         var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
         var stateOn = existing?.op != "off"
         var join = Joins.of(existing?.join ?: Joins.AND)
+        // 部位那两种：哪两节、比哪一头、差多少像素，以及"被绳子连着"那一节。
+        var bone = existing?.bone.orEmpty()
+        var other = existing?.other.orEmpty()
+        var axis = existing?.axis?.ifEmpty { "up" } ?: "up"
+        var tiedOn = existing?.op != "off"
 
         // Declared before the chips that switch between them: those listeners close over
         // these two, and a local has to exist before anything can capture it.
         val statBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val stateBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val chanceBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val poseBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val tiedBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
 
         val kindChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val kindViews = mutableListOf<TextView>()
+        val allKinds = listOf("stat", "state", "chance", "pose", "tied")
+        fun showKind() {
+            statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
+            stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
+            chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
+            poseBox.visibility = if (kind == "pose") View.VISIBLE else View.GONE
+            tiedBox.visibility = if (kind == "tied") View.VISIBLE else View.GONE
+        }
         for ((id, text) in listOf(
             "stat" to getString(R.string.logic_cond_stat),
             "state" to getString(R.string.logic_cond_state),
             "chance" to getString(R.string.logic_cond_chance),
+            "pose" to getString(R.string.logic_cond_pose),
+            "tied" to getString(R.string.logic_cond_tied),
         )) {
             val chip = label(text, 12f, INK)
             chip.setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -6279,10 +6313,8 @@ class MainActivity : AppCompatActivity() {
             ).apply { marginEnd = dp(5) }
             chip.setOnClickListener {
                 kind = id
-                paintChips(kindViews, listOf("stat", "state", "chance"), { kind })
-                statBox.visibility = if (kind == "stat") View.VISIBLE else View.GONE
-                stateBox.visibility = if (kind == "state") View.VISIBLE else View.GONE
-                chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
+                paintChips(kindViews, allKinds, { kind })
+                showKind()
             }
             kindViews.add(chip)
             kindChips.addView(chip)
@@ -6388,6 +6420,103 @@ class MainActivity : AppCompatActivity() {
         stateBox.addView(label(getString(R.string.logic_state_is), 11f, MUTED, top = 10, bottom = 6))
         stateBox.addView(onOffChips)
 
+        /**
+         * 部位：两节比位置。
+         *
+         * 「手是否比肩膀高」这种问题，答案不在角色身上、也不在任何一个人声明的状态里，
+         * 它在世界里 —— 所以引擎问、测试场答（见 RuleEngine.Facts）。这里只是把问题写下来。
+         * 两个骨头行是"点一下换一个"的写法：换了只改这行字，不重开弹窗。
+         */
+        val poseBone = label(poseRowText(getString(R.string.logic_pose_bone), bone), 13f, INK)
+        val poseOther = label(poseRowText(getString(R.string.logic_pose_than), other), 13f, INK)
+        for (row in listOf(poseBone, poseOther)) {
+            row.setPadding(dp(12), dp(10), dp(12), dp(10))
+            row.background = getDrawable(R.drawable.menu_item_idle)
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+        }
+        poseBone.setOnClickListener {
+            pickBoneName(getString(R.string.logic_pose_bone), bone.ifEmpty { null }) { id ->
+                bone = id
+                poseBone.text = poseRowText(getString(R.string.logic_pose_bone), bone)
+            }
+        }
+        poseOther.setOnClickListener {
+            pickBoneName(getString(R.string.logic_pose_than), other.ifEmpty { null }) { id ->
+                other = id
+                poseOther.text = poseRowText(getString(R.string.logic_pose_than), other)
+            }
+        }
+        val axisChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val axisViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "up" to getString(R.string.logic_pose_axis_up),
+            "left" to getString(R.string.logic_pose_axis_left),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(12), dp(8), dp(12), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                axis = id
+                paintChips(axisViews, listOf("up", "left"), { axis })
+            }
+            axisViews.add(chip)
+            axisChips.addView(chip)
+        }
+        val (marginRow, marginOf) = stepperRow(
+            getString(R.string.logic_pose_margin),
+            (existing?.takeIf { it.kind == "pose" }?.value) ?: 0f, 5f, 0f, 600f,
+        ) { trim(it) + "px" }
+        poseBox.addView(label(getString(R.string.logic_cond_pose_hint), 11f, MUTED, bottom = 6))
+        poseBox.addView(poseBone)
+        poseBox.addView(poseOther)
+        poseBox.addView(label(getString(R.string.logic_pose_axis), 11f, MUTED, top = 8, bottom = 6))
+        poseBox.addView(axisChips)
+        poseBox.addView(marginRow)
+
+        // 绳子：这一节有没有被绳子连着。留空 = 身上任何一处被连着都算。
+        val tiedBone = label(poseRowText(getString(R.string.logic_tied_bone), bone), 13f, INK)
+        tiedBone.setPadding(dp(12), dp(10), dp(12), dp(10))
+        tiedBone.background = getDrawable(R.drawable.menu_item_idle)
+        tiedBone.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        tiedBone.setOnClickListener {
+            pickBoneName(getString(R.string.logic_tied_bone), bone.ifEmpty { null }) { id ->
+                bone = id
+                tiedBone.text = poseRowText(getString(R.string.logic_tied_bone), bone)
+            }
+        }
+        val tiedChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val tiedViews = mutableListOf<TextView>()
+        for ((id, text) in listOf(
+            "on" to getString(R.string.logic_tied_on),
+            "off" to getString(R.string.logic_tied_off),
+        )) {
+            val chip = label(text, 12f, INK)
+            chip.setPadding(dp(14), dp(8), dp(14), dp(8))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(5) }
+            chip.setOnClickListener {
+                tiedOn = id == "on"
+                paintChips(tiedViews, listOf("on", "off"), { if (tiedOn) "on" else "off" })
+            }
+            tiedViews.add(chip)
+            tiedChips.addView(chip)
+        }
+        tiedBox.addView(label(getString(R.string.logic_tied_hint), 11f, MUTED, bottom = 6))
+        tiedBox.addView(tiedBone)
+        tiedBox.addView(label(getString(R.string.logic_tied_is), 11f, MUTED, top = 8, bottom = 6))
+        tiedBox.addView(tiedChips)
+
         // The connector, first, because it is the one thing about a clause that is about the
         // clause's NEIGHBOURS rather than about the clause. The first clause has nothing
         // before it to join to, so it is not offered one.
@@ -6421,6 +6550,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(statBox)
         box.addView(stateBox)
         box.addView(chanceBox)
+        box.addView(poseBox)
+        box.addView(tiedBox)
 
         val builder = AlertDialog.Builder(this)
             .setTitle(R.string.logic_cond_kind)
@@ -6434,6 +6565,14 @@ class MainActivity : AppCompatActivity() {
                     )
                     "chance" -> ConditionSpec(
                         kind = "chance", stat = "", op = "", value = chanceOf(), join = join,
+                    )
+                    "pose" -> ConditionSpec(
+                        kind = "pose", stat = "", op = "", value = marginOf(),
+                        bone = bone, other = other, axis = axis, join = join,
+                    )
+                    "tied" -> ConditionSpec(
+                        kind = "tied", stat = "", op = if (tiedOn) "on" else "off", value = 0f,
+                        bone = bone, join = join,
                     )
                     else -> ConditionSpec(
                         kind = "stat", stat = stat, op = op, value = valueOf(), join = join,
@@ -6451,7 +6590,10 @@ class MainActivity : AppCompatActivity() {
             }
         }
         builder.show()
-        paintChips(kindViews, listOf("stat", "state", "chance"), { kind })
+        paintChips(kindViews, allKinds, { kind })
+        showKind()
+        paintChips(axisViews, listOf("up", "left"), { axis })
+        paintChips(tiedViews, listOf("on", "off"), { if (tiedOn) "on" else "off" })
         paintChips(statViews, logicStats.map { it.id }, { stat })
         paintChips(opViews, CompareOp.values().map { it.id }, { op })
         paintChips(stateViews, logicStates.map { it.id }, { state })
@@ -6627,6 +6769,28 @@ class MainActivity : AppCompatActivity() {
                 }
                 "bone" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->
                     putAction(index, actionIndex, isElse, ActionSpec(kind.id, bone = bone))
+                }
+                // 改变部位深度：哪一节，以及拉到最前面还是压到最后面。
+                // 主体是部件时可以留空 —— 那条规则本来就长在这一节上（测试场会自己填）。
+                "boneFront" -> pickBoneName(
+                    getString(R.string.logic_depth_bone),
+                    existing?.bone?.ifEmpty { null },
+                ) { bone ->
+                    pickList(
+                        getString(R.string.logic_depth_way),
+                        listOf(
+                            "front" to getString(R.string.logic_depth_front),
+                            "back" to getString(R.string.logic_depth_back),
+                        ),
+                        "",
+                        existing?.text ?: "front",
+                    ) { way ->
+                        putAction(
+                            index, actionIndex, isElse,
+                            ActionSpec(kind.id, text = way, bone = bone),
+                        )
+                        true
+                    }
                 }
                 "boneValue" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 400f) { v ->

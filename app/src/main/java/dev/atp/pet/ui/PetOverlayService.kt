@@ -8,13 +8,15 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.IBinder
+import android.util.TypedValue
 import android.view.Gravity
-import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import dev.atp.pet.MainActivity
@@ -22,34 +24,37 @@ import dev.atp.pet.R
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.data.SettingsStore
-import kotlin.math.max
-import kotlin.math.min
 
 /**
- * 召唤到桌面：宠物浮在别的 App 上面。
+ * 召唤到桌面：宠物浮在别的 App 上面，**整个屏幕都是它的地盘**。
  *
- * This is the same bench the app has, minus the room: one [PhysicsSandboxView] in desktop mode,
- * put in an overlay window. Same physics, same rules, same props, same long press -- a second
- * renderer would be a second pet that behaves slightly differently from the one in the app, and
- * "it walks differently when it is over Chrome" is a bug nobody can find.
+ * 两个窗口，不是一个：
  *
- * Two things are worth saying out loud, because they are not obvious from the outside:
+ *  - **宠物那一层**占满全屏，背景透明。世界就是屏幕，地面就是屏幕底边，所以它能被拖到
+ *    任何地方，也会在整块屏幕上走 —— 「只能在一个小窗里动」是上一版的毛病；
+ *  - **控制条**是一个很小的窗口，永远在上、永远收得到手指：**可摸 / 穿透**、**收回**。
+ *    它必须单独一层，因为全屏那一层可以整体变成"点得穿"（`FLAG_NOT_TOUCHABLE`）——
+ *    那时候它收不到任何触摸，而你还得有个地方把宠物收回去。
  *
- *  - **Its rules run in ITS OWN engine.** The app's bench and the floating pet are two instances
- *    of the same pet: opening the app does not pause the one on the desktop, and the numbers
- *    (H/P and the states) are separate copies from the moment each was loaded. The pet on the
- *    desktop has no save file of its own, so nothing it does is written down -- which is the
- *    honest behaviour for a toy that is meant to be dismissed.
- *  - **It is a foreground service** with a notification, because Android only lets a window
- *    like this live as long as something is visibly running. The notification's 收回 action is
- *    the second way to send it home; the first is the ✕ on the window.
+ * 默认是**可摸**（召唤一只宠物出来，第一件想做的事就是抓它）。要让底下的 App 能用，
+ * 点控制条上的「穿透」：宠物继续画着、继续按自己的规则动，但手指全部穿过去。
+ *
+ * 两句得说在明面上的话：
+ *
+ *  - **它的规则跑在自己的引擎里**。App 里那只和桌面上这只是同一个宠物的两个实例：
+ *    打开 App 不会暂停桌面上那只，数值和状态从各自加载那一刻起就是两份。
+ *  - **它不存档**。桌面上发生的事不写文件，收回就没了 —— 对一个随时会被收走的玩具来说，
+ *    这是诚实的行为；要"跑起来的宠物"，用测试场。
  */
 class PetOverlayService : Service() {
 
     private lateinit var window: WindowManager
-    private var root: View? = null
+    private var petRoot: View? = null
+    private var strip: View? = null
+    private var toggleTag: TextView? = null
+    private var petParams: WindowManager.LayoutParams? = null
     private var pet: PhysicsSandboxView? = null
-    private var params: WindowManager.LayoutParams? = null
+    private var touchable = true
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -63,13 +68,13 @@ class PetOverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            // 收回：✕、通知上的按钮、App 里那个按钮，三条路都到这里。
+            // 收回：控制条上的按钮、通知上的按钮、App 里那个按钮，三条路都到这里。
             ACTION_STOP -> {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            // 长按 App 里那个按钮弹出来的菜单，按下之后就发这三个命令过来：它们作用于
-            // 桌面上那一只，而不是 App 里那一只（那是两个实例，见类注释）。
+            // 长按 App 里那个按钮弹出来的菜单，按下之后把命令发到这里：它们作用于桌面上
+            // 这一只，而不是 App 里那一只（两个实例，见类注释）。
             ACTION_PROP -> pet?.spawnProp(intent.getStringExtra(EXTRA_ID).orEmpty())
             ACTION_STATE -> {
                 val tag = intent.getStringExtra(EXTRA_ID).orEmpty()
@@ -79,26 +84,43 @@ class PetOverlayService : Service() {
                 val name = intent.getStringExtra(EXTRA_ID).orEmpty()
                 val folder = petFolder(this)?.withRig(name)
                 if (folder != null && pet?.swapRig(folder) != true) {
-                    // 那一套读不出来：什么也不换，并说出来 —— 桌面上那只突然消失比"没换"更糟。
                     Toast.makeText(
                         this, getString(R.string.character_unreadable, folder.id),
                         Toast.LENGTH_LONG,
                     ).show()
                 }
             }
+            // 全局设置改了：桌面上那只跟着变。App 侧每次改动都会发这一条。
+            ACTION_SETTINGS -> applyPetSettings()
         }
         return START_STICKY
     }
 
     override fun onDestroy() {
-        root?.let { view -> runCatching { window.removeView(view) } }
-        root = null
+        for (v in listOf(petRoot, strip)) {
+            if (v != null) runCatching { window.removeView(v) }
+        }
+        petRoot = null
+        strip = null
         pet = null
         running = false
         super.onDestroy()
     }
 
-    // ── the window ──────────────────────────────────────────────────────────
+    // ── the two windows ─────────────────────────────────────────────────────
+
+    /**
+     * 把全局设置整套装到桌面上那一只身上。
+     *
+     * 两句话，缺一不可：`applySettings` 管重力、特效那些开关；**刚度**要用属性单独设
+     * （它是"这只布娃娃现在多硬"，不是一份设置里的一行）。少了第二句的症状很具体：
+     * 设置里明明选的是半软，召唤出来却是垮的 —— 因为它停在 0（全松垮）。
+     */
+    private fun applyPetSettings() {
+        val settings = SettingsStore(this).load()
+        pet?.applySettings(settings)
+        pet?.stiffness = settings.defaultStiffness
+    }
 
     private fun show() {
         val store = CharacterStore(this)
@@ -107,14 +129,10 @@ class PetOverlayService : Service() {
             stopSelf()
             return
         }
-
         val metrics = resources.displayMetrics
-        val width = min((metrics.widthPixels * 0.62f).toInt(), (360f * metrics.density).toInt())
-        val height = (width * 1.35f).toInt()
 
         val view = PhysicsSandboxView(this).apply {
             setDesktopMode(true)
-            applySettings(SettingsStore(this@PetOverlayService).load())
             load(
                 folder,
                 store.loadLogic(folder.id),
@@ -122,108 +140,106 @@ class PetOverlayService : Service() {
                 store.propsDir,
                 store.loadObjectLogic(folder),
             )
-            // 长按宠物本身仍然是规则的事（见 EventType.LONG_PRESS）；菜单在 App 里那个按钮上，
-            // 因为菜单要读的是"这只桌宠有哪些道具、哪些状态"，而那些列表属于 App 的界面。
         }
         pet = view
+        applyPetSettings()
 
-        // 上面一条细把手：按住它拖窗口，右边的 ✕ 收回。宠物那一块留给宠物 —— 一块浮在
-        // 别的 App 上面的区域，如果整块都能拖动窗口，那"抓住宠物的手"和"抓住窗口的手"
-        // 就是同一只，而它只能是一个意思。
-        val bar = FrameLayout(this)
-        val grab = TextView(this).apply {
-            text = getString(R.string.overlay_grab)
-            textSize = 11f
-            setTextColor(0x99FFFFFF.toInt())
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-        }
-        bar.addView(
-            grab,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                Gravity.START or Gravity.CENTER_VERTICAL,
-            ),
-        )
-        val close = TextView(this).apply {
-            text = getString(R.string.overlay_close)
-            textSize = 12f
-            setTextColor(0xCCFFFFFF.toInt())
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-            setOnClickListener { stopSelf() }
-        }
-        bar.addView(
-            close,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                Gravity.END or Gravity.CENTER_VERTICAL,
-            ),
-        )
-        dragByHandle(grab)
-        dragByHandle(bar)
-
-        val box = FrameLayout(this)
-        box.addView(
-            view,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
-            ).apply { topMargin = dp(HANDLE_DP) },
-        )
-        box.addView(
-            bar,
-            FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                dp(HANDLE_DP),
-                Gravity.TOP,
-            ),
-        )
-
+        // 宠物那一层：满屏。世界就是屏幕 —— 它落在屏幕底边上，也会在整块屏幕里被拖来拖去。
+        val petLayer = FrameLayout(this).apply { addView(view) }
         val p = WindowManager.LayoutParams(
-            width,
-            height,
+            metrics.widthPixels,
+            metrics.heightPixels,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            // NOT_FOCUSABLE 不抢键盘；NOT_TOUCH_MODAL 让这一层之外的触摸照样给下面的 App
+            // （满屏时用不上，但加上它，将来窗口不占满时行为也是对的）。
+            baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (metrics.widthPixels - width) / 2
-            y = metrics.heightPixels - height - dp(96)
+            x = 0
+            y = 0
         }
-        params = p
-        root = box
-        runCatching { window.addView(box, p) }.onFailure { stopSelf() }
+        petParams = p
+        petRoot = petLayer
+        runCatching { window.addView(petLayer, p) }.onFailure { stopSelf() }
+
+        // 控制条：很小的一层，单独的窗口，所以"宠物那层点得穿"的时候它照样收得到手指。
+        val bar = buildStrip()
+        strip = bar
+        val sp = WindowManager.LayoutParams(
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = dp(10)
+            y = dp(10)
+        }
+        runCatching { window.addView(bar, sp) }
+        refreshStrip()
     }
 
-    /** Dragging the handle moves the WINDOW; the pet keeps its own fingers. */
-    private fun dragByHandle(handle: View) {
-        var downX = 0f
-        var downY = 0f
-        var startX = 0
-        var startY = 0
-        handle.setOnTouchListener { _, event ->
-            val p = params ?: return@setOnTouchListener false
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    downX = event.rawX
-                    downY = event.rawY
-                    startX = p.x
-                    startY = p.y
-                    true
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    p.x = startX + (event.rawX - downX).toInt()
-                    p.y = max(0, startY + (event.rawY - downY).toInt())
-                    root?.let { runCatching { window.updateViewLayout(it, p) } }
-                    true
-                }
-                else -> true
+    private val baseFlags: Int
+        get() = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+
+    private fun buildStrip(): LinearLayout {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(dp(8), dp(5), dp(8), dp(5))
+            background = GradientDrawable().apply {
+                cornerRadius = dp(16).toFloat()
+                setColor(0xCC2B2A38.toInt())
             }
         }
+        val toggle = TextView(this).apply {
+            textSize = 12f
+            setTextColor(0xFFFFFFFF.toInt())
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { setTouchable(!touchable) }
+        }
+        val close = TextView(this).apply {
+            text = getString(R.string.overlay_close)
+            textSize = 12f
+            setTextColor(0xFFFFD9D9.toInt())
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            setOnClickListener { stopSelf() }
+        }
+        row.addView(toggle)
+        row.addView(close)
+        toggleTag = toggle
+        return row
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+    private fun refreshStrip() {
+        toggleTag?.text = getString(
+            if (touchable) R.string.overlay_mode_touchable else R.string.overlay_mode_through
+        )
+    }
+
+    /**
+     * 可摸 / 穿透。
+     *
+     * 全屏那一层如果一直收触摸，底下的 App 就等于被一块透明玻璃盖住了 —— 所以这两个状态
+     * 必须能切，而且切换的按钮必须在**另一层**上（不然穿透之后就没有东西能把它切回来）。
+     */
+    private fun setTouchable(on: Boolean) {
+        val p = petParams ?: return
+        p.flags = if (on) {
+            baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
+        } else {
+            baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
+                WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        }
+        petRoot?.let { runCatching { window.updateViewLayout(it, p) } }
+        touchable = on
+        refreshStrip()
+    }
+
+    private fun dp(value: Int): Int = TypedValue.applyDimension(
+        TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), resources.displayMetrics,
+    ).toInt()
 
     // ── the notification ────────────────────────────────────────────────────
 
@@ -263,17 +279,17 @@ class PetOverlayService : Service() {
         const val ACTION_PROP = "dev.atp.pet.overlay.PROP"
         const val ACTION_STATE = "dev.atp.pet.overlay.STATE"
         const val ACTION_RIG = "dev.atp.pet.overlay.RIG"
+        const val ACTION_SETTINGS = "dev.atp.pet.overlay.SETTINGS"
         const val EXTRA_ID = "id"
 
         private const val CHANNEL = "pet_overlay"
         private const val NOTIFICATION_ID = 4711
-        private const val HANDLE_DP = 26
 
         /** Where the pet on the bench is remembered, so the floating one is the same pet. */
         private const val PREFS = "overlay"
         private const val KEY_PET = "pet"
 
-        /** Whether the window is up. Read by the app's button, which is the way in and out. */
+        /** Whether the windows are up. Read by the app's button, which is the way in and out. */
         @Volatile
         var running: Boolean = false
             private set
@@ -311,7 +327,7 @@ class PetOverlayService : Service() {
          *
          * `startService` STARTS a service that is not running, so an unguarded 收回 would
          * summon a pet in order to dismiss it. [running] is a flag in this process, which is
-         * where the service lives, so it is the truth about whether there is a window.
+         * where the service lives, so it is the truth about whether there are windows.
          */
         fun stop(context: Context) {
             if (!running) return
@@ -320,7 +336,7 @@ class PetOverlayService : Service() {
             )
         }
 
-        /** One command to the pet that is on the desktop: a prop to put out, a switch, a body. */
+        /** One command to the pet that is on the desktop: a prop, a switch, a body, settings. */
         fun send(context: Context, action: String, id: String) {
             if (!running) return
             context.startService(

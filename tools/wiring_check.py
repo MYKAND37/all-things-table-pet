@@ -257,6 +257,22 @@ def main():
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
 
+    print("== 新侦测器与深度动作：接上了才算数 ==")
+    # 两种新条件（部位比位置、绳子连没连着）的答案不在角色身上，在世界里：引擎问、
+    # 测试场答。所以三句：引擎有那个接口、测试场把世界交给**每一个**引擎（角色 + 每个
+    # 客体）、以及"被连着"问的确实是绳子。
+    engine_kt = next((t for path, t in files.items() if path.endswith("RuleEngine.kt")), "")
+    renderer_kt = next((t for path, t in files.items() if path.endswith("PartRenderer.kt")), "")
+    report("引擎把两种新条件交给世界（interface Facts）",
+           "interface Facts" in engine_kt and "var facts: Facts?" in engine_kt)
+    report("测试场把世界交给每一个引擎（角色 + 每个客体）",
+           bench.count("it.facts = worldFacts") >= 2 and "worldFacts" in bench)
+    report("「被绳子连着」问的是绳子（不是钉子）",
+           "line.a.bone" in bench and "line.b.bone" in bench)
+    report("改变部位深度是运行时的覆盖（有 setDepth，也有回到文件顺序的 clearDepth）",
+           "fun setDepth(" in renderer_kt and "setDepth(" in bench and "clearDepth()" in bench)
+    report("桌面模式不平移镜头（世界就是屏幕）", "if (!desktop)" in bench)
+
     print("== 召唤到桌面：窗口、权限、通知，一样都不能少 ==")
     # 悬浮桌宠是三样东西拼起来的，任何一样掉了它都"看起来做了但用不了"：一个真悬浮窗、
     # 一条系统设置里的权限、以及一个前台服务（Android 只允许这样的窗口活在"有东西在明显

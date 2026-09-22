@@ -75,8 +75,47 @@ class PartRenderer(
      * times a second for nothing is the kind of waste that shows up as battery drain
      * rather than as a bug.
      */
+    /**
+     * Bones a RULE has pulled forward or pushed back, in the order it did it. Not the file.
+     *
+     * The 改变部位深度 action: 「这一截现在该在前面」是很多动作要的效果，而图层深度是文件里的
+     * 一行 —— 规则改不了它，也不该改（那是用户画的顺序）。所以这是**这一次会话里**的覆盖：
+     * 动了它只影响怎么画，收回测试场、换骨骼套、重新加载都会回到文件里的顺序。
+     */
+    private val raised = LinkedHashSet<String>()
+    private val lowered = LinkedHashSet<String>()
+
+    /** 改变部位深度：把那根骨头拉到最前 / 压到最后。 */
+    fun setDepth(bone: String, toFront: Boolean) {
+        if (bone.isEmpty()) return
+        if (toFront) {
+            lowered.remove(bone)
+            raised.remove(bone)
+            raised.add(bone)
+        } else {
+            raised.remove(bone)
+            lowered.remove(bone)
+            lowered.add(bone)
+        }
+        invalidateOrder()
+    }
+
+    /** Forget every runtime depth: back to the file's order. */
+    fun clearDepth() {
+        if (raised.isEmpty() && lowered.isEmpty()) return
+        raised.clear()
+        lowered.clear()
+        invalidateOrder()
+    }
+
+    private fun invalidateOrder() {
+        order.clear()
+        lastTriggered = emptyList()
+    }
+
     private fun currentOrder(): List<LayerSpec> {
-        if (swaps.isEmpty()) return baseOrder
+        val withRuntime = applyRuntimeDepth()
+        if (swaps.isEmpty()) return withRuntime
 
         var changed = lastTriggered.size != swaps.size
         val triggered = ArrayList<Boolean>(swaps.size)
@@ -88,7 +127,7 @@ class PartRenderer(
         if (!changed && order.size == baseOrder.size) return order
         lastTriggered = triggered
 
-        val list = ArrayList(baseOrder)
+        val list = ArrayList(withRuntime)
         for ((index, rule) in swaps.withIndex()) {
             if (!triggered[index]) continue
             // Rules name BONES; a bone may own several layers, and they travel together.
@@ -121,6 +160,23 @@ class PartRenderer(
         order.clear()
         order.addAll(list)
         return order
+    }
+
+    /**
+     * The file's order with the runtime overrides applied.
+     *
+     * "Front" means drawn LAST (see the layer list: the top of the list covers the rest), so a
+     * raised bone goes to the end and a lowered one to the start. Both keep their own order of
+     * arrival, so raising two parts in a row leaves the second one in front -- which is what
+     * somebody who just raised it expects.
+     */
+    private fun applyRuntimeDepth(): List<LayerSpec> {
+        if (raised.isEmpty() && lowered.isEmpty()) return baseOrder
+        val out = ArrayList<LayerSpec>(baseOrder.size)
+        out.addAll(baseOrder.filter { it.bone in lowered })
+        out.addAll(baseOrder.filter { it.bone !in lowered && it.bone !in raised })
+        out.addAll(baseOrder.filter { it.bone in raised })
+        return out
     }
 
     private fun isTriggered(rule: SwapRuleSpec): Boolean {
