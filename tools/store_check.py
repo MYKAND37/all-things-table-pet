@@ -115,12 +115,24 @@ def save_rig(root, bones, order, renames=None, nodes=None):
     # Layers are carried over WHOLE and only renumbered. One layer per bone was the bug: a bone
     # with a drawing for a state owns two layers, and rebuilding from bone names deleted the
     # state's drawing every time the rig was saved.
+    # **去重**，而且这是一个真 bug 而不是整洁问题：`order` 来自编辑器的 `rigLayers()`，
+    # 那是**每层一个骨头名** —— 一根有状态图的骨头有两层、就出现两次。下面的循环的意思是
+    # "现在把这个骨头的层写出来"，于是每出现一次就把那个骨头的**所有**层再写一遍：
+    # 2 层变 4 层，4 层变 16 层。报上来的是「保存骨骼两次就开始掉帧」，而文件一直在平方增长。
+    order = list(dict.fromkeys(order))
     by_bone = {}
+    seen = set()
     for l in root.get("layers", []):
         now = (renames or {}).get(l["bone"], l["bone"])
         l["bone"] = now
         if l.get("art"):
             l["art"] = rename_art(l["art"], renames or {})
+        # 层一模一样的重复（同一根骨头、同一张图、同一个状态）：旧版本把它们平方过，
+        # 老文件里可能堆着上百层。它们画的是同一个东西，留第一层就是它们全部的意思。
+        key = (now, l.get("art", ""), l.get("state", ""))
+        if key in seen:
+            continue
+        seen.add(key)
         by_bone.setdefault(now, []).append(l)
     layers = []
     z = 10
@@ -457,6 +469,49 @@ def main():
            sorted(arts) == sorted(["upperarm_L", "upperarm_L" + SEPARATOR + "mech"]), str(arts))
     report("and exactly one of them is drawn at a time",
            sorted(states) == sorted(["!mech", "mech"]), str(states))
+
+    print("\n每存一次「保存骨骼」，图层不能自己长")
+    # 上面那个 bug 的回归测试，而且它必须是**一根骨头有两层**的骨架才会红：一层一根骨头时
+    # 顺序里没有重复，平方不起来 —— 我第一版的镜像测试就是这么漏掉它的。
+    def with_variant():
+        rig = load()
+        first = rig["layers"][0]
+        rig["layers"].append({
+            "bone": first["bone"], "z": 9999, "state": "mech",
+            "art": first["bone"] + SEPARATOR + "mech",
+        })
+        return rig
+
+    def save(rig):
+        return save_rig(rig, bones_of(rig),
+                        [l["bone"] for l in sorted(rig["layers"], key=lambda l: l["z"])])
+
+    rig = with_variant()
+    counts = []
+    for _ in range(3):
+        save(rig)
+        counts.append(len(rig["layers"]))
+    report("两层的那根骨头，存三次还是两层", counts == [20, 20, 20], str(counts))
+    again = save_rig(load_and_variant := with_variant(), bones_of(load_and_variant),
+                     [l["bone"] for l in sorted(load_and_variant["layers"], key=lambda l: l["z"])])
+    first_pass = save(with_variant())
+    report("两次保存出来的东西完全一样（幂等）", first_pass == again)
+
+    broken = load()
+    one = broken["layers"][0]
+    broken["layers"] = broken["layers"] + [dict(one) for _ in range(7)]
+    save(broken)
+    report("被旧版本写过 8 次的层，存一次折叠回 1 层",
+           sum(1 for l in broken["layers"] if l["bone"] == one["bone"]) == 1,
+           str(sum(1 for l in broken["layers"] if l["bone"] == one["bone"])))
+    report("折叠之后别的骨头一层都不少", len(broken["layers"]) == len(load()["layers"]),
+           str(len(broken["layers"])))
+
+    kt_body = open(STORE_KT, encoding="utf-8").read()
+    body = kt_body[kt_body.find("fun saveRig"):]
+    body = body[:body.find("\n    fun ", 10)]
+    report("Kotlin 那边也去重了（这根弦一直绷着）", ".distinct()" in body)
+    report("Kotlin 那边也折叠重复层（修老文件）", "layerSeen" in body)
 
     print("\n每样东西一个文件夹：规则现在住哪儿")
     name = logic_file_name()

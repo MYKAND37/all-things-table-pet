@@ -685,8 +685,16 @@ class CharacterStore(private val context: Context) {
             root.put("nodes", nodesArr)
 
             val live = bones.map { it.name }.toSet()
-            val order = backToFront.filter { it in live } +
-                bones.map { it.name }.filter { it !in backToFront }
+            // **Distinct**, and this is a real bug rather than tidiness.
+            //
+            // [backToFront] comes from the editor's `rigLayers()`, which names one bone per
+            // LAYER — a bone that has a drawing for a state owns two layers and therefore
+            // appears twice, and three times for two states. The loop below means "write this
+            // bone's layers NOW", so every occurrence wrote ALL of that bone's layers again:
+            // two became four, four became sixteen. The report was 「保存骨骼两次就开始掉帧」,
+            // and the file had been growing quadratically under every save.
+            val order = (backToFront.filter { it in live } +
+                bones.map { it.name }.filter { it !in backToFront }).distinct()
 
             // Reordering the layers must not REBUILD them.
             //
@@ -699,6 +707,7 @@ class CharacterStore(private val context: Context) {
             // gone dropped.
             val oldLayers = root.optJSONArray("layers")
             val byBone = LinkedHashMap<String, MutableList<JSONObject>>()
+            val layerSeen = HashSet<String>()
             for (i in 0 until (oldLayers?.length() ?: 0)) {
                 val l = oldLayers!!.getJSONObject(i)
                 val name = l.getString("bone")
@@ -719,6 +728,12 @@ class CharacterStore(private val context: Context) {
                         }
                     }
                 }
+                // 层一模一样的重复：同一根骨头、同一张图、同一个状态。旧版本的保存把它们
+                // 平方过（2 → 4 → 16），所以老文件里可能堆着上百层 —— 折叠在这里做，因为
+                // 这是唯一知道"什么叫重复"的地方。它们画的是同一个东西、顺序也一样，
+                // 留第一层就是它们全部的意思。
+                val same = now + "|" + l.optString("art", "") + "|" + l.optString("state", "")
+                if (!layerSeen.add(same)) continue
                 byBone.getOrPut(now) { mutableListOf() }.add(l)
             }
             val layers = JSONArray()

@@ -979,6 +979,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * Particles.shapes, where a miss falls back to the disc every particle used to be.
      */
     private fun loadParticleShapes(folder: CharacterFolder, list: List<ParticleSpec>) {
+        // 旧的先还回去：这个函数在每次重载（也就是每次「保存骨骼」）都会被叫一次，
+        // 而每一张都是解出来的位图。不回收就是每保存一次漏几张，攒着攒着就该掉帧了。
+        for (old in particles.shapes.values) old.recycle()
         val out = HashMap<String, Bitmap>()
         for (kind in list) {
             val file = folder.particleArt(kind.id)

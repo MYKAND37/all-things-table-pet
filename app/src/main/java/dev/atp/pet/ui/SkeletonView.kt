@@ -637,7 +637,10 @@ class SkeletonView @JvmOverloads constructor(
                 minAngle = -180f,
                 maxAngle = 180f,
                 springy = false,
-                stiffness = 0.35f,
+                // 1.0：和"文件里没写"、以及和别的十九根骨头一样。0.35 是那段"这个字段
+                // 从来没人读"的年代的遗留值，加出来的新骨头拿它当默认，等于一生下来就比
+                // 别人软三倍 —— 而且没有任何地方会说明为什么。
+                stiffness = 1f,
                 damping = 0.86f,
                 gravity = 0f,
                 colliderType = "capsule",
