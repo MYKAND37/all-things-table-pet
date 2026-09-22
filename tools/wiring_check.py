@@ -256,6 +256,21 @@ def main():
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
 
+    print("== 哪一只在场上：是用户说了算 ==")
+    # 「选择场上存在哪一只桌宠」这一版加的东西里，最容易被悄悄破坏的一条：复制一只、导入一个包、
+    # 改个名字之后，站在桌上的那只不能变成别人。`reloadCharacters` 里必须有"留住现在这只"的
+    # 那一步 —— 它原来是 `characters.first()`，也就是每次刷新都把宠物换成列表里的第一只。
+    activity = next((t for path, t in files.items() if path.endswith("MainActivity.kt")), "")
+    reload = activity[activity.find("private fun reloadCharacters"):]
+    end = reload.find("\n    }")
+    reload = reload[:end] if end >= 0 else reload
+    report("刷新列表时留住场上那一只（不是跳回第一只）",
+           "val keep" in reload and "keep ?:" in reload)
+    report("挑一只上场只有一个入口（summon）",
+           activity.count("private fun summon(") == 1 and "summon(folder)" in activity)
+    report("顶部先给的是「哪一只」，不是松垮/僵硬", activity.find("for (folder in characters)") <
+           activity.find("STIFFNESS_LABELS[stiffnessStep]"))
+
     print("== 重置骨骼：只回骨架，不是把这一套删了重来 ==")
     # 「重置骨骼」要是把部位图一起删了，那它和"删掉这套骨骼重画"没有区别 —— 而后者用户
     # 已经会了。三句断言盯住这件事：写的是这一套的 spec，而且一个文件都不删。

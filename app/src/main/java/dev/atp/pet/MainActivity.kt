@@ -399,12 +399,26 @@ class MainActivity : AppCompatActivity() {
 
     // ── data ────────────────────────────────────────────────────────────────
 
+    /**
+     * Re-read the list of pets, and keep the one on the bench where it is.
+     *
+     * It used to jump to `characters.first()` on every call, which meant that 复制 a pet, 导入
+     * a package or renaming anything swapped the animal standing on the table for another one.
+     * Which pet is out is the user's decision; making a second one must not answer it for them.
+     * The rig it is wearing is kept too, unless that rig has just gone.
+     */
     private fun reloadCharacters() {
         characters = store.list()
-        summoned = characters.firstOrNull()
+        val keep = summoned?.let { now ->
+            characters.firstOrNull { it.id == now.id }?.let { fresh ->
+                val same = fresh.withRig(now.rig)
+                if (now.rig.isEmpty() || same.specFile.isFile) same else fresh
+            }
+        }
+        summoned = keep ?: characters.firstOrNull()
         buildPetChooser()
         buildPetList()
-        if (summoned != null) reloadSandbox(summoned!!)
+        summoned?.let { reloadSandbox(it) }
     }
 
     /**
@@ -436,6 +450,38 @@ class MainActivity : AppCompatActivity() {
         sandboxView.applySettings(settings)
         buildPetChooser()
         return loaded
+    }
+
+    /**
+     * Put a pet on the bench: the one thing "which pet is out" means.
+     *
+     * Two ways in -- the chips along the top of the bench and the 「放到场上」 button on each
+     * card in 桌宠管理 -- and both come here, so "what happens when I pick one" is one piece of
+     * code instead of two that can drift. Picking the pet that is ALREADY out keeps the body it
+     * is wearing: re-picking is how somebody gets back to a bench they poked at, not a way to
+     * be quietly reset to the default rig.
+     *
+     * A pet whose file cannot be read changes nothing and says so -- an empty bench where a pet
+     * used to be is worse than a pick that did not happen.
+     */
+    private fun summon(folder: CharacterFolder) {
+        val same = summoned?.takeIf { it.id == folder.id }
+        val wanted = same ?: folder
+        val previous = summoned
+        summoned = wanted
+        activePose = null
+        if (reloadSandbox(wanted)) {
+            buildPetChooser()
+            return
+        }
+        if (previous != null && previous.id != wanted.id) {
+            Toast.makeText(
+                this, getString(R.string.character_unreadable, wanted.id), Toast.LENGTH_LONG,
+            ).show()
+            summoned = previous
+            reloadSandbox(previous)
+        }
+        buildPetChooser()
     }
 
     /** Reload the bench, but only if that is the character currently on it. */
@@ -626,6 +672,45 @@ class MainActivity : AppCompatActivity() {
             petChooser.addView(label(getString(R.string.pets_title) + ": none", 12f, MUTED))
             return
         }
+        // WHICH PET, first in the row: everything after it is about the pet that is out, and a
+        // switch that only makes sense once you know what it is attached to should not be the
+        // thing in front of the answer to "what is on the bench". (It used to be last, after a
+        // row of state chips that grows with the pet -- which is how "there is no way to pick
+        // one" gets reported about a control that exists.)
+        for (folder in characters) {
+            val here = folder.id == summoned?.id
+            // The body is part of the answer: a pet with more than one rig is on the bench in
+            // ONE of them, and a chip that says only the pet's name leaves the next question
+            // ("which of its bodies?") to be answered by looking at the screen.
+            val body = if (here && summoned?.rig?.isNotEmpty() == true) " · " + summoned!!.rig else ""
+            val chip = label(folder.id + body, 12f, if (here) INK else MUTED)
+            chip.background = getDrawable(
+                if (here) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            chip.setPadding(dp(12), dp(6), dp(12), dp(6))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(6) }
+            chip.setOnClickListener { summon(folder) }
+            petChooser.addView(chip)
+        }
+        if (characters.isNotEmpty()) {
+            val more = label("＋", 12f, MUTED)
+            more.background = getDrawable(R.drawable.menu_item_idle)
+            more.setPadding(dp(12), dp(6), dp(12), dp(6))
+            more.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(12) }
+            more.setOnClickListener {
+                // Through the rail, not around it: 桌宠管理 is a row in the sidebar, and opening
+                // its pane while the sidebar still says 测试场 is two answers to one question.
+                menuItems.firstOrNull { it.id == R.id.menuPets }?.let { select(it) }
+            }
+            petChooser.addView(more)
+        }
+
         // Stiffness is the dial between a limp ragdoll and one that holds a pose. It is
         // the one physics number worth having on screen while the feel is being tuned.
         val stiffChip = label(STIFFNESS_LABELS[stiffnessStep], 12f, INK)
@@ -707,26 +792,7 @@ class MainActivity : AppCompatActivity() {
             petChooser.addView(chip)
         }
 
-        for (folder in characters) {
-            val chip = label(folder.id, 12f, if (folder == summoned) INK else MUTED)
-            chip.background = getDrawable(
-                if (folder == summoned) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-            )
-            chip.setPadding(dp(12), dp(6), dp(12), dp(6))
-            val params = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            )
-            params.marginEnd = dp(6)
-            chip.layoutParams = params
-            chip.setOnClickListener {
-                summoned = folder
-                activePose = null
-                reloadSandbox(folder)
-                buildPetChooser()
-            }
-            petChooser.addView(chip)
-        }
+        // (The pet chips live at the FRONT of this row -- see the top of buildPetChooser.)
     }
 
     /**
@@ -951,7 +1017,13 @@ class MainActivity : AppCompatActivity() {
             nameBox.layoutParams = LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
             )
-            nameBox.addView(label(folder.id, 15f, INK))
+            val here = folder.id == summoned?.id
+            nameBox.addView(
+                label(
+                    folder.id + if (here) "   " + getString(R.string.pet_on_bench) else "",
+                    15f, INK,
+                )
+            )
             nameBox.addView(
                 label(
                     bones.size.toString() + " bones · " + folder.partCount(bones) + " parts drawn",
@@ -963,6 +1035,19 @@ class MainActivity : AppCompatActivity() {
             // A package is the one thing that had no way out. Everything inside it can be
             // deleted one piece at a time, which is no help when the whole thing was an
             // experiment.
+            val put = label(
+                if (here) getString(R.string.pet_is_on_bench) else getString(R.string.pet_put_on_bench),
+                11f, if (here) MUTED else INK,
+            )
+            put.setPadding(dp(10), dp(6), dp(10), dp(6))
+            if (here) {
+                put.background = getDrawable(R.drawable.menu_item_idle)
+            } else {
+                put.background = getDrawable(R.drawable.menu_item_selected)
+                put.setOnClickListener { summon(folder) }
+            }
+            header.addView(put)
+
             val copy = label(getString(R.string.pet_copy), 11f, MUTED)
             copy.setPadding(dp(10), dp(6), dp(10), dp(6))
             copy.setOnClickListener { askCopyPet(folder) }
@@ -1000,13 +1085,10 @@ class MainActivity : AppCompatActivity() {
                 store.deleteCharacter(folder.id)
                 if (summoned?.id == folder.id) summoned = null
                 if (opened?.id == folder.id) opened = null
+                // Picks up whichever pet is left, or leaves the bench empty when that was the
+                // last one -- see reloadCharacters, which is also what keeps the OTHER pet on
+                // the bench when this was not the one that was out.
                 reloadCharacters()
-                if (summoned == null && characters.isNotEmpty()) {
-                    summoned = characters.first()
-                    reloadSandbox(characters.first())
-                }
-                buildPetList()
-                buildPetChooser()
                 buildLogicPaneIfOpen()
                 Toast.makeText(this, R.string.pet_deleted, Toast.LENGTH_SHORT).show()
             }

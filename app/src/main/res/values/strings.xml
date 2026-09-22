@@ -73,6 +73,9 @@
     <string name="pet_new_name">新桌宠叫什么</string>
     <string name="pet_new_done">建好了：%1$s</string>
     <string name="pet_new_failed">这个名字不能用了（重名，或者名字是空的）</string>
+    <string name="pet_put_on_bench">放到场上</string>
+    <string name="pet_is_on_bench">✓ 场上</string>
+    <string name="pet_on_bench">（场上）</string>
     <string name="pet_copy">复制</string>
     <string name="pet_copy_name">复制成什么名字</string>
     <string name="pet_export">导出</string>
