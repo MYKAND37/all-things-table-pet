@@ -32,6 +32,30 @@
     <string name="content_placeholder">这里先留白，功能待实现</string>
 
     <!-- 全局设置 -->
+    <string name="pet_summon">召唤到桌面</string>
+    <string name="pet_summon_send_home">收回桌宠</string>
+    <string name="pet_summon_menu">桌面上那一只</string>
+    <string name="pet_summon_hint">长按这里可以给它换道具、切状态、换身体</string>
+    <string name="pet_summon_need_permission">要让桌宠浮在别的 App 上面，得先在系统设置里允许「显示在其他应用上层」。</string>
+    <string name="pet_summon_open_settings">去打开</string>
+    <string name="pet_summon_started">桌宠已经到桌面上了</string>
+    <string name="pet_summon_stopped">桌宠回家了</string>
+    <string name="pet_summon_none">还没有桌宠可以召唤</string>
+    <string name="pet_summon_prop">召唤道具…</string>
+    <string name="pet_summon_state">切换状态…</string>
+    <string name="pet_summon_rig">换骨骼套…</string>
+    <string name="pet_summon_must_run">先把桌宠召唤到桌面上</string>
+    <string name="overlay_grab">⠿ 拖这里挪位置</string>
+    <string name="overlay_close">收回</string>
+    <string name="overlay_channel">桌面上的桌宠</string>
+    <string name="overlay_channel_hint">桌宠浮在别的应用上面的时候，这里一直有一条通知</string>
+    <string name="overlay_title">桌宠在桌面上</string>
+    <string name="overlay_text">点一下回到 App；「收回」就让它回家</string>
+    <string name="settings_about">关于这一版</string>
+    <string name="settings_about_hint">报一个问题的时候，这两行是最先被问到的</string>
+    <string name="settings_version">版本 %1$s · 构建 %2$d</string>
+    <string name="settings_repo_hint">点一下地址就在浏览器里打开仓库</string>
+    <string name="settings_repo_failed">这台设备上没有能打开网页的应用</string>
     <string name="settings_hint">这些是应用自己的开关，不属于任何一只桌宠。改完立刻生效，写进 settings.json。</string>
     <string name="settings_gravity">重力</string>
     <string name="settings_gravity_hint">1.0 是角色自己那个重力。往下调，甩出去的东西会飘；往上调，什么都砸得很实。</string>
@@ -374,6 +398,7 @@
     <string name="logic_state_is">它是</string>
     <string name="logic_state_is_on"> 开着</string>
     <string name="logic_state_is_off"> 关着</string>
+    <string name="logic_no_props">还没有道具。去「道具管理」做一个。</string>
     <string name="logic_no_states">还没有状态。去「逻辑管理」上面加一个。</string>
     <string name="logic_pick_state">哪个状态</string>
     <string name="logic_pick_liquid">哪种液体</string>
@@ -421,6 +446,7 @@
     <string name="logic_subject_particle">粒子·%1$s</string>
     <!-- 逻辑管理的四个文件夹。长的东西太多，全挤在一条上就看不出谁是谁了。 -->
     <string name="logic_folder_character">角色逻辑</string>
+    <string name="logic_folder_parts">部件</string>
     <string name="logic_folder_props">道具逻辑</string>
     <string name="logic_folder_liquids">液体逻辑</string>
     <string name="logic_folder_particles">粒子逻辑</string>

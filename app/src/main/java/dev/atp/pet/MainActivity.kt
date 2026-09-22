@@ -52,6 +52,7 @@ import dev.atp.pet.engine.particle.ParticleSpec
 import dev.atp.pet.ui.PaintBoardView
 import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.LogicGraphView
+import dev.atp.pet.ui.PetOverlayService
 import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.PosePreview
 import dev.atp.pet.ui.SkeletonView
@@ -94,9 +95,32 @@ class MainActivity : AppCompatActivity() {
      * list, it is a heap, and the one thing it cannot show is the thing the screen is about:
      * 让手流汗 is a rule about the hand, and 火花 落地 is a rule about sparks.
      */
-    private enum class LogicFolder { CHARACTER, PROPS, LIQUIDS, PARTICLES }
+    /**
+     * Which 文件夹 the logic panel is in: a pet's id, or "" for 道具.
+     *
+     * 逻辑管理 grew a second level when rules stopped living in one file per kind: a pet owns
+     * its own rules, its parts' rules, the particles and the liquids it declares -- so the first
+     * question is WHICH PET, and 道具 is the one folder that is not a pet's, because a prop's
+     * rules are shared by every pet. See [logicSection] for what is inside a pet's folder.
+     */
+    private var logicFolder: String = ""
 
-    private var logicFolder = LogicFolder.CHARACTER
+    /** Whether the folder row has been touched. Until it has, the panel opens on the pet on the bench. */
+    private var logicFolderPicked = false
+
+    /** Inside a pet's folder: which kind of thing the rules are about. */
+    private var logicSection = LogicSection.CHARACTER
+
+    private enum class LogicSection { CHARACTER, PARTS, PARTICLES, LIQUIDS }
+
+    /**
+     * The pet whose logic is open: the folder that was picked, or the one on the bench.
+     *
+     * Editing does not require summoning -- the files are the truth, and 道具管理 is a perfectly
+     * good place to write rules for a pet that is not on the table right now.
+     */
+    private fun logicPet(): CharacterFolder? =
+        characters.firstOrNull { it.id == logicFolder } ?: summoned ?: characters.firstOrNull()
 
     private lateinit var store: CharacterStore
     private var characters: List<CharacterFolder> = emptyList()
@@ -180,6 +204,8 @@ class MainActivity : AppCompatActivity() {
     private var actionDialog: AlertDialog? = null
 
     private lateinit var sidebar: LinearLayout
+    /** 召唤到桌面：侧栏最下面那个（不推、不删、只把宠物送出去或收回来）。 */
+    private lateinit var petSummon: TextView
     private lateinit var railHint: TextView
     private lateinit var placeholder: View
     private lateinit var contentTitle: TextView
@@ -248,6 +274,15 @@ class MainActivity : AppCompatActivity() {
     /** Which pet the picker is currently saving. The dialog comes back later; see onExportPicked. */
     private var pendingExport: CharacterFolder? = null
 
+    /**
+     * Coming back to the app: the floating pet may have been sent home while we were away
+     * (its ✕, or the notification's 收回), and the button has to say what tapping it does NEXT.
+     */
+    override fun onResume() {
+        super.onResume()
+        refreshSummonButton()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -255,6 +290,15 @@ class MainActivity : AppCompatActivity() {
         store = CharacterStore(this)
 
         sidebar = findViewById(R.id.sidebar)
+        petSummon = findViewById(R.id.petSummon)
+        petSummon.setOnClickListener { toggleOverlay() }
+        // 长按：桌面上那一只的道具、状态和身体 —— 它在别的 App 上面，够不着它的按钮，
+        // 所以这些开关挂在"把它送出去"的那个按钮上。
+        petSummon.setOnLongClickListener {
+            showOverlayMenu()
+            true
+        }
+        refreshSummonButton()
         railHint = findViewById(R.id.railHint)
         placeholder = findViewById(R.id.placeholder)
         contentTitle = findViewById(R.id.contentTitle)
@@ -499,6 +543,8 @@ class MainActivity : AppCompatActivity() {
         val previous = summoned
         summoned = wanted
         activePose = null
+        // 桌面上的那一只跟着走：召唤按钮送出去的就是"场上的这只"。
+        PetOverlayService.rememberPet(this, wanted.id)
         if (reloadSandbox(wanted)) {
             buildPetChooser()
             return
@@ -1253,6 +1299,157 @@ class MainActivity : AppCompatActivity() {
             buildPartList(folder)
         }
         buildPetChooser()
+    }
+
+    // ── 召唤到桌面 ──────────────────────────────────────────────────────────
+
+    /**
+     * 把宠物送到桌面上（再点一下收回来）。
+     *
+     * A floating pet is a window over other apps, and Android only grants that from a system
+     * setting the user owns: the app cannot ask for it in a dialog, only explain and open the
+     * page. So the first tap is a two-step thing, and it says why -- a button that does nothing
+     * until a permission nobody mentioned is the shape of every "this feature is broken" report.
+     */
+    private fun toggleOverlay() {
+        if (PetOverlayService.running) {
+            PetOverlayService.stop(this)
+            petSummon.postDelayed({ refreshSummonButton() }, 300)
+            Toast.makeText(this, R.string.pet_summon_stopped, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val pet = summoned ?: characters.firstOrNull()
+        if (pet == null) {
+            Toast.makeText(this, R.string.pet_summon_none, Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 全名：这个文件里的 `Settings` 是项目自己的那份全局设置（dev.atp.pet.data.Settings），
+        // 而"显示在其他应用上层"这个开关在系统的那一个上 —— 简写会被前者挡住，编译期就报
+        // unresolved，但值得在此写明原因。
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            AlertDialog.Builder(this)
+                .setTitle(R.string.pet_summon)
+                .setMessage(R.string.pet_summon_need_permission)
+                .setPositiveButton(R.string.pet_summon_open_settings) { _, _ ->
+                    runCatching {
+                        startActivity(
+                            Intent(
+                                android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                Uri.parse("package:" + packageName),
+                            )
+                        )
+                    }
+                }
+                .setNegativeButton(R.string.depth_cancel, null)
+                .show()
+            return
+        }
+        // 通知：前台服务在 Android 13 以后要用户允许才显示那条通知，而那条通知上有「收回」。
+        // 服务本身不需要这个许可也能跑，所以问一句就好，不拦着召唤。
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
+        }
+        PetOverlayService.rememberPet(this, pet.id)
+        PetOverlayService.start(this)
+        petSummon.postDelayed({ refreshSummonButton() }, 600)
+        Toast.makeText(this, R.string.pet_summon_started, Toast.LENGTH_SHORT).show()
+    }
+
+    /** The button says what tapping it will do next: send the pet out, or call it home. */
+    private fun refreshSummonButton() {
+        petSummon.text = getString(
+            if (PetOverlayService.running) R.string.pet_summon_send_home
+            else R.string.pet_summon
+        )
+    }
+
+    /**
+     * 长按那个按钮：桌面上那一只的道具 / 状态 / 身体 / 收回。
+     *
+     * It talks to the floating pet through the service rather than touching its view: the two are
+     * separate instances of the same pet (see PetOverlayService), and reaching into the other
+     * one's memory is how "I changed it in the app and the desktop one did not move" becomes a
+     * thing nobody can explain.
+     */
+    private fun showOverlayMenu() {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(R.string.pet_summon_menu)
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+
+        fun row(text: String, tap: () -> Unit) {
+            val v = label(text, 13f, INK)
+            v.setPadding(dp(12), dp(11), dp(12), dp(11))
+            v.background = getDrawable(R.drawable.menu_item_idle)
+            v.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+            v.setOnClickListener {
+                tap()
+                dialog.dismiss()
+            }
+            box.addView(v)
+        }
+
+        fun ifRunning(tap: () -> Unit) {
+            if (PetOverlayService.running) {
+                tap()
+            } else {
+                Toast.makeText(this, R.string.pet_summon_must_run, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        box.addView(label(getString(R.string.pet_summon_hint), 11f, MUTED, bottom = 8))
+        row(getString(R.string.pet_summon_prop)) {
+            ifRunning {
+                pickList(
+                    getString(R.string.pet_summon_prop),
+                    props.map { it.id to it.name },
+                    getString(R.string.logic_no_props),
+                    null,
+                ) { id ->
+                    PetOverlayService.send(this, PetOverlayService.ACTION_PROP, id)
+                    true
+                }
+            }
+        }
+        row(getString(R.string.pet_summon_state)) {
+            ifRunning {
+                pickList(
+                    getString(R.string.pet_summon_state),
+                    benchStates(),
+                    getString(R.string.logic_no_states),
+                    null,
+                ) { tag ->
+                    PetOverlayService.send(this, PetOverlayService.ACTION_STATE, tag)
+                    true
+                }
+            }
+        }
+        row(getString(R.string.pet_summon_rig)) {
+            ifRunning {
+                pickList(
+                    getString(R.string.pet_summon_rig),
+                    summoned?.rigs()?.map { it to rigLabel(it) } ?: emptyList(),
+                    getString(R.string.logic_no_rigs),
+                    summoned?.rig ?: "",
+                ) { name ->
+                    PetOverlayService.send(this, PetOverlayService.ACTION_RIG, name)
+                    true
+                }
+            }
+        }
+        row(getString(R.string.pet_summon_send_home)) {
+            ifRunning { PetOverlayService.stop(this) }
+            petSummon.postDelayed({ refreshSummonButton() }, 300)
+        }
+        dialog.show()
     }
 
     /** ＋新建桌宠: a copy of the one that ships with the app, under a name of its own. */
@@ -3932,6 +4129,11 @@ class MainActivity : AppCompatActivity() {
      * to forget — the file and the screen cannot drift apart.
      */
     private fun openLogic() {
+        // 第一次打开（或者那只桌宠被删了）：文件夹落在场上那一只身上 —— 写规则的人刚看过它。
+        if (!logicFolderPicked || (logicFolder.isNotEmpty() && characters.none { it.id == logicFolder })) {
+            logicFolder = (summoned ?: characters.firstOrNull())?.id ?: ""
+            logicFolderPicked = false
+        }
         openLogic(logicSubject)
     }
 
@@ -3945,7 +4147,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun openLogic(subject: String) {
         logicSubject = subject
-        val folder = summoned
+        val folder = logicPet()
         val spec = when {
             // An object's logic does not need a character to be summoned: it lives in the
             // shared props directory, and 道具管理 is a perfectly good place to open it from.
@@ -3976,13 +4178,13 @@ class MainActivity : AppCompatActivity() {
      * the way back into the test bench, which is the next thing the user is going to do.
      */
     private fun saveLogic() {
-        val folder = summoned ?: return
+        val folder = logicPet()
         val spec = LogicSpec(
             logicStats.toList(), logicRules.toList(),
             logicStates.toList(), logicLiquids.toList(), logicParticles.toList(),
         )
         if (logicSubject == Subjects.PET) {
-            store.saveLogic(folder.id, spec)
+            if (folder != null) store.saveLogic(folder.id, spec)
         } else {
             // The subject's own file keeps its own vocabulary: the editor was showing the
             // character's liquids and particles so the pickers had something in them, and
@@ -4157,22 +4359,41 @@ class MainActivity : AppCompatActivity() {
         logicBar.removeAllViews()
         logicFolderBar.removeAllViews()
 
-        // 第一层：四个文件夹。点一个就换一层，并把打开的主体收回那一类里。
-        for (folder in LogicFolder.values()) {
-            val c = chip(folderLabel(folder), folder == logicFolder, 13f)
-            c.setOnClickListener {
-                if (folder != logicFolder) {
-                    logicFolder = folder
-                    settleFolder()
-                    openLogic(logicSubject)
-                }
-            }
+        // 第一层（图的右上角）：文件夹 = 每只桌宠一个，外加一个全局的「道具」。
+        for (pet in characters) {
+            val here = pet.id == logicFolder
+            // ● 是"这只正在场上"：写规则的人常常是在调场上那只，而文件夹那一行现在说的
+            // 是"编辑哪一只"，两者不是同一件事，所以它得说出来。
+            val c = chip(pet.id + if (pet.id == summoned?.id) " ●" else "", here, 12f)
+            c.setOnClickListener { pickLogicFolder(pet.id) }
             logicFolderBar.addView(c)
         }
+        val propsFolder = chip(
+            getString(R.string.logic_folder_props), logicFolder.isEmpty(), 12f,
+        )
+        propsFolder.setOnClickListener { pickLogicFolder("") }
+        logicFolderBar.addView(propsFolder)
 
-        // 第二层：这一类里具体写给谁。角色逻辑有"全局 / 局部"两组，因为整具身体和
-        // 单独一根骨头是两种不同的东西；另外三类各自只有一组。
-        val groups = folderSubjects(logicFolder)
+        // 第二层（只在桌宠的文件夹里）：这一类里写给谁 —— 它自己 / 它的部件 / 它的粒子 / 它的液体。
+        if (logicFolder.isNotEmpty()) {
+            for (section in LogicSection.values()) {
+                val c = chip(sectionLabel(section), section == logicSection, 12f)
+                c.setOnClickListener {
+                    if (section != logicSection) {
+                        logicSection = section
+                        settleFolder()
+                        openLogic(logicSubject)
+                    }
+                }
+                logicBar.addView(c)
+            }
+            // 一层"空档"，把"写给谁"和"哪一类"分开：两排长得一样的 chip 挨在一起，
+            // 读起来是一排六个，而不是两层。
+            logicBar.addView(label("  ", 11f, MUTED))
+        }
+
+        // 第三层：这一类里具体写给谁。
+        val groups = folderSubjects()
         val anySubject = groups.any { it.second.isNotEmpty() }
         for ((groupLabel, subjects) in groups) {
             if (subjects.isEmpty()) continue
@@ -4192,7 +4413,9 @@ class MainActivity : AppCompatActivity() {
         // The spill bar belongs to the liquids and is shown with them. It used to sit under
         // every folder, which is the pile this screen was rearranged to get rid of: a row of
         // liquid chips is not something to read while writing a rule about a spark.
-        liquidBar.visibility = if (logicFolder == LogicFolder.LIQUIDS) View.VISIBLE else View.GONE
+        liquidBar.visibility =
+            if (logicFolder.isNotEmpty() && logicSection == LogicSection.LIQUIDS) View.VISIBLE
+            else View.GONE
 
         logicBar.addView(small(getString(R.string.logic_add_rule)) {
             logicRules.add(
@@ -4293,39 +4516,44 @@ class MainActivity : AppCompatActivity() {
      * being edited: both are declared by the character, and a prop whose own file has none would
      * otherwise hide every liquid and every particle from this screen and make them unreachable.
      */
-    private fun folderSubjects(folder: LogicFolder): List<Pair<String, List<Pair<String, String>>>> =
-        when (folder) {
-            LogicFolder.CHARACTER -> listOf(
-                getString(R.string.logic_scope_global) to
-                    listOf(Subjects.PET to getString(R.string.logic_subject_pet)),
-                getString(R.string.logic_scope_local) to
-                    (summoned?.let { boneNames(it) } ?: emptyList()).map {
-                        Subjects.part(it) to getString(R.string.logic_subject_part, boneLabel(it))
-                    } +
-                    (summoned?.let { nodeNames(it) } ?: emptyList()).map {
-                        Subjects.part(it) to getString(R.string.logic_subject_part, it)
-                    },
-            )
-            LogicFolder.PROPS -> listOf(
+    private fun folderSubjects(): List<Pair<String, List<Pair<String, String>>>> {
+        val pet = logicPet()
+        // 道具文件夹：全局，和哪只桌宠在场上无关 —— 一把锤子的规则是所有桌宠共用的。
+        if (logicFolder.isEmpty() || pet == null) {
+            return listOf(
                 "" to props.map {
                     Subjects.prop(it.id) to getString(R.string.logic_subject_prop, it.name)
                 },
             )
-            LogicFolder.LIQUIDS -> listOf(
-                "" to (summoned?.let { store.loadLogic(it.id).liquids } ?: emptyList()).map {
-                    Subjects.liquid(it.id) to getString(R.string.logic_subject_liquid, it.name)
+        }
+        val declared = store.loadLogic(pet.id)
+        return when (logicSection) {
+            LogicSection.CHARACTER -> listOf(
+                "" to listOf(Subjects.PET to getString(R.string.logic_subject_pet)),
+            )
+            LogicSection.PARTS -> listOf(
+                "" to boneNames(pet).map {
+                    Subjects.part(it) to getString(R.string.logic_subject_part, boneLabel(it))
+                } + nodeNames(pet).map {
+                    Subjects.part(it) to getString(R.string.logic_subject_part, it)
                 },
             )
-            LogicFolder.PARTICLES -> listOf(
-                "" to (summoned?.let { store.loadLogic(it.id).particles } ?: emptyList()).map {
+            LogicSection.PARTICLES -> listOf(
+                "" to declared.particles.map {
                     Subjects.particle(it.id) to getString(R.string.logic_subject_particle, it.name)
                 },
             )
+            LogicSection.LIQUIDS -> listOf(
+                "" to declared.liquids.map {
+                    Subjects.liquid(it.id) to getString(R.string.logic_subject_liquid, it.name)
+                },
+            )
         }
+    }
 
-    /** Every subject in a folder, whichever group it is in. */
-    private fun folderSubjectIds(folder: LogicFolder): List<String> =
-        folderSubjects(folder).flatMap { (_, subjects) -> subjects.map { it.first } }
+    /** Every subject in the open folder, whichever group it is in. */
+    private fun folderSubjectIds(): List<String> =
+        folderSubjects().flatMap { (_, subjects) -> subjects.map { it.first } }
 
     /**
      * Keep the open subject inside the open folder.
@@ -4335,16 +4563,26 @@ class MainActivity : AppCompatActivity() {
      * screen would say "粒子逻辑" and be editing the hand.
      */
     private fun settleFolder() {
-        val here = folderSubjectIds(logicFolder)
+        val here = folderSubjectIds()
         if (logicSubject !in here) logicSubject = here.firstOrNull() ?: Subjects.PET
     }
 
-    private fun folderLabel(folder: LogicFolder): String = getString(
-        when (folder) {
-            LogicFolder.CHARACTER -> R.string.logic_folder_character
-            LogicFolder.PROPS -> R.string.logic_folder_props
-            LogicFolder.LIQUIDS -> R.string.logic_folder_liquids
-            LogicFolder.PARTICLES -> R.string.logic_folder_particles
+    /** Clicking a folder: it lands on the pet itself, because that is what a folder is about. */
+    private fun pickLogicFolder(id: String) {
+        if (id == logicFolder) return
+        logicFolder = id
+        logicFolderPicked = true
+        logicSection = LogicSection.CHARACTER
+        settleFolder()
+        openLogic(logicSubject)
+    }
+
+    private fun sectionLabel(section: LogicSection): String = getString(
+        when (section) {
+            LogicSection.CHARACTER -> R.string.logic_folder_character
+            LogicSection.PARTS -> R.string.logic_folder_parts
+            LogicSection.PARTICLES -> R.string.logic_folder_particles
+            LogicSection.LIQUIDS -> R.string.logic_folder_liquids
         }
     )
 
@@ -4593,6 +4831,30 @@ class MainActivity : AppCompatActivity() {
             settingsList.addView(label(getString(hint), 10f, MUTED, bottom = 6))
         }
 
+        /**
+         * 关于这一版：装的是哪一版、构建号是多少、代码在哪。
+         *
+         * The two lines a bug report always starts with, and the version is read from the
+         * package rather than typed in here -- a number that is written down twice is a number
+         * that is wrong once. The build number is the CI run (see app/build.gradle.kts), which
+         * is the only way to tell two builds of the same 1.12.x apart.
+         */
+        fun about() {
+            settingsList.addView(label(getString(R.string.settings_about), 13f, INK, top = 18, bottom = 4))
+            settingsList.addView(label(getString(R.string.settings_about_hint), 10f, MUTED, bottom = 6))
+            settingsList.addView(label(versionLine(), 12f, INK))
+            val repo = label(REPO_URL, 12f, MUTED, top = 2)
+            repo.setOnClickListener {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL)))
+                } catch (e: Exception) {
+                    Toast.makeText(this, R.string.settings_repo_failed, Toast.LENGTH_SHORT).show()
+                }
+            }
+            settingsList.addView(repo)
+            settingsList.addView(label(getString(R.string.settings_repo_hint), 10f, MUTED, top = 2))
+        }
+
         fun toggle(title: Int, value: Boolean, onChange: (Boolean) -> Unit) {
             val row = label(
                 (if (value) "✓  " else "○  ") + getString(title),
@@ -4686,6 +4948,8 @@ class MainActivity : AppCompatActivity() {
             STIFFNESS_VALUES.firstOrNull { v -> kotlin.math.abs(v - settings.defaultStiffness) < 0.01f }
                 ?.toString() ?: ""
         })
+
+        about()
     }
 
     /**
@@ -6944,12 +7208,30 @@ class MainActivity : AppCompatActivity() {
 
     private fun boneLabel(bone: String): String = LABELS[bone] ?: ""
 
+    /** 「版本 1.12.4 · 构建 137」, read from the installed package. See buildSettingsPane. */
+    private fun versionLine(): String = try {
+        val info = packageManager.getPackageInfo(packageName, 0)
+        getString(
+            R.string.settings_version,
+            info.versionName ?: "?",
+            if (android.os.Build.VERSION.SDK_INT >= 28) info.longVersionCode else info.versionCode.toLong(),
+        )
+    } catch (e: Exception) {
+        getString(R.string.settings_version, "?", 0L)
+    }
+
     private companion object {
         val INK = Color.parseColor("#FF171528")
         val MUTED = Color.parseColor("#A6171528")
 
         /** 用不上的那一行：它现在不会被画出来，所以它不该长得像别的行。 */
         val WARN = Color.parseColor("#FFB4212B")
+
+        /**
+         * 代码在哪。One constant, shown in 设置: this is the address a bug report is filed at,
+         * and an address written in two places is an address that is wrong in one of them.
+         */
+        const val REPO_URL = "https://github.com/MYKAND37/all-things-table-pet"
 
         /** The stick figure in an action-list row: solid when it is the one being held. */
         /** The colours a liquid can be. A palette, not a picker: eight swatches is a

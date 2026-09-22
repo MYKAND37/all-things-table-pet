@@ -13,6 +13,14 @@
         <item name="android:focusable">true</item>
     </style>
 
+    <!--
+        召唤到桌面：侧栏最下面那个按钮。长得和菜单项一样（继承它的外观），但**故意不叫
+        MenuItem** —— 那一份名单是"页面"，而这是一个动作（把宠物送出去/收回来）。
+        wiring_check 的 rail 检查比的是"布局里的 MenuItem 和 Kotlin 里 menuItems 一一对应"，
+        一个动作混进那份名单会让它变成一条假的失败。
+    -->
+    <style name="SummonButton" parent="MenuItem" />
+
     <!-- One button in the import alignment bar. -->
     <style name="AlignButton">
         <item name="android:layout_width">wrap_content</item>

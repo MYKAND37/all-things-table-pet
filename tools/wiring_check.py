@@ -216,6 +216,7 @@ def main():
         ("画板的撤销", "paint_undo"),
         ("调骨骼时的参考图", "rig_reference"),
         ("重置骨骼", "rig_reset_bones"),
+        ("召唤到桌面", "pet_summon"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -255,6 +256,26 @@ def main():
     # 有意的：道具会跟着搬过去，水不会（它的每一滴都在旧屋子的坐标里）。
     report("液体只在房间真的换了的时候才重建",
            swap.count("fluid = ") == 1 and "old.floorY != parsed.floorY" in swap)
+
+    print("== 召唤到桌面：窗口、权限、通知，一样都不能少 ==")
+    # 悬浮桌宠是三样东西拼起来的，任何一样掉了它都"看起来做了但用不了"：一个真悬浮窗、
+    # 一条系统设置里的权限、以及一个前台服务（Android 只允许这样的窗口活在"有东西在明显
+    # 运行"的时候）。第四句是这一版的规矩：长按菜单通过**命令**跟桌面上那只说话。
+    manifest = open(os.path.join(REPO, "app/src/main/AndroidManifest.xml"), encoding="utf-8").read()
+    service = next((t for path, t in files.items() if path.endswith("PetOverlayService.kt")), "")
+    layout = open(os.path.join(REPO, "app/src/main/res/layout/activity_main.xml"), encoding="utf-8").read()
+    report("悬浮窗是真悬浮（TYPE_APPLICATION_OVERLAY）",
+           "TYPE_APPLICATION_OVERLAY" in service)
+    report("它挂在前台服务上，通知上有收回",
+           "startForeground(" in service and 'foregroundServiceType="specialUse"' in manifest and
+           "ACTION_STOP" in service)
+    report("「显示在其他应用上层」在清单里，而且按钮先问再召唤",
+           "SYSTEM_ALERT_WINDOW" in manifest and "canDrawOverlays" in activity and
+           "ACTION_MANAGE_OVERLAY_PERMISSION" in activity)
+    report("长按菜单用命令跟桌面上那只说话（不去掏另一个实例的内存）",
+           "ACTION_PROP" in service and "ACTION_PROP" in activity)
+    report("召唤按钮在侧栏最下面（最后一个菜单项之后）",
+           layout.find("@+id/petSummon") > layout.find("@+id/menuSettings"))
 
     print("== 图层深度：状态多了先分组 ==")
     # 「状态一多，改图层深度就很乱」：二十行里找三行，而 ▲▼ 一次只走一格，走的那一格还可能

@@ -1085,6 +1085,24 @@ def main():
            {"propNear", "propAway"} <= events,
            "没声明: " + str({"propNear", "propAway"} - events))
 
+    print("\n长按：和「点一下」共用一条线，是两件事")
+    # 手指落在宠物身上，短于阈值 = 被点一下，长于阈值 = 被长按；所以一次按压有且只有一种结果。
+    # 测试场里那条线就是 Android 自己的长按阈值（TAP_MS）。
+    report("longPress 是 Kotlin 里声明的事件", "longPress" in events)
+    both = Engine({"stats": [], "states": [], "rules": [
+        {"on": "click", "part": "", "if": [], "then": [{"kind": "say", "text": "戳"}]},
+        {"on": "longPress", "part": "", "if": [], "then": [{"kind": "say", "text": "按着不放干嘛"}]},
+    ]})
+    report("点一下只响点一下那条", says(both.handle("click")) == ["戳"])
+    report("长按只响长按那条", says(both.handle("longPress")) == ["按着不放干嘛"])
+    # 部位照样管用：按住手和按住头是两件事。
+    part = Engine({"stats": [], "states": [], "rules": [
+        {"on": "longPress", "part": "hand", "if": [], "then": [{"kind": "say", "text": "手"}]},
+    ]})
+    report("长按哪个部位就报哪个部位",
+           says(part.resolve({"type": "longPress", "part": "hand_L", "value": 0.0})) == ["手"] and
+           part.resolve({"type": "longPress", "part": "head", "value": 0.0}) == [])
+
     print("\n换骨骼套：一个动作，和它换完之后发的那个事件")
     # 引擎不认识"骨骼套"是什么：它把 setRig 原样交给测试场，由宿主去换（骨骼套是文件夹，
     # 只有 Activity 知道它们在哪儿）。换完测试场发一个 rigSwap，规则就能接着反应 ——

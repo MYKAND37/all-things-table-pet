@@ -1,6 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        召唤到桌面：一只浮在别的 App 上面的桌宠。SYSTEM_ALERT_WINDOW 是"显示在其他应用上层"，
+        这一条只有用户能在系统设置里给（App 弹不了那个框，只能把他带到那一页）。
+
+        前台服务是 Android 的规矩：一个这样的窗口只有在"有东西在明显运行"时才允许存在，
+        所以它必须挂一条通知。类型写 specialUse —— 它确实不属于任何别的类别，而 Play 的
+        规矩就是"说不清就老实说 specialUse 并写清楚干什么"。
+    -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
@@ -19,6 +32,15 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".ui.PetOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="A desktop pet the user summons and dismisses: it draws the character over other apps and runs its own rules until it is sent home." />
+        </service>
 
         <!--
             导出诊断 的 CSV 在 getExternalFilesDir(null)/diag/ 下，那是本 App 的私有目录：

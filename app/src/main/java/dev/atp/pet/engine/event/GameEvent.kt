@@ -30,6 +30,17 @@ enum class EventType(val id: String, val label: String, val unit: String) {
     /** value = impact speed times the mass of whatever hit it. */
     IMPACT("impact", "被打到", "力度"),
     CLICK("click", "被点一下", ""),
+
+    /**
+     * Pressed and HELD. Fires once, at the moment the press stops being a tap.
+     *
+     * The line is Android's own long-press threshold, which is also the line 被点一下 already
+     * draws from the other side: a press shorter than it is a click, a press longer than it is
+     * this. Two events, one threshold, so a finger that comes down on the pet always produces
+     * exactly one of them -- 「点了没反应」 used to be the shape of a press that was simply held
+     * too long, and now it is an event a rule can answer.
+     */
+    LONG_PRESS("longPress", "被长按", ""),
     PROP_HIT("propHit", "被道具碰到", "力度"),
 
     /**

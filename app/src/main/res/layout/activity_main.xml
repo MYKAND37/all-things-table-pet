@@ -95,6 +95,17 @@
                 android:id="@+id/menuSettings"
                 style="@style/MenuItem"
                 android:text="@string/menu_settings" />
+
+            <!-- 召唤到桌面：侧栏最下面，和上面那些"页面"分开 —— 它不是一个页面。 -->
+            <Space
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1" />
+
+            <TextView
+                android:id="@+id/petSummon"
+                style="@style/SummonButton"
+                android:text="@string/pet_summon" />
         </LinearLayout>
 
         <!-- ── 内容区（磨砂） ───────────────────────── -->
@@ -302,31 +313,39 @@
                 android:orientation="vertical"
                 android:visibility="gone">
 
-                <dev.atp.pet.ui.LogicGraphView
-                    android:id="@+id/logicGraph"
+                <!-- 图，以及浮在它右上角的文件夹那一行。
+
+                     第一层是**文件夹**：每只桌宠一个，外加一个全局的「道具」（道具有自己的
+                     文件，不属于任何一只）。它放在右上角，因为它回答的是"这是谁的东西"，
+                     而这一页下面每一行都依赖这个答案；放在最下面一条横栏里的时候，
+                     它和一排模块按钮长得一模一样。 -->
+                <FrameLayout
                     android:layout_width="match_parent"
                     android:layout_height="0dp"
-                    android:layout_weight="1" />
+                    android:layout_weight="1">
 
-                <!-- 第一层：四个文件夹。逻辑管理长的东西太多了（角色 + 每个道具 + 每种液体 +
-                     每种粒子 + 19 根骨头），全挤在一条上就成了一堆看不出关系的 chip。
-                     这一栏说的是"哪一类"，下面那一栏才是"这一类里的哪一个"。 -->
-                <HorizontalScrollView
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:paddingStart="8dp"
-                    android:paddingEnd="8dp"
-                    android:scrollbars="none">
+                    <dev.atp.pet.ui.LogicGraphView
+                        android:id="@+id/logicGraph"
+                        android:layout_width="match_parent"
+                        android:layout_height="match_parent" />
 
-                    <LinearLayout
-                        android:id="@+id/logicFolderBar"
+                    <HorizontalScrollView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:gravity="center"
-                        android:orientation="horizontal"
+                        android:layout_gravity="top|end"
+                        android:paddingStart="8dp"
                         android:paddingTop="6dp"
-                        android:paddingBottom="2dp" />
-                </HorizontalScrollView>
+                        android:paddingEnd="8dp"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/logicFolderBar"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center"
+                            android:orientation="horizontal" />
+                    </HorizontalScrollView>
+                </FrameLayout>
 
                 <HorizontalScrollView
                     android:layout_width="match_parent"

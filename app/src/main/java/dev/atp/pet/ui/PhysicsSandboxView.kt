@@ -450,6 +450,25 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** A press on a bone that has not turned into a drag yet: a tap is a click. */
     private var tapBone: String? = null
+
+    /** Whether THIS press has already been reported as a 长按. Reset when the finger lands. */
+    private var longFired = false
+
+    /**
+     * 桌面模式：把"屋子"拿掉，只留宠物。
+     *
+     * The floating pet (see PetOverlayService) draws this same view over whatever is behind it,
+     * and a grid, a floor line and a tuning panel are the bench's furniture, not the pet's.
+     * Everything about the pet itself -- physics, rules, props, particles, the long press --
+     * is the same code: a second renderer would be a second pet that behaves slightly
+     * differently from the one in the app, which is the bug this avoids rather than fixes.
+     */
+    private var desktop = false
+
+    fun setDesktopMode(on: Boolean) {
+        desktop = on
+        invalidate()
+    }
     private var tapX = 0f
     private var tapY = 0f
     private var tapAt = 0L
@@ -1653,6 +1672,17 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
 
         clock += dt
+
+        // 长按：按住宠物不放。到 TAP_MS 那一刻它就不再是"点一下"了 —— 两件事用的是同一条线
+        // （Android 自己的长按阈值），所以这里只是把"太久了"从一句抱怨变成一件事。
+        // tapBone 在手指挪出 12dp 时就被清掉了（见 ACTION_MOVE），所以一个正在拖的手不会
+        // 顺手发出长按：拖动和按住是两种意思。
+        if (tapLive && !longFired && tapBone != null &&
+            System.currentTimeMillis() - tapAt >= TAP_MS
+        ) {
+            longFired = true
+            fire(GameEvent(EventType.LONG_PRESS, part = tapBone ?: ""))
+        }
         if (bubbleLeft > 0f) bubbleLeft -= dt
         // Counted from zero every frame rather than accumulated for ever: what the panel
         // prints is how many steps THIS frame's delta was spread over. See stepsPerFrame.
@@ -2667,7 +2697,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
 
-        if (settings.showGrid) {
+        if (settings.showGrid && !desktop) {
             val step = 256f
             var gx = 0f
             while (gx <= s.worldWidth) {
@@ -2684,7 +2714,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 gy += step
             }
         }
-        if (settings.showGround) {
+        if (settings.showGround && !desktop) {
             canvas.drawLine(0f, vy(s.floorY), width.toFloat(), vy(s.floorY), groundPaint)
         }
 
@@ -2709,11 +2739,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
         canvas.restore()
 
-        drawHud(canvas, rag)
+        if (!desktop) drawHud(canvas, rag)
         // Over the top of everything else, including the event log: while the panel is open
         // it is the thing being read, and it is drawn on top of the pet for the same reason
         // it takes the finger first. See tuneDown.
-        drawTune(canvas)
+        if (!desktop) drawTune(canvas)
         postInvalidateOnAnimation()
     }
 
@@ -3913,6 +3943,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 }
                 lastTapAt = now
                 tapLive = true
+                longFired = false
                 tapX = event.x
                 tapY = event.y
                 tapAt = now
@@ -4130,6 +4161,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 } else if (tapped != null) {
                     if (isTap) {
                         fire(GameEvent(EventType.CLICK, part = tapped))
+                    } else if (longFired) {
+                        // 它已经作为长按报过了：那不是"点得太慢"，是另一件事。
                     } else {
                         val why = if (held >= TAP_MS) {
                             context.getString(
