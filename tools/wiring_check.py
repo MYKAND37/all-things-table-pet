@@ -267,6 +267,19 @@ def main():
     report("过滤不产生第二份顺序（落盘的还是那一份列表）",
            "store.saveDepth(folder, depthLayers, depthRules)" in activity)
 
+    print("== 用不上的图层：自己冒出来，而且点得动 ==")
+    # 「有时候图层会不被使用，用户可以再定义它处于啥状态时使用」：一个没人用的图层是**安静**的
+    # （不报错、不画），所以两件事缺一不可 —— 它得自己说出来，以及它得能被改。
+    report("能判断「这一层永远画不出来」",
+           "private fun depthUnusedReason(" in activity)
+    report("不用的层有一个过滤器能找到它们",
+           "depthUnusedOnly" in activity and "depth_filter_unused" in activity)
+    report("点它有得改（换状态 / 重建状态 / 导入图 / 删掉）",
+           "private fun askFixLayer(" in activity and "private fun recreateState(" in activity)
+    # 最安静的一种是"行根本不在表里"：图画好了、有状态名，而这张表里没有它。
+    report("画好但没排进表的图会被列出来（变体图最容易这样）",
+           "store.partDrawings(folder, bone)" in activity and "d.state" in activity)
+
     print("== 哪一只在场上：是用户说了算 ==")
     # 「选择场上存在哪一只桌宠」这一版加的东西里，最容易被悄悄破坏的一条：复制一只、导入一个包、
     # 改个名字之后，站在桌上的那只不能变成别人。`reloadCharacters` 里必须有"留住现在这只"的

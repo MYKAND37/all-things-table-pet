@@ -116,6 +116,26 @@ class MainActivity : AppCompatActivity() {
      */
     private var depthFilter: String? = null
 
+    /**
+     * 「用不上的」: the filter for the layers that can never draw.
+     *
+     * A layer goes unused in two ways, and both are silent: its state was deleted (or came
+     * from somebody else's package) so nothing ever turns it on, or the artwork it names is
+     * not on disk. Neither shows up as an error anywhere -- the drawing simply never appears,
+     * and the row in this list looks like every other row.
+     */
+    private var depthUnusedOnly = false
+
+    /**
+     * Every state tag a layer could name and be RIGHT: the pet's own, and each part's own
+     * (written with the bone, see Subjects.stateTag).
+     *
+     * Computed once when the pane opens rather than per row: answering it needs the part logic
+     * files, which means walking the folder -- and this list asks the question once per layer
+     * per rebuild, which is exactly how a "helpful" check turns a screen slow.
+     */
+    private var depthDeclared: Set<String> = emptySet()
+
     /** The rig editor's preview: which states are on, and whether the assembled pet is drawn. */
     private var previewStates: Map<String, Boolean> = emptyMap()
     private var previewParts = true
@@ -1773,20 +1793,60 @@ class MainActivity : AppCompatActivity() {
                 depthLayers.add(LayerSpec(b, 0))
             }
         }
+        // 画好了、却没在这张表里的图：变体最容易这样 —— `hand_L__mech.png` 在硬盘上、
+        // 在部位页里也看得见，而这张表里没有它的行，于是它从来没有被画过一次。文件名的
+        // 后半截就是它等的那个状态（`addVariant` 就是这么命名的），所以顺手把它填上：
+        // 这是「图层会不被使用」里最安静的一种，因为那一行根本不存在，连找都没得找。
+        for (bone in parsed.bones.map { it.name }) {
+            val known = depthLayers.filter { it.bone == bone }.map { it.artKey }.toSet()
+            for (d in store.partDrawings(folder, bone)) {
+                if (d.artKey in known) continue
+                depthLayers.add(LayerSpec(bone, 0, state = d.state, art = d.artKey))
+            }
+        }
         depthStates = store.loadLogic(folder.id).states
+        val declared = mutableSetOf<String>()
+        for (s in depthStates) declared.add(s.id)
+        for ((subject, spec) in store.loadObjectLogic(folder)) {
+            if (!Subjects.isPart(subject)) continue
+            val bone = Subjects.partId(subject)
+            for (s in spec.states) declared.add(Subjects.stateTag(bone, s.id))
+        }
+        depthDeclared = declared
         depthRules = parsed.swaps.toMutableList()
         depthFilter = null
+        depthUnusedOnly = false
         wizardStage = 0
         buildDepthPane()
         show(Pane.PET_DEPTH)
     }
 
-    /** Does the current filter show this layer? See [depthFilter]. */
-    private fun depthShows(layer: LayerSpec): Boolean {
+    /** Does the current filter show this layer? See [depthFilter] and [depthUnusedOnly]. */
+    private fun depthShows(folder: CharacterFolder, layer: LayerSpec): Boolean {
+        if (depthUnusedOnly) return depthUnusedReason(folder, layer) != null
         val f = depthFilter ?: return true
         val key = layer.state.removePrefix("!")
         return if (f.isEmpty()) key.isEmpty() else key == f
     }
+
+    /**
+     * Why this layer can never draw, or null when it can.
+     *
+     * Two ways, both silent: the drawing it names is not on disk ([LayerSpec.artKey] -- a layer
+     * whose file was deleted, or which was made before the drawing existed), or the state it
+     * waits for is not declared anywhere, so nothing will ever turn it on.
+     */
+    private fun depthUnusedReason(folder: CharacterFolder, layer: LayerSpec): String? {
+        if (!folder.partFile(layer.artKey).isFile) {
+            return getString(R.string.depth_unused_no_art, layer.artKey)
+        }
+        if (layer.state.isEmpty() || stateDeclared(layer.state)) return null
+        return getString(R.string.depth_unused_state, Subjects.tagState(layer.state))
+    }
+
+    /** Is the state a layer's tag names actually declared -- the pet's, or that part's? */
+    private fun stateDeclared(tag: String): Boolean =
+        tag.removePrefix("!") in depthDeclared
 
     /**
      * Move one layer one step through the rows that are ON SCREEN.
@@ -1797,6 +1857,107 @@ class MainActivity : AppCompatActivity() {
      * one place in a list of twenty, seventeen of which are hidden, looks like nothing
      * happened.
      */
+    /**
+     * 用不上的图层：它写着什么时候用，而那个"什么时候"不存在。
+     *
+     * The report was 「有时候图层会不被使用，用户可以再定义它处于啥状态时使用」, and the missing
+     * piece is exactly that: a layer whose state was deleted (or came in with somebody else's
+     * package) is never drawn, nothing says so, and the only way to fix it was to notice a
+     * small grey 「（已不存在）」 on one of twenty rows and guess that it is tappable.
+     *
+     * So: the row says ⚠ out loud, and here is what can be done about it -- in the order people
+     * actually want it. Re-pointing it at a state that exists is the ordinary case; rebuilding
+     * the missing state is for 「我把状态删了但图还在」; and a layer whose ARTWORK is missing gets
+     * sent to the drawing it wants instead, because no state will ever make that one draw.
+     */
+    private fun askFixLayer(index: Int) {
+        val folder = opened ?: return
+        val layer = depthLayers.getOrNull(index) ?: return
+        val reason = depthUnusedReason(folder, layer) ?: return
+        val missingArt = !folder.partFile(layer.artKey).isFile
+        val bone = Subjects.tagBone(layer.state)
+        val id = Subjects.tagState(layer.state)
+
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.depth_unused))
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+
+        fun row(text: String, tap: () -> Unit) {
+            val v = label(text, 13f, INK)
+            v.setPadding(dp(12), dp(11), dp(12), dp(11))
+            v.background = getDrawable(R.drawable.menu_item_idle)
+            v.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(4) }
+            v.setOnClickListener {
+                tap()
+                dialog.dismiss()
+            }
+            box.addView(v)
+        }
+
+        box.addView(label(reason, 12f, WARN, bottom = 8))
+        row(getString(R.string.depth_unused_repick)) { askPartState(index) }
+        if (missingArt) {
+            row(getString(R.string.depth_unused_import, layer.artKey)) {
+                // Straight to where the drawing goes: that bone's drawing screen, which is the
+                // only place a file with this name can come from.
+                openPartFiles(folder, layer.bone)
+            }
+        } else if (!bone.isEmpty() || id.isNotEmpty()) {
+            row(getString(R.string.depth_unused_recreate, id)) { recreateState(bone, id) }
+        }
+        row(getString(R.string.depth_unused_always)) {
+            depthLayers[index] = layer.copy(state = "")
+            buildDepthPane()
+        }
+        row(getString(R.string.depth_unused_drop)) {
+            if (index in depthLayers.indices) depthLayers.removeAt(index)
+            buildDepthPane()
+        }
+        dialog.show()
+    }
+
+    /**
+     * Put a state back, at the level the layer's tag names.
+     *
+     * A tag with a bone on it belongs to that PART (「这只手在出汗」), without one to the
+     * character. Rebuilding it at the wrong level produces a state that exists and still does
+     * not turn this drawing on -- which is the same bug wearing a hat.
+     */
+    private fun recreateState(bone: String, id: String) {
+        val folder = opened ?: return
+        val clean = RigEdit.sanitise(id).ifEmpty { "state" }
+        val ok = if (bone.isEmpty()) {
+            val spec = store.loadLogic(folder.id)
+            val next = spec.copy(states = spec.states + StateSpec(clean, clean, false))
+            store.saveLogic(folder.id, next)
+        } else {
+            val subject = Subjects.part(bone)
+            val spec = store.loadObjectLogic(folder)[subject] ?: return
+            store.saveObjectLogic(
+                folder, subject,
+                spec.copy(states = spec.states + StateSpec(clean, clean, false)),
+            )
+        }
+        if (ok) {
+            depthStates = store.loadLogic(folder.id).states
+            // The state that was just made counts as declared right away: it is the whole point
+            // of making it, and a row still wearing ⚠ after the fix would say it did not work.
+            val tag = if (bone.isEmpty()) clean else Subjects.stateTag(bone, clean)
+            depthDeclared = depthDeclared + tag
+            Toast.makeText(this, getString(R.string.depth_unused_recreated, clean), Toast.LENGTH_SHORT)
+                .show()
+        } else {
+            Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+        }
+        buildDepthPane()
+    }
+
     private fun moveDepth(index: Int, step: Int) {
         val shown = depthLayers.indices.filter { depthShows(depthLayers[it]) }
         val here = shown.indexOf(index)
@@ -1847,6 +2008,7 @@ class MainActivity : AppCompatActivity() {
             }
             filterRow.addView(c)
         }
+        val unused = depthLayers.count { depthUnusedReason(folder, it) != null }
         filterChip(getString(R.string.depth_filter_all), null, depthLayers.size)
         filterChip(
             getString(R.string.depth_filter_none), "",
@@ -1855,6 +2017,15 @@ class MainActivity : AppCompatActivity() {
         for ((key, text) in keys) {
             filterChip(text, key, depthLayers.count { it.state.removePrefix("!") == key })
         }
+        // The row that matters most when something is wrong is the one that finds it: a layer
+        // nobody can see is a layer nobody looks for.
+        val unusedChip = chip(getString(R.string.depth_filter_unused) + " " + unused, depthUnusedOnly, 11f)
+        unusedChip.setOnClickListener {
+            depthUnusedOnly = !depthUnusedOnly
+            if (depthUnusedOnly) depthFilter = null
+            buildDepthPane()
+        }
+        filterRow.addView(unusedChip)
         depthList.addView(filterRow)
         if (depthFilter != null) {
             depthList.addView(
@@ -1864,7 +2035,7 @@ class MainActivity : AppCompatActivity() {
 
         // Front first: the top of the list is the part drawn last, so it covers the rest.
         // A filtered view keeps that order and drops the rows it is not about.
-        val shown = depthLayers.indices.filter { depthShows(depthLayers[it]) }
+        val shown = depthLayers.indices.filter { depthShows(folder, depthLayers[it]) }
         for (realIndex in shown.reversed()) {
             val layer = depthLayers[realIndex]
             val row = LinearLayout(this).apply {
@@ -1896,11 +2067,26 @@ class MainActivity : AppCompatActivity() {
 
             // The state chip: which switch this part belongs to. Tapping it is how a
             // drawing becomes "the shirt" without the app having to know what a shirt is.
+            // 用不上的一行，自己说出来：它现在**不会**被画出来，而这一页是唯一能看出
+            // 来的地方。点它就是修（换状态 / 重建那个状态 / 去导入那张图 / 删掉这一层）。
+            val unused = depthUnusedReason(folder, layer)
+            if (unused != null) {
+                val warn = label("⚠ " + getString(R.string.depth_unused), 10f, WARN)
+                warn.setPadding(dp(8), dp(6), dp(8), dp(6))
+                warn.background = getDrawable(R.drawable.menu_item_idle)
+                warn.setOnClickListener { askFixLayer(realIndex) }
+                row.addView(warn)
+            }
+
             val stateChip = label(stateChipText(layer), 10f, MUTED)
             stateChip.setPadding(dp(8), dp(6), dp(8), dp(6))
             stateChip.background = getDrawable(R.drawable.menu_item_idle)
             stateChip.setOnClickListener { askPartState(realIndex) }
             row.addView(stateChip)
+
+            if (unused != null) {
+                row.setOnClickListener { askFixLayer(realIndex) }
+            }
 
             val up = label("▲", 13f, INK)
             up.setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -2124,19 +2310,12 @@ class MainActivity : AppCompatActivity() {
     private fun stateChipText(layer: LayerSpec): String {
         if (layer.state.isEmpty()) return getString(R.string.depth_state_none)
         val off = layer.state.startsWith("!")
-        // The tag says which level it is, so "which state is this" is answerable without
-        // guessing: a bone prefix means that part's own state, no prefix means the
-        // character's. See Subjects.tagBone.
-        val bone = Subjects.tagBone(layer.state)
+        // "Which state is this, and is it still there" is answered by one place (stateDeclared,
+        // over the cached set) -- it used to be answered here a second way, which is two
+        // answers to one question and a matter of time before they disagree.
         val id = Subjects.tagState(layer.state)
-        val known = if (bone.isEmpty()) {
-            depthStates.any { it.id == id }
-        } else {
-            store.loadObjectLogic(editingFolder())[Subjects.part(bone)]?.states
-                ?.any { it.id == id } == true
-        }
         return getString(R.string.depth_state) + (if (off) "不" else "") +
-            (if (known) stateLabel(layer.state) else id + "（已不存在）")
+            (if (stateDeclared(layer.state)) stateLabel(layer.state) else id + "（已不存在）")
     }
 
     /**
@@ -6756,6 +6935,9 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         val INK = Color.parseColor("#FF171528")
         val MUTED = Color.parseColor("#A6171528")
+
+        /** 用不上的那一行：它现在不会被画出来，所以它不该长得像别的行。 */
+        val WARN = Color.parseColor("#FFB4212B")
 
         /** The stick figure in an action-list row: solid when it is the one being held. */
         /** The colours a liquid can be. A palette, not a picker: eight swatches is a

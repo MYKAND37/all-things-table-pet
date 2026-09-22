@@ -109,6 +109,16 @@
     <string name="depth_title">图层与深度</string>
     <string name="depth_entry">图层与深度</string>
     <string name="depth_hint">上面的在前面（会盖住下面的）。点箭头调整。</string>
+    <string name="depth_unused">用不上</string>
+    <string name="depth_unused_no_art">这一层要画 parts/%1$s.png，而这张图不在</string>
+    <string name="depth_unused_state">这一层等着状态「%1$s」，而它已经不存在了（所以永远不会被打开）</string>
+    <string name="depth_unused_repick">改成别的状态 / 总是画的…</string>
+    <string name="depth_unused_recreate">重新建一个叫「%1$s」的状态</string>
+    <string name="depth_unused_recreated">状态「%1$s」建好了（默认关着）</string>
+    <string name="depth_unused_import">去给 %1$s 导入一张图…</string>
+    <string name="depth_unused_always">这一层改成「总是画的」</string>
+    <string name="depth_unused_drop">删掉这一层</string>
+    <string name="depth_filter_unused">用不上</string>
     <string name="depth_filter_all">全部</string>
     <string name="depth_filter_none">总是画的</string>
     <string name="depth_filter_hint">上面这一行是过滤：只显示这一组。▲▼ 在这一组**内部**换位，别的状态的行原地不动 —— 顺序还是那一个顺序。</string>
