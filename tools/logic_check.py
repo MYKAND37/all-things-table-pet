@@ -828,6 +828,18 @@ def main():
     e.step(0.6)
     report("its order is preserved", e.value["H"] == 40.0, str(e.value["H"]))
 
+    # 计时器在**最前面**：一条「等两秒再做 A」的规则。图上第一个执行器前面那个「＋计时器」
+    # 盒子插的就是这个位置（1.16.0），所以引擎这边得先说清楚它会等 —— 一个插在开头的计时器
+    # 如果不是"整条规则先停两秒"，那这个入口就是在骗人。
+    e = Engine({"stats": [], "rules": [{"on": "click", "then": [
+        {"kind": "wait", "value": 2.0},
+        {"kind": "say", "text": "A"}]}]})
+    out = e.handle("click")
+    report("计时器插在第一个执行器前面：现在什么都不做", says(out) == [], str(says(out)))
+    report("1 秒时还没到", says(e.step(1.0)) == [])
+    later = says(e.step(1.1))
+    report("2 秒后才发生", later == ["A"], str(later))
+
     print("\nrules run in the order they are written")
     e = Engine({"stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100}],
                 "rules": [

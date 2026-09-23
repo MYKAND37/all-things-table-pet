@@ -50,6 +50,7 @@
     <string name="overlay_close">收回</string>
     <string name="overlay_mode_touchable">可摸宠物（点这里切成穿透）</string>
     <string name="overlay_mode_through">点得穿（点这里切回可摸）</string>
+    <string name="overlay_switch_failed">切换没成功：窗口被系统收走过，再点一下试试</string>
     <string name="overlay_channel">桌面上的桌宠</string>
     <string name="overlay_channel_hint">桌宠浮在别的应用上面的时候，这里一直有一条通知</string>
     <string name="overlay_title">桌宠在桌面上</string>
@@ -524,6 +525,8 @@
     <string name="state_use_layers">用在 %1$d 张图</string>
     <string name="state_use_rules">%1$d 条规则读它</string>
     <string name="logic_module_if">加一个条件</string>
+    <string name="logic_module_timer">计时器</string>
+    <string name="logic_timer_seconds">等多久（秒）</string>
     <string name="logic_module_action">加一个动作</string>
     <string name="logic_module_else">加一个否则</string>
     <string name="logic_when">当：</string>

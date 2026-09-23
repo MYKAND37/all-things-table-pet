@@ -333,6 +333,7 @@ class MainActivity : AppCompatActivity() {
                     LogicGraphView.Node.IF -> askCondition(rule, node.index, node.branch)
                     LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index, node.branch)
                     LogicGraphView.Node.ADD -> addModule(rule, node.index, node.branch)
+                    LogicGraphView.Node.TIMER -> askTimer(rule, node.index, false, node.branch)
                     // The row's own label ("分支 2 · 都会响") is the way into the branch.
                     LogicGraphView.Node.ELSE -> askBranch(rule, node.branch)
                     else -> askAction(rule, node.index, branch = node.branch)
@@ -342,6 +343,8 @@ class MainActivity : AppCompatActivity() {
                 LogicGraphView.Node.IF -> askCondition(rule, node.index)
                 LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index)
                 LogicGraphView.Node.ADD -> addModule(rule, node.index)
+                LogicGraphView.Node.TIMER -> askTimer(rule, node.index, false, -1)
+                LogicGraphView.Node.TIMER_ELSE -> askTimer(rule, node.index, true, -1)
                 else -> askAction(rule, node.index, node.role == LogicGraphView.Node.ELSE)
             }
         }
@@ -4361,8 +4364,13 @@ class MainActivity : AppCompatActivity() {
                 )
             )
 
+            // 执行器之间（和第一个执行器之前）各留一个「＋计时器」的盒子：一条规则是一串
+            // 顺序执行，「先做 A，等两秒，再做 B」这句话以前写不出来 —— 行尾那个「＋动作」
+            // 只会往最后追加，计时器落在最后一个执行器后面，什么也等不到。见 askTimer。
             for ((ai, a) in rule.actions.withIndex()) {
+                if (ai == 0) row.add(timerNode(0, -1, elseList = false))
                 row.add(LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai))
+                if (ai < rule.actions.size - 1) row.add(timerNode(ai + 1, -1, elseList = false))
             }
             row.add(
                 LogicGraphView.Node(
@@ -4385,7 +4393,11 @@ class MainActivity : AppCompatActivity() {
             } else {
                 row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf("都不成立时"), -1))
                 for ((ai, a) in rule.elseActions.withIndex()) {
+                    if (ai == 0) row.add(timerNode(0, -1, elseList = true))
                     row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf(actionText(a)), ai))
+                    if (ai < rule.elseActions.size - 1) {
+                        row.add(timerNode(ai + 1, -1, elseList = true))
+                    }
                 }
                 row.add(
                     LogicGraphView.Node(
@@ -4447,11 +4459,14 @@ class MainActivity : AppCompatActivity() {
                     )
                 )
                 for ((ai, a) in branch.actions.withIndex()) {
+                    // 分支自己的执行器之间也一样能插计时器：每个分支是一条独立的顺序。
+                    if (ai == 0) bRow.add(timerNode(0, bi, elseList = false))
                     bRow.add(
                         LogicGraphView.Node(
                             LogicGraphView.Node.THEN, listOf(actionText(a)), ai, bi,
                         )
                     )
+                    if (ai < branch.actions.size - 1) bRow.add(timerNode(ai + 1, bi, elseList = false))
                 }
                 bRow.add(
                     LogicGraphView.Node(
@@ -6251,6 +6266,38 @@ class MainActivity : AppCompatActivity() {
      * nothing to fork from a detector that did not fire -- so a branch asking for one gets an
      * action, which is the only sensible reading of the tap.
      */
+    /**
+     * 两个执行器之间那个「＋计时器」的盒子。
+     *
+     * [at] 是**它插进去以后的位置**，不是它旁边的执行器序号：盒子属于那个"空档"，所以
+     * 第一个执行器前面那个盒子是 0，第 i 和第 i+1 个之间那个是 i+1。
+     *
+     * [elseList] 用角色的不同来说"它属于哪一张表"（见 LogicGraphView.Node）：一个盒子说不
+     * 出自己在 就 还是 否则 里，就像 否则 里的执行器盒子角色是 ELSE 而不是 THEN 一样。
+     */
+    private fun timerNode(at: Int, branch: Int, elseList: Boolean): LogicGraphView.Node =
+        LogicGraphView.Node(
+            if (elseList) LogicGraphView.Node.TIMER_ELSE else LogicGraphView.Node.TIMER,
+            listOf(getString(R.string.logic_module_timer)),
+            at,
+            branch,
+        )
+
+    /**
+     * 插一个计时器：等几秒，然后继续往下做。
+     *
+     * 它就是「等一会儿」这个模块（引擎一直支持它 —— 一个在中间的 wait 会把**剩下的**动作
+     * 记下来、到点了接着跑），只是现在能在任何位置插进去。以前只能加在行尾，而加在行尾的
+     * 计时器什么也等不到：它后面没有动作了。
+     */
+    private fun askTimer(index: Int, at: Int, isElse: Boolean, branch: Int) {
+        // 和「就 → 等一会儿」那个动作同一组数字：两个门进的是同一个模块，范围不一样
+        // 只会让人以为它们是两种东西。
+        askNumber(getString(R.string.logic_timer_seconds), 0.5f, 0f, 30f) { seconds ->
+            insertAction(index, at, isElse, branch, ActionSpec(ActionKind.WAIT.id, value = seconds))
+        }
+    }
+
     private fun addModule(index: Int, what: Int, branch: Int = -1) {
         val rule = logicRules.getOrNull(index) ?: return
         if (branch >= 0) {
@@ -7081,6 +7128,26 @@ class MainActivity : AppCompatActivity() {
             index,
             if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
         )
+    }
+
+    /**
+     * 在动作表里**插入**一个模块，[at] 之后的所有动作往后挪一位。
+     *
+     * 和 [putAction] 分开是因为它们是两件事：putAction 是"第 i 个改成这个"（i 越界就是追加），
+     * 而这是"在这里多一个"。行尾那个「＋动作」盒子只会追加，所以一条规则以前只有一种写法
+     * —— 想「先 A、等两秒、再 B」就得先加计时器再想办法挪，而挪的办法不存在。
+     */
+    private fun insertAction(
+        index: Int,
+        at: Int,
+        isElse: Boolean,
+        branch: Int,
+        action: ActionSpec,
+    ) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val list = editTarget(rule, isElse, branch)?.toMutableList() ?: return
+        list.add(at.coerceIn(0, list.size), action)
+        putActions(index, list, isElse, branch)
     }
 
     private fun putAction(

@@ -38,7 +38,7 @@ class LogicGraphView @JvmOverloads constructor(
     /**
      * One box. [role] is 0 for 当, 1 for 如果, 2 for 就, 3 for 否则 — which is also its colour.
      *
-     * Two more roles, and they are what makes the graph an assembly rather than a readout:
+     * Three more roles, and they are what makes the graph an assembly rather than a readout:
      *
      *   * [CONNECTOR] is the small pill between two 如果 boxes that says 而且 or 或者. Its
      *     [index] is the clause it sits in front of, because that is the clause whose join
@@ -46,6 +46,12 @@ class LogicGraphView @JvmOverloads constructor(
      *   * [ADD] is a module that is not there yet: "＋ 加一个如果", "＋ 加一个动作". Its
      *     [index] says what to add — [ADD_CONDITION], [ADD_ACTION] or [ADD_ELSE] — because
      *     an action belongs to one of two branches and a box in a row cannot say which.
+     *   * [TIMER] is the box BETWEEN two executors, "＋ 计时器": a rule is a sequence, and
+     *     「先做 A，等两秒，再做 B」 is a sentence the end-of-row ADD box could not write (it
+     *     appends, so the timer landed after the last action, where it delays nothing). Its
+     *     [index] is where the timer goes, not which action it is: the box belongs to the gap.
+     *     A gap in the 否则 list is [TIMER_ELSE], because a box cannot say which of a rule's two
+     *     action lists it is in — the same reason an 否则 action box is role ELSE and not THEN.
      *
      * [branch] is which 并行分支 row the box sits on, or -1 for the rule's own row. Both rows
      * hold the same three boxes -- a 当, an 如果, a 就 -- and they look identical on purpose, so
@@ -67,6 +73,8 @@ class LogicGraphView @JvmOverloads constructor(
             const val ELSE = 3
             const val CONNECTOR = 4
             const val ADD = 5
+            const val TIMER = 6
+            const val TIMER_ELSE = 7
 
             const val ADD_CONDITION = 1
             const val ADD_ACTION = 2
@@ -167,6 +175,8 @@ class LogicGraphView @JvmOverloads constructor(
         Node.THEN -> 0xFF2E9E6B.toInt()
         Node.ELSE -> 0xFF7A7A88.toInt()
         Node.CONNECTOR -> 0xFFB0752A.toInt()
+        // 计时器在"就"那一段里，所以它借"就"的颜色：它是一次执行的一部分，只是先等一下。
+        Node.TIMER, Node.TIMER_ELSE -> 0x662E9E6B.toInt()
         else -> 0xFF9AA0AE.toInt()
     }
 
@@ -176,6 +186,7 @@ class LogicGraphView @JvmOverloads constructor(
         Node.THEN -> "就"
         Node.ELSE -> "否则"
         Node.CONNECTOR -> ""
+        // 计时器盒子是"这里还空着"的盒子（和 ADD 一样是 ＋），里面的字说明插什么。
         else -> "＋"
     }
 

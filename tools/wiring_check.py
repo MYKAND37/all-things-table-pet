@@ -530,6 +530,53 @@ def main():
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
 
+    print("== 执行器之间能插计时器：盒子在空档里，插入不是替换 ==")
+    # 「在一个逻辑中如果有多个执行器，应能在执行器中间插入计时器，第一个执行器前也可以」。
+    # 引擎那一半早就有（一个在中间的 wait 会把剩下的动作记下来、到点接着跑，logic_check 里
+    # 几条断言盯着），缺的是编辑器：行尾那个「＋动作」只会追加，所以计时器只能落在最后一个
+    # 执行器后面 —— 那里它什么也等不到。这一版加的是**空档里的盒子**。
+    graph_kt = next((t for p, t in files.items() if p.endswith("LogicGraphView.kt")), "")
+    report("图里多了一个「空档」角色（＋计时器），否则/分支各一个",
+           "const val TIMER = 6" in graph_kt and "const val TIMER_ELSE = 7" in graph_kt)
+    report("就 / 否则 / 每个分支的执行器之间都放了它",
+           activity.count("timerNode(") >= 6 and "branch.actions.size - 1" in activity
+           and "rule.elseActions.size - 1" in activity and "rule.actions.size - 1" in activity)
+    report("点它问的是秒数，插的是「等一会儿」",
+           "private fun askTimer(" in activity
+           and "ActionSpec(ActionKind.WAIT.id, value = seconds)" in activity)
+    # 插入和替换是两件事：putAction 是"第 i 个改成这个"，insertAction 是"这里多一个"。
+    insert = activity[activity.find("private fun insertAction("):]
+    insert = insert[:insert.find("\n    }")]
+    report("插入是插入（后面的往后挪），不是替换",
+           "list.add(at.coerceIn(0, list.size), action)" in insert
+           and "list[actionIndex] = action" not in insert)
+    report("插到最前面也算（第一个执行器之前）", "coerceIn(0, list.size)" in insert)
+    report("空档盒子的文案真的被用上（＋ / 计时器）",
+           "logic_module_timer" in activity and "logic_timer_seconds" in activity)
+
+    print("== 桌面穿透：alpha 也要压下去（Android 12 的「不可信触摸」）==")
+    # 「召唤到桌面上后无法穿透点到后面的屏幕，切换功能了也不行」。FLAG_NOT_TOUCHABLE 设了、
+    # 按钮也切了、界面也变了 —— 手指还是穿不过去，因为 Android 12 起，从**不透明**的悬浮窗
+    # 穿过去的触摸会被系统直接丢掉（logcat: "Untrusted touch due to occlusion by <包名>"），
+    # 而"够不够透明"看的是窗口自己的 alpha：合成不透明度**大于 0.8** 就不放行。
+    # 所以这一版把两个窗口的 alpha 一起压到 0.8 以下。
+    report("穿透时把窗口 alpha 压到 0.8 以下",
+           "PASS_THROUGH_ALPHA = 0.79f" in overlay
+           and "p.alpha = if (on) 1f else PASS_THROUGH_ALPHA" in overlay)
+    report("两个窗口都压（这条规则算的是一组系统警告窗）",
+           "stripParams?.alpha = if (on) 1f else PASS_THROUGH_ALPHA" in overlay
+           and "private var stripParams: WindowManager.LayoutParams? = null" in overlay)
+    report("标志仍然照设（alpha 不是替代品，是另一半）",
+           "FLAG_NOT_TOUCHABLE" in overlay)
+    report("更新失败会重新挂一次窗口，而不是无声无息",
+           "private fun applyParams(" in overlay and "window.removeView(view)" in overlay
+           and "window.addView(view, params)" in overlay)
+    report("切不过去就说出来，而且状态不假装已经切了",
+           "val ok = applyParams(" in overlay and "touchable = if (ok) on else was" in overlay
+           and "overlay_switch_failed" in overlay)
+    report("初始状态也从同一个地方落地（两个窗口一个说法）",
+           "setTouchable(touchable)" in overlay)
+
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
     decl = re.compile(

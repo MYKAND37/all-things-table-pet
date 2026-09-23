@@ -53,6 +53,7 @@ class PetOverlayService : Service() {
     private var strip: View? = null
     private var toggleTag: TextView? = null
     private var petParams: WindowManager.LayoutParams? = null
+    private var stripParams: WindowManager.LayoutParams? = null
     private var pet: PhysicsSandboxView? = null
     private var touchable = true
 
@@ -199,8 +200,10 @@ class PetOverlayService : Service() {
             x = dp(10)
             y = dp(10)
         }
+        stripParams = sp
         runCatching { window.addView(bar, sp) }
-        refreshStrip()
+        // 初始状态也从这一个地方落地：两个窗口的 alpha 和触摸标志只有一处说了算。
+        setTouchable(touchable)
     }
 
     private val baseFlags: Int
@@ -245,18 +248,47 @@ class PetOverlayService : Service() {
      *
      * 全屏那一层如果一直收触摸，底下的 App 就等于被一块透明玻璃盖住了 —— 所以这两个状态
      * 必须能切，而且切换的按钮必须在**另一层**上（不然穿透之后就没有东西能把它切回来）。
+     *
+     * **光有 FLAG_NOT_TOUCHABLE 不够，这是这一版修的东西。** Android 12 起有一条
+     * 「不可信触摸」规则：从**不透明的悬浮窗**穿过去的触摸，系统直接丢掉（logcat 里是
+     * "Untrusted touch due to occlusion by <包名>"）。TYPE_APPLICATION_OVERLAY 的窗口
+     * 明说了不算可信窗口，而"够不够透明"看的是**窗口自己的 alpha**：系统把一组系统警告窗
+     * 的合成不透明度算出来，**大于 0.8 就不放行**（Android 12 的默认上限就是 0.8）。
+     * 我们这个窗口是全屏的、alpha 是 1，所以标志设对了、按钮也切了、界面也变了 ——
+     * 手指还是穿不过去，而且什么都不报。
+     *
+     * 所以穿透时把两个窗口的 alpha 一起压到 [PASS_THROUGH_ALPHA]（0.8 以下）：宠物会
+     * 淡一点点（20%），换来的是"点得穿"真的点得穿。控制条也一起压 —— 它也是系统警告窗，
+     * 而这条规则算的是**一组**窗口的合成值。
      */
     private fun setTouchable(on: Boolean) {
         val p = petParams ?: return
+        val was = touchable
         p.flags = if (on) {
             baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         } else {
             baseFlags or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
         }
-        petRoot?.let { runCatching { window.updateViewLayout(it, p) } }
-        touchable = on
+        p.alpha = if (on) 1f else PASS_THROUGH_ALPHA
+        stripParams?.alpha = if (on) 1f else PASS_THROUGH_ALPHA
+        // 两个窗口各自更新；updateViewLayout 会在窗口被系统收走之后抛异常，
+        // 那种情况重新挂一次（参数是新的那一份），别再无声无息地什么都不做。
+        val ok = applyParams(petRoot, p) and applyParams(strip, stripParams)
+        touchable = if (ok) on else was
+        if (!ok) {
+            // 说不了话的开关比没有这个开关更糟：界面上的字会变，手指底下什么都没发生。
+            Toast.makeText(this, R.string.overlay_switch_failed, Toast.LENGTH_SHORT).show()
+        }
         refreshStrip()
+    }
+
+    /** 更新一个窗口的参数；窗口被收走过就重新挂一次。false = 两样都没成。 */
+    private fun applyParams(view: View?, params: WindowManager.LayoutParams?): Boolean {
+        if (view == null || params == null) return true
+        if (runCatching { window.updateViewLayout(view, params) }.isSuccess) return true
+        runCatching { window.removeView(view) }
+        return runCatching { window.addView(view, params) }.isSuccess
     }
 
     private fun dp(value: Int): Int = TypedValue.applyDimension(
@@ -304,6 +336,15 @@ class PetOverlayService : Service() {
         const val ACTION_POSE = "dev.atp.pet.overlay.POSE"
         const val ACTION_SETTINGS = "dev.atp.pet.overlay.SETTINGS"
         const val EXTRA_ID = "id"
+
+        /**
+         * 穿透时窗口的不透明度。
+         *
+         * Android 12 起，从悬浮窗穿过去的触摸在窗口**合成不透明度 > 0.8** 时会被系统丢掉
+         * （见 setTouchable 那段注释和系统文档的 "Untrusted touch events are blocked"）。
+         * 0.8 是官方写的上限，取 0.79 留一点余量；代价是穿透的时候宠物淡 20%。
+         */
+        private const val PASS_THROUGH_ALPHA = 0.79f
 
         private const val CHANNEL = "pet_overlay"
         private const val NOTIFICATION_ID = 4711
