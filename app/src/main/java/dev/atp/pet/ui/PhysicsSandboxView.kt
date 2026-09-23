@@ -135,7 +135,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private val worldFacts = object : RuleEngine.Facts {
         override fun at(bone: String): Vec2? {
             if (bone.isEmpty()) return ragdoll?.rootPos
-            return skeleton?.find(bone)?.worldPosition
+            // 名字 → 位置只有这一个入口，而且它认得节点：见 Skeleton.place。规则里写
+            // 「指尖比肩膀高」和一节骨头一样该有答案。
+            return skeleton?.place(bone)
         }
 
         override fun tied(bone: String): Boolean = lines.any { line ->
@@ -143,6 +145,28 @@ class PhysicsSandboxView @JvmOverloads constructor(
             fun hit(name: String?): Boolean = name != null && name.isNotEmpty() &&
                 (bone.isEmpty() || name == bone || name.startsWith(bone))
             hit(line.a.bone) || hit(line.b.bone)
+        }
+
+        /**
+         * 别人的开关：谁声明过就归谁，按**标签**找（角色自己的状态就是它的名字，一节自己的
+         * 是 `骨头:状态`，见 Subjects.stateTag）。engineFor 就是那张地址表。
+         */
+        override fun switchOn(tag: String): Boolean? {
+            val e = engineFor(tag) ?: return null
+            return e.stateOn(Subjects.tagState(tag))
+        }
+
+        override fun setSwitch(tag: String, on: Boolean): Boolean {
+            val e = engineFor(tag) ?: return false
+            val id = Subjects.tagState(tag)
+            // 没人声明过的开关不凭空造：造出来的那个只活在某一台引擎的 map 里，图看不到、
+            // 别的规则也看不到 —— 一个"成功"了的空操作。
+            if (id !in e.states) return false
+            e.states[id] = on
+            // 开关能决定画哪张图，所以改完要重画。这里是 UI 线程（求解和规则都在同一串里），
+            // 和 toggleState 走的是同一条路。
+            invalidate()
+            return true
         }
     }
 
@@ -1383,7 +1407,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     }
                     val rag = ragdoll ?: continue
                     val sk = skeleton ?: continue
-                    val bone = sk.find(a.bone.ifEmpty { event?.part ?: "" }) ?: sk.root
+                    // 名字要是节点，推的是它长在的那一节：`find` 只认骨头，一个节点名
+                    // 会一路掉到 `?: sk.root` —— 「推一下 · 指尖」推的是整只宠物。
+                    val bone = sk.boneFor(a.bone.ifEmpty { event?.part ?: "" }) ?: sk.root
                     rag.impulse(bone, dir, a.value)
                 }
                 // 隐藏 / 显示：骨架和物理一点都不动，动的只是"画不画它"。
@@ -1452,7 +1478,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
             // The part's own place on the figure. This is what makes "让手流汗" work as one
             // rule: the spray lands on the hand whether the rule fired on a tick, on being
             // hit, or on anything else that did not name a bone.
-            return skeleton?.find(Subjects.partId(subject))?.worldPosition
+            //
+            // A NODE is a part subject too (the panel lists bones and nodes in one list), so
+            // this goes through `place` rather than `find`: a rule on 指尖 used to resolve to
+            // nothing at all, and every spray, puddle and bubble it made landed at the pet's
+            // home spot instead of on the fingertip.
+            return skeleton?.place(Subjects.partId(subject))
         }
         if (Subjects.isProp(subject)) {
             val id = Subjects.objectId(subject)
@@ -1476,12 +1507,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     private fun pointOf(event: GameEvent?): Vec2 {
         subjectPoint(acting)?.let { return it }
-        val sk = skeleton ?: return Vec2.ZERO
+        if (skeleton == null) return Vec2.ZERO
+        // 事件里的 `part` 也是一个名字，而且可能是个**节点**：「被点一下 · 指尖」要喷在指尖
+        // 上，不是喷在宠物家位上。走同一个 place。
         val name = event?.part ?: ""
-        if (name.isNotEmpty()) {
-            val bone = sk.find(name)
-            if (bone != null) return bone.worldPosition
-        }
+        if (name.isNotEmpty()) skeleton?.place(name)?.let { return it }
         return Vec2(homeX(), homeY() - 400f)
     }
 
@@ -2044,7 +2074,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private fun detachBone(name: String) {
         val sk = skeleton ?: return
-        val bone = sk.find(name) ?: return
+        // 断开的是**一节**，所以节点名按它长在的那一节算：「断开 · 指尖」是把手拆下来，
+        // 不是什么都不发生。
+        val bone = sk.boneFor(name) ?: return
         val rag = ragdoll ?: return
 
         // The whole limb, not the joint that was named: a shoulder that comes off takes the

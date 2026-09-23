@@ -161,14 +161,23 @@ def hears(subject, event):
 class Facts:
     """Mirror of RuleEngine.Facts: 只有世界知道的事。
 
-    手在哪儿、有没有被绳子连着 —— 这两样既不是角色身上的数字，也不是谁声明的状态，
-    所以引擎问、世界答。没有世界（facts is None）时，这两种条件一律读作**不成立**：
-    和"未知种类的条件"同一条规矩，新版本写的规则不能让老版本整个文件停摆。
+    手在哪儿、有没有被绳子连着、**别人的开关是开是关** —— 这三样既不是角色身上的数字，
+    也不是这台引擎自己声明的东西，所以引擎问、世界答。没有世界（facts is None）时，这些
+    条件一律读作**不成立**：和"未知种类的条件"同一条规矩，新版本写的规则不能让老版本整个
+    文件停摆。
+
+    开关那一对（switch_on / set_switch）是后加的：一个角色的开关是**一套地址**，角色自己的
+    状态就是它的名字，一节自己的是 `骨头:状态`（见 Subjects.stateTag）。每台引擎留住自己
+    文件里声明过的那些，别的名字一律问世界 —— 这就是「手上的规则也能问角色的穿着」。
     """
 
-    def __init__(self, positions=None, tied=()):
+    def __init__(self, positions=None, tied=(), switches=None):
         self.positions = dict(positions or {})
         self.tied_bones = set(tied)
+        #: 别人的开关，名字 → 开/关。世界就是那张地址表。
+        self.switches = dict(switches or {})
+        #: 每一次问世界都记下来，好断言"自己的开关没有绕远路去问世界"。
+        self.switch_reads = []
 
     def at(self, bone):
         return self.positions.get(bone)
@@ -178,6 +187,17 @@ class Facts:
         if not bone:
             return bool(self.tied_bones)
         return any(b == bone or b.startswith(bone) for b in self.tied_bones)
+
+    def switch_on(self, tag):
+        self.switch_reads.append(tag)
+        # None = 谁都没声明过这个名字（Kotlin 那边是可空的 Boolean）。
+        return self.switches.get(tag)
+
+    def set_switch(self, tag, on):
+        if tag not in self.switches:
+            return False
+        self.switches[tag] = on
+        return True
 
 
 class Engine:
@@ -201,6 +221,9 @@ class Engine:
         #: 是唯一一种错了也不出声的动作。
         self.no_targets = []
         self.lines = []
+        #: 世界不认识的开关。Kotlin 那边往日志里写一行"没有这个状态，没有改"；镜像记下来，
+        #: 因为可断言的是"引擎注意到了"，日志那一句由 wiring_check 盯源码。
+        self.refused = []
         self.ticks = 0
         self.TICK = 0.5
 
@@ -227,6 +250,36 @@ class Engine:
 
     def state_on(self, sid):
         return self.states.get(sid, False)
+
+    def switch_of(self, name):
+        """Mirror of RuleEngine.switchOf: 自己声明过的看自己的 map，别的名字问世界。
+
+        "自己声明过的"就是这台引擎 spec 里那些 —— 外来名字永远不会被写进 self.states，
+        否则一节手上的规则会拿到一份会漂的副本，而不是角色的那个开关本身。
+        """
+        if not name:
+            return False
+        if name in self.states:
+            return self.states[name]
+        f = self.facts
+        if f is None:
+            return False
+        return f.switch_on(name) is True
+
+    def set_switch(self, name, on):
+        """Mirror of RuleEngine.setSwitch. 世界不认识的开关**什么都不写**，而且说出来。
+
+        改之前是 `states[name] = on`，谁声明过都照写：于是一节手上的规则把「穿着」打开，
+        打开的是一个只活在那台引擎 map 里的开关 —— 图层看不到、别的规则也看不到，
+        一条看起来成功了的空操作。"""
+        if not name:
+            return
+        if name in self.states:
+            self.states[name] = on
+            return
+        f = self.facts
+        if f is None or not f.set_switch(name, on):
+            self.refused.append(name)
 
     def holds(self, rule):
         """规则自己的如果。分支的如果走同一个 holds_conditions，见那里。"""
@@ -259,9 +312,10 @@ class Engine:
             # written the way a person would say it out loud.
             return self.rng.random() * 100.0 < c.get("value", 0.0)
         if c.get("kind") == "state":
-            # A state the character does not declare reads as off, not as an error:
-            # deleting a state should not make every rule that mentioned it explode.
-            return self.state_on(c.get("state", "")) == (c.get("op", "on") != "off")
+            # 自己声明的看自己的 map，别的名字问世界（见 switch_of）：手上那条规则问
+            # 「穿着」的时候，答案是角色的那一个。谁都不认识的名字读作关着，不是错误 ——
+            # 删掉一个状态不该让每一条提过它的规则炸掉。
+            return self.switch_of(c.get("state", "")) == (c.get("op", "on") != "off")
         if c.get("kind") == "pose":
             # 「手是否比肩膀高」：两节、一个方向、一点余量。屏幕坐标 y 向下，"更高"是
             # y **更小** —— 这种符号在静止姿势里看不出来，换一个姿势就全反。
@@ -316,9 +370,9 @@ class Engine:
             elif k in ("stateOn", "stateOff", "stateToggle"):
                 sid = a.get("state", "")
                 if sid:
-                    before = self.state_on(sid)
+                    before = self.switch_of(sid)
                     after = {"stateOn": True, "stateOff": False}.get(k, not before)
-                    self.states[sid] = after
+                    self.set_switch(sid, after)
             elif k == "wait":
                 rest = actions[i + 1:]
                 if rest:
@@ -998,6 +1052,77 @@ def main():
            hand.state_on("sweat") and not character.state_on("sweat"))
     report("and the character's own rule cannot reach the part's",
            character.state_on("sweat") is False)
+
+    print("\n部件也能问全局的状态（反过来也一样）")
+    # 「然后部件也可以测全局的状态」：一条长在手上的规则要问角色的「穿着」，而面板上原来
+    # 根本列不出来 —— 手上那张表只有它自己的状态。现在每台引擎留住自己文件里声明过的开关，
+    # 别的名字一律问世界（见 switch_of），所以那句话写得出来了。
+    #
+    # 这就是"全局和局部"的边界，写清楚免得下次又要猜：**自己声明过的名字指自己的**，
+    # 别的名字按世界那张地址表找（角色的状态是它的名字，一节自己的是 `骨头:状态`）。
+    # 于是"手上出汗"和"角色出汗"既能各自独立，也能互相问 —— 而同一个名字被两边都声明过时，
+    # 从这里够不着全局的那个（面板不列它，见 MainActivity.switchChoices）。
+    def state_rule(state_name, text):
+        return {"on": "tick", "cooldown": 0,
+                "if": [{"kind": "state", "state": state_name, "op": "on"}],
+                "then": [{"kind": "say", "text": text}]}
+
+    world = Facts(switches={"dressed": True, "hand_L:sweat": False})
+    hand = Engine({"stats": [],
+                   "states": [{"id": "sweat", "name": "出汗", "on": False}],
+                   "rules": [state_rule("dressed", "手：穿着呢"),
+                             state_rule("hand_L:sweat", "手：我在出汗"),
+                             state_rule("sweat", "手：自己那套出汗")]})
+    hand.facts = world
+    report("一节手上的规则能问角色的全局状态",
+           says(hand.handle("tick")) == ["手：穿着呢"], str(says(hand.handle("tick"))))
+    report("而且读它没有在本地留下一份副本（问的是同一个开关）",
+           "dressed" not in hand.states, str(sorted(hand.states)))
+    world.switches["dressed"] = False
+    world.switches["hand_L:sweat"] = True
+    out = says(hand.handle("tick"))
+    report("带着标签的写法指的是那一节自己的开关（面板现在就是这么写的）",
+           out == ["手：我在出汗"], str(out))
+    report("关掉的全局状态就不成立了", "手：穿着呢" not in out, str(out))
+    # 自己的开关不走世界：没有世界它也得能用 —— 这正是"先看自己声明的那些"的理由。
+    # 单独一台引擎，因为一次 tick 会把每一条规则的如果都问一遍，混在一起数不出是谁问的。
+    own_only = Engine({"stats": [], "states": [{"id": "sweat", "name": "出汗", "on": True}],
+                       "rules": [state_rule("sweat", "自己那套出汗")]})
+    world.switch_reads = []
+    own_only.facts = world
+    out = says(own_only.handle("tick"))
+    report("自己声明的名字看自己的 map，不绕世界一圈",
+           out == ["自己那套出汗"] and world.switch_reads == [], str(world.switch_reads))
+    # 写：一节手上的规则改全局状态。改之前 `states[name] = on` 谁声明过都照写，于是
+    # 打开的是一个只活在那台引擎 map 里的开关 —— 图层看不到、别的规则也看不到。
+    world.switches["dressed"] = False
+    hand = Engine({"stats": [], "states": [{"id": "sweat", "name": "出汗", "on": False}],
+                   "rules": [{"on": "tick", "cooldown": 0,
+                              "then": [{"kind": "stateToggle", "state": "dressed"}]}]})
+    hand.facts = world
+    hand.handle("tick")
+    report("手上改全局状态，改的是真的那个", world.switches["dressed"] is True)
+    report("而且是世界里那一个，不是本地多出来的一个",
+           "dressed" not in hand.states, str(sorted(hand.states)))
+    hand.handle("tick")
+    report("再点一次又关掉", world.switches["dressed"] is False)
+    # 谁都没声明过的名字：一个开关都不写，而且**说出来**。写进本地的那条路就是空操作。
+    hand = Engine({"stats": [], "states": [], "rules": [
+        {"on": "tick", "cooldown": 0, "then": [{"kind": "stateOn", "state": "nobody"}]}]})
+    hand.facts = world
+    hand.handle("tick")
+    report("没人声明过的开关：本地不凭空造一个", "nobody" not in hand.states)
+    report("而且记下来了（Kotlin 那边是日志里一行：不然就是一个成功了的空操作）",
+           hand.refused == ["nobody"], str(hand.refused))
+    # 没有世界的时候，别人家的名字一律读作关着 —— 和部位/绳子那两种条件同一条规矩。
+    lonely = Engine({"stats": [], "states": [], "rules": [state_rule("dressed", "在")]})
+    report("没有世界时，别人的开关读作关着", says(lonely.handle("tick")) == [])
+    # 反过来：角色自己的规则问一节自己的开关，也一样（同一个机制，不用第二套）。
+    pet_engine = Engine({"stats": [], "states": [], "rules": [state_rule("hand_L:sweat", "手在出汗")]})
+    pet_engine.facts = Facts(switches={"hand_L:sweat": True})
+    report("角色自己的规则也能问一节自己的开关",
+           says(pet_engine.handle("tick")) == ["手在出汗"],
+           str(says(pet_engine.handle("tick"))))
 
     print("\nTICK is raised on its own schedule")
     e = Engine(default)

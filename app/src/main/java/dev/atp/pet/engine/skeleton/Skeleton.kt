@@ -84,6 +84,43 @@ class Skeleton(val root: Bone) {
     }
 
     /**
+     * Where a NAME is on this rig: a bone, or a node sitting on one.
+     *
+     * Bones and nodes are the same kind of thing to a rule -- the 逻辑管理 panel offers both
+     * as 部位, an event's `part` can be either, and 「被点一下 · 指尖」 is written exactly like
+     * 「被点一下 · hand_L」. So everything that turns a name into a PLACE asks here, and this
+     * is the only place that knows a node is not a bone: [find] is a bone lookup, and code
+     * that used it directly got null for every node name and quietly fell back to "somewhere
+     * near the pet".
+     *
+     * A bone is asked first. RigEdit keeps node names unique against bone names as well, so
+     * today the order cannot matter -- it is written down because "which one wins" is not
+     * something a reader should have to guess from a map lookup.
+     */
+    fun place(name: String): Vec2? {
+        if (name.isEmpty()) return null
+        byName[name]?.let { return it.worldPosition }
+        val node = nodes.firstOrNull { it.name == name } ?: return null
+        return nodePoint(node)
+    }
+
+    /**
+     * The BONE a name belongs to: itself when it names a bone, the one it sits on when it names
+     * a node. Null when the rig has no such name.
+     *
+     * [place] answers "where", this answers "which limb" -- and the callers that need a bone
+     * rather than a point (an impulse, tearing a piece off) are exactly the ones that cannot do
+     * anything sensible with a point. Before this they asked [find], got null for every node
+     * name, and either did nothing at all or aimed at the pet's ROOT: 「推一下 · 指尖」 pushed
+     * the whole character.
+     */
+    fun boneFor(name: String): Bone? {
+        byName[name]?.let { return it }
+        val node = nodes.firstOrNull { it.name == name } ?: return null
+        return byName[node.bone]
+    }
+
+    /**
      * The node under a point, or null. Nearest centre wins, the same rule the props use, and a
      * node is asked before the bone it sits on: a fingertip that has been given a name is a
      * more precise answer than the whole finger, and the finger is still there underneath.

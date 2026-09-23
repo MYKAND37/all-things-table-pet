@@ -217,6 +217,9 @@ def main():
         ("调骨骼时的参考图", "rig_reference"),
         ("重置骨骼", "rig_reset_bones"),
         ("召唤到桌面", "pet_summon"),
+        # 「部件也可以测全局的状态」：挑状态那张表就是入口（「如果」那一排 chip 和
+        # 「就 → 改变状态」共用它）。
+        ("部件测全局的状态", "logic_pick_state"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -407,6 +410,71 @@ def main():
     report("两层各自把 paint 的 alpha 复位（不然下一层继承印子的透明度）",
            particles_kt.count("paint.alpha = 255") >= 2,
            "%d 处复位" % particles_kt.count("paint.alpha = 255"))
+
+    print("== 节点也是主语：名字 → 位置只有一个入口，而且它认得节点 ==")
+    # 「如果选节点作为触发主语，那生成的粒子和液体都应在节点位置」。逻辑面板把骨头和节点
+    # 列成同一张部位表（partNames），而 `Skeleton.find` 只认骨头 —— 一个节点名在那儿得到
+    # null，然后每个调用方掉进自己的兜底：喷出来的东西落在宠物家位上方 400px、推一下推的
+    # 是整只、断开什么都不做。所以盯的是"名字 → 位置"这条路只有一条，而且这条路上有节点。
+    skeleton_kt = next((t for p, t in files.items() if p.endswith("engine/skeleton/Skeleton.kt")), "")
+    report("骨架有「名字 → 位置」这一个入口，先骨头再节点",
+           "fun place(name: String): Vec2?" in skeleton_kt
+           and "byName[name]?.let" in skeleton_kt and "nodePoint(node)" in skeleton_kt)
+    report("也有「名字 → 哪一节」（推一下、断开要的是骨头不是点）",
+           "fun boneFor(name: String): Bone?" in skeleton_kt
+           and "return byName[node.bone]" in skeleton_kt)
+    # 前提：节点真的会被列成主语，不然"选节点"这件事根本不存在。
+    report("测试场把节点也当部件交给规则（Subjects.part(节点的名字)）",
+           "Subjects.part(node.name)" in bench and "for (node in sk.nodes)" in bench)
+    subject_pt = bench[bench.find("private fun subjectPoint"):]
+    subject_pt = subject_pt[:subject_pt.find("\n    }")]
+    point_of = bench[bench.find("private fun pointOf"):]
+    point_of = point_of[:point_of.find("\n    }")]
+    report("主语的位置走 place（部件和节点都算）",
+           "skeleton?.place(Subjects.partId(subject))" in subject_pt
+           and "find(Subjects.partId" not in subject_pt)
+    report("事件里的 part 也走 place（被点一下 · 指尖 喷在指尖上）",
+           "skeleton?.place(name)" in point_of and "sk.find(name)" not in point_of)
+    report("「如果」问世界也走 place（指尖比肩膀高）",
+           "skeleton?.place(bone)" in bench and "skeleton?.find(bone)?.worldPosition" not in bench)
+    report("要骨头的地方走 boneFor（推一下不再是推整只）",
+           "sk.boneFor(a.bone.ifEmpty" in bench and "sk.boneFor(name) ?: return" in bench)
+
+    print("== 部件也能测全局的状态：引擎留住自己的，别的问世界 ==")
+    engine_kt = next((t for p, t in files.items() if p.endswith("RuleEngine.kt")), "")
+    # 「然后部件也可以测全局的状态」。三半缺一不可：引擎那半（自己声明的看自己的 map，
+    # 别的名字问世界）、世界那半（按标签找主人）、以及面板那半（那张表里真的有全局的）。
+    report("Facts 上多了一对开关的问答（读 + 写）",
+           "fun switchOn(tag: String): Boolean? = null" in engine_kt
+           and "fun setSwitch(tag: String, on: Boolean): Boolean = false" in engine_kt)
+    report("引擎先看自己声明的那些，别的名字问世界",
+           "private fun switchOf(name: String): Boolean" in engine_kt
+           and "facts?.switchOn(name) ?: false" in engine_kt
+           and 'val on = switchOf(c.state)' in engine_kt)
+    # 写：改之前是 `states[name] = on`，谁声明过都照写 —— 一个只活在本地 map 里的开关，
+    # 图层看不到、别的规则也看不到，而规则看起来是成功的。
+    report("写的时候也是：自己的直接改，别人的交给世界",
+           "facts?.setSwitch(name, on) != true" in engine_kt
+           and "states[name] = on" in engine_kt)
+    report("世界不认识的开关要在日志里说出来（不然是一个「成功」的空操作）",
+           "这个状态，没有改" in engine_kt)
+    report("测试场按标签找开关的主人，并且不凭空造开关",
+           "override fun switchOn(tag: String): Boolean?" in bench
+           and "override fun setSwitch(tag: String, on: Boolean): Boolean" in bench
+           and "if (id !in e.states) return false" in bench)
+    # 面板：一张表给「如果」和「就」共用，主体自己的在前，然后是全局的、别的部件的。
+    switches = activity[activity.find("private fun switchChoices()"):]
+    switches = switches[:switches.find("\n    private fun buildPetChooser")]
+    report("面板有一张开关表：主体自己的 + 全局的 + 别的部件的",
+           "Subjects.stateTag(part, s.id)" in switches
+           and "store.loadLogic(folder.id).states" in switches
+           and "store.loadObjectLogic(folder)[Subjects.part(bone)]?.states" in switches)
+    report("「如果」和「就」共用这一张表（能问的就能改）",
+           "switchChoices().choices" in activity and "options = switchChoices().choices" in activity)
+    report("重名够不着的那些会说一声，不装作不存在",
+           "shadowed" in switches and "logic_state_shadowed" in activity)
+    report("状态那一段有说明文字（哪个是全局、哪个是这一节的）",
+           "logic_state_scope" in activity)
 
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0

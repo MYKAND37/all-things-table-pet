@@ -741,6 +741,68 @@ class MainActivity : AppCompatActivity() {
         return out
     }
 
+    /**
+     * Every switch a rule being written here may NAME, and the ones it cannot.
+     *
+     * `choices` is (名字, 标签) in the namespace [benchStates] uses -- the character's own
+     * states by their plain name, a part's own as `骨头:状态` -- because that name is what a
+     * rule writes down and what the engine looks up. See Subjects.stateTag.
+     *
+     * The gap this closes: a rule on the HAND could only ever see the hand's own states, so
+     * 「手在出汗的时候解掉衣服」 was a sentence nobody could write from the hand -- the
+     * character's 穿着 was not in the list at all. The engine keeps the switches its own file
+     * declares and asks the world about every other name (RuleEngine.Facts.switchOn), so what
+     * a rule here writes is a NAME the world can route, not an index into one engine's map.
+     *
+     * `shadowed` is the exception, and it is why this returns two lists instead of one. A
+     * global state whose id is also one of the subject's OWN states cannot be reached from
+     * here at all: the engine looks in its own map first (that is what makes its own switch
+     * work with no world attached), so 「穿着」 in a hand's rule means the HAND's 穿着 when the
+     * hand declares one. Listing it anyway would be a chip that turns on a different switch
+     * from the one it names, so it is left out and said out loud.
+     */
+    private class Switches(val choices: List<Pair<String, String>>, val shadowed: List<String>)
+
+    private fun switchChoices(): Switches {
+        val folder = logicPet()
+        val part = if (Subjects.isPart(logicSubject)) Subjects.partId(logicSubject) else null
+        val ownIds = logicStates.map { it.id }.toSet()
+        val out = mutableListOf<Pair<String, String>>()
+        val shadowed = mutableListOf<String>()
+
+        // 主体自己的先列：角色的全局状态本来就是它的，部件的带标签（同一个「出汗」在两个
+        // 层级上是两个开关），道具/液体自己的状态没有图的层级，名字就是它自己。
+        if (part != null) {
+            val who = boneLabel(part).ifEmpty { part }
+            for (s in logicStates) out.add(Subjects.stateTag(part, s.id) to s.name + "·" + who)
+        } else {
+            for (s in logicStates) out.add(s.id to s.name)
+        }
+
+        // 然后是角色的全局状态（主体就是角色时，上面那批就是）。
+        if (logicSubject != Subjects.PET && folder != null) {
+            for (s in store.loadLogic(folder.id).states) {
+                if (s.id in ownIds) shadowed.add(s.name) else out.add(s.id to s.name)
+            }
+        }
+
+        // 最后是每一个部件自己的开关：一条规则可以问它们，和它可以问角色的 穿着 是同一件事。
+        // 带标签，所以撞名也不会歧义。
+        if (folder != null) {
+            for (bone in boneNames(folder)) {
+                if (bone == part) continue
+                val theirs = store.loadObjectLogic(folder)[Subjects.part(bone)]?.states ?: continue
+                for (s in theirs) {
+                    out.add(
+                        Subjects.stateTag(bone, s.id) to
+                            s.name + "·" + boneLabel(bone).ifEmpty { bone },
+                    )
+                }
+            }
+        }
+        return Switches(out, shadowed)
+    }
+
     private fun buildPetChooser() {
         petChooser.removeAllViews()
         if (characters.isEmpty()) {
@@ -5811,7 +5873,9 @@ class MainActivity : AppCompatActivity() {
     private fun pickState(title: String, onPick: (String) -> Unit) {
         pickList(
             title = title,
-            options = logicStates.map { it.id to it.name },
+            // 和「如果」那张表是同一份（switchChoices）：能问的状态就是能改的状态，不然
+            // 面板上会出现一句"能读不能写"的规则，而它看起来和别的规则一模一样。
+            options = switchChoices().choices,
             hint = getString(R.string.logic_no_states),
             current = null,
         ) { id ->
@@ -6293,7 +6357,9 @@ class MainActivity : AppCompatActivity() {
         }
         var stat = existing?.stat ?: logicStats.firstOrNull()?.id ?: ""
         var op = existing?.op ?: ">="
-        var state = existing?.state ?: logicStates.firstOrNull()?.id ?: ""
+        // 新条件默认挑第一个能挑的开关：主体是部件时那是它自己的第一个（带标签），否则是
+        // 角色的第一个。和面板上那张表同一个来源。
+        var state = existing?.state ?: switchChoices().choices.firstOrNull()?.first ?: ""
         var stateOn = existing?.op != "off"
         var join = Joins.of(existing?.join ?: Joins.AND)
         // 部位那两种：哪两节、比哪一头、差多少像素，以及"被绳子连着"那一节。
@@ -6400,16 +6466,20 @@ class MainActivity : AppCompatActivity() {
 
         val stateChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val stateViews = mutableListOf<TextView>()
-        for (s in logicStates) {
-            val chip = label(s.name, 12f, INK)
+        // 全局的和这一节自己的，一个清单里挑（见 switchChoices）：写在规则里的就是这张表里的
+        // 名字，引擎按它去自己的 map 或者世界里找。标签里带「·哪一节」的那些是部件自己的开关。
+        val switches = switchChoices()
+        val stateChoices = switches.choices
+        for ((name, text) in stateChoices) {
+            val chip = label(text, 12f, INK)
             chip.setPadding(dp(10), dp(8), dp(10), dp(8))
             chip.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
             ).apply { marginEnd = dp(5) }
             chip.setOnClickListener {
-                state = s.id
-                paintChips(stateViews, logicStates.map { it.id }, { state })
+                state = name
+                paintChips(stateViews, stateChoices.map { it.first }, { state })
             }
             stateViews.add(chip)
             stateChips.addView(chip)
@@ -6436,8 +6506,19 @@ class MainActivity : AppCompatActivity() {
 
         stateBox.addView(label(getString(R.string.logic_pick_state), 11f, MUTED, bottom = 6))
         stateBox.addView(stateChips)
-        if (logicStates.isEmpty()) {
+        if (stateChoices.isEmpty()) {
             stateBox.addView(label(getString(R.string.logic_no_states), 11f, MUTED, bottom = 4))
+        } else {
+            stateBox.addView(label(getString(R.string.logic_state_scope), 10f, MUTED, top = 6))
+        }
+        // 够不着的那些要说出来：一个"列不出来"的开关，用户只会以为自己没建过它。
+        if (switches.shadowed.isNotEmpty()) {
+            stateBox.addView(
+                label(
+                    getString(R.string.logic_state_shadowed, switches.shadowed.joinToString("、")),
+                    10f, MUTED, top = 4,
+                )
+            )
         }
         stateBox.addView(label(getString(R.string.logic_state_is), 11f, MUTED, top = 10, bottom = 6))
         stateBox.addView(onOffChips)

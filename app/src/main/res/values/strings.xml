@@ -403,6 +403,8 @@
     <string name="logic_no_props">还没有道具。去「道具管理」做一个。</string>
     <string name="logic_no_states">还没有状态。去「逻辑管理」上面加一个。</string>
     <string name="logic_pick_state">哪个状态</string>
+    <string name="logic_state_scope">带「·哪一节」的是那一节自己的开关，其余是整个角色的；两边都能问、也都能改。</string>
+    <string name="logic_state_shadowed">这一节自己也声明了「%1$s」，所以同名的全局状态没列出来 —— 在这里，那个名字指的是它自己的。要分开就把其中一个改个名。</string>
     <string name="logic_pick_liquid">哪种液体</string>
     <string name="logic_add_else">＋ 都不成立时做什么</string>
     <string name="logic_remove_else">去掉「否则」</string>

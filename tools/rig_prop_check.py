@@ -597,6 +597,63 @@ def main():
     report("and a prop that is clear of it is not felt at all",
            w.step(1 / 60, 0.0, [], radius_of, noop, [node]) == [])
 
+    print("\n一个名字在哪儿：先骨头，再节点")
+    # 「如果选节点作为触发主语，那生成的粒子和液体都应在节点位置」。规矩本身很短，短到
+    # 值得有个镜像：**名字 → 位置**要认得两种东西，因为逻辑面板把骨头和节点列在同一张
+    # 部位表里（见 MainActivity.partNames）。
+    def node_point(bones, bone_name, at):
+        """Skeleton.nodePoint 的镜像：沿骨头**当前**的头→尖那条线按距离取一点，两头夹住。
+
+        bones: [(名字, 骨头位置, 骨头尖端)]，节点存的是**距离** —— 骨头之后被拉长缩短，
+        节点跟着走，不是留在旧尖端那儿。
+        """
+        for (name, head, tip) in bones:
+            if name != bone_name:
+                continue
+            dx, dy = tip[0] - head[0], tip[1] - head[1]
+            length = math.hypot(dx, dy)
+            if length < 1e-3:
+                return head
+            t = min(1.0, max(0.0, at / length))
+            return (head[0] + dx * t, head[1] + dy * t)
+        return (0.0, 0.0)
+
+    def place(bones, nodes, name):
+        """Skeleton.place 的镜像：骨头优先，然后是节点；都不是就没有这个地方。
+
+        nodes: [(名字, 它长在哪根骨头上, 距离)] —— 注意和上面那些碰撞用的 4 元组不同。
+        """
+        if not name:
+            return None
+        for (bone_name, head, _tip) in bones:
+            if bone_name == name:
+                return head
+        for (node_name, bone_name, at) in nodes:
+            if node_name == name:
+                return node_point(bones, bone_name, at)
+        return None
+
+    rig = [("hand_L", (900.0, 1000.0), (1100.0, 1000.0))]
+    pins = [("finger_tip", "hand_L", 160.0)]
+    report("骨头名给的是骨头自己的位置", place(rig, pins, "hand_L") == (900.0, 1000.0))
+    tip = place(rig, pins, "finger_tip")
+    report("节点名给的是节点那个点", tip == (1060.0, 1000.0), str(tip))
+    # 这一条要的是**不是骨头**：老写法（只查骨头）在这里得到 None，然后调用方各自掉进
+    # 自己的兜底 —— 喷出来的东西落在宠物家位上方 400px、推一下推的是整只、断开什么都不做。
+    report("而且它不是它所在的那根骨头（这就是那个 bug 的量级）",
+           tip != (900.0, 1000.0) and abs(tip[0] - rig[0][1][0]) == 160.0,
+           "差 %.0f px" % abs(tip[0] - rig[0][1][0]))
+    report("都不是：没有这个地方（调用方各说各的兜底）", place(rig, pins, "nobody") is None)
+    report("空名字也不是一个地方", place(rig, pins, "") is None)
+    # 节点存的是距离：骨头长了一倍，节点还在原来的比例上，不是留在旧尖端。
+    longer = [("hand_L", (900.0, 1000.0), (1300.0, 1000.0))]
+    report("节点跟着骨头走（存的是距离，不是坐标）",
+           place(longer, pins, "finger_tip") == (1060.0, 1000.0),
+           str(place(longer, pins, "finger_tip")))
+    # 骨头之外的节点：at 超过骨长时夹在尖端，和 Kotlin 那句 coerceIn 一样。
+    report("落在了骨头外面就夹在尖端",
+           place(rig, [("beyond", "hand_L", 999.0)], "beyond") == (1100.0, 1000.0))
+
     print("\n拖尾：按**距离**留印子，不是按帧")
     # 这段镜像的是 stepTrails 的那一个判断。它的价值全在"距离不是帧"上：按帧留印子的
     # 实现，同一个拖动在快的手机上密、在慢的手机上稀 —— 同一段拖尾在两个人手里是两个

@@ -36,6 +36,31 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
 
         /** Is anything tied to this part by a rope? An empty [bone] asks about the whole body. */
         fun tied(bone: String): Boolean
+
+        /**
+         * Is a switch this engine does NOT own on? Null when the world does not know it either.
+         *
+         * The switches of a character are one namespace with addresses: a global state is its
+         * own name, a part's own state is `bone:state` (see Subjects.stateTag). Each engine
+         * keeps the ones it DECLARES and asks the world about every other name -- which is what
+         * lets a rule on the hand test the character's 穿着, and a rule on the character test
+         * 手在出汗. Nothing here knows what a bone is; the world does the routing.
+         *
+         * The default is null (nobody knows) rather than false, so the world -- the only side
+         * that can tell -- can say "no such switch" instead of "off". A CONDITION reads both as
+         * false, for the same reason an unknown condition kind does: a file from a newer version
+         * must not stop the rest of it. A write says so out loud; see [setSwitch].
+         */
+        fun switchOn(tag: String): Boolean? = null
+
+        /**
+         * Flip a switch this engine does not own. True when the world took it.
+         *
+         * The write half of [switchOn], and deliberately not "create it if it is missing": a
+         * switch nobody declared is one no artwork and no other rule can see, so a rule that
+         * sets one is asking for something that does not exist, and the answer is false.
+         */
+        fun setSwitch(tag: String, on: Boolean): Boolean = false
     }
 
 
@@ -71,6 +96,36 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
     var facts: Facts? = null
 
     fun stateOn(id: String): Boolean = states[id] == true
+
+    /**
+     * Is this switch on? Mine, or somebody else's through the world.
+     *
+     * "Mine" is the states this file DECLARES -- the map is only ever seeded from [spec] and a
+     * foreign name is never written into it -- so a part's rule that names 穿着 gets the
+     * character's answer rather than a copy of it that could drift.
+     */
+    private fun switchOf(name: String): Boolean {
+        if (name.isEmpty()) return false
+        states[name]?.let { return it }
+        return facts?.switchOn(name) ?: false
+    }
+
+    /**
+     * Flip one switch: mine directly, somebody else's through the world.
+     *
+     * A name the world does not recognise writes NOTHING and says so in the log. Before this,
+     * `states[name] = on` created the key whether or not anybody had declared it, so a part's
+     * rule that set 穿着 turned on a switch that existed only inside that part's own map, that
+     * no layer and no other rule could see -- a silent no-op with a success-looking rule.
+     */
+    private fun setSwitch(name: String, on: Boolean) {
+        if (name.isEmpty()) return
+        if (states.containsKey(name)) {
+            states[name] = on
+            return
+        }
+        if (facts?.setSwitch(name, on) != true) log("    没有「" + name + "」这个状态，没有改")
+    }
 
     /** Seconds since the character appeared. Rules and the log both read it. */
     var clock = 0f
@@ -329,7 +384,8 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
             return hit
         }
         if (c.kind == "state") {
-            val on = stateOn(c.state)
+            // 全局的还是这一节自己的，由"这个名字我宣没声明过"决定；不认识的问世界。
+            val on = switchOf(c.state)
             val want = c.op != "off"
             return on == want
         }
@@ -397,13 +453,13 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
                 }
                 "stateOn", "stateOff", "stateToggle" -> {
                     if (a.state.isNotEmpty()) {
-                        val before = stateOn(a.state)
+                        val before = switchOf(a.state)
                         val after = when (a.kind) {
                             "stateOn" -> true
                             "stateOff" -> false
                             else -> !before
                         }
-                        states[a.state] = after
+                        setSwitch(a.state, after)
                         if (after != before) {
                             log("    状态 " + a.state + (if (after) " 打开" else " 关闭"))
                         }
