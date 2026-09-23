@@ -185,6 +185,45 @@ def check_references():
 CHIP_CALL = re.compile(r"paint(Chips|Swatches)\([^,]+,\s*listOf\(([^)]*)\)")
 
 
+def check_folder_constants_qualified():
+    """
+    A constant of CharacterFolder's companion has to be written `CharacterFolder.NAME` from
+    outside it.
+
+    This is the second time this exact mistake cost a CI round trip: `POSES_FILE` was reached
+    bare from CharacterStore once, and 1.17.0 did it again with the new `ANIMATIONS_FILE`
+    (`Unresolved reference: ANIMATIONS_FILE`). It is invisible locally -- only CI compiles --
+    and it is mechanical, which is exactly what a check is for.
+
+    Narrow on purpose: it knows about ONE class (the folder, where the layout constants live),
+    about SCREAMING_CASE names, and about the region after that class ends. It is not a type
+    checker and does not pretend to be one.
+    """
+    path = os.path.join(SRC, "dev/atp/pet/data/CharacterStore.kt")
+    if not os.path.isfile(path):
+        report("CharacterFolder 的常数在类外都带了前缀", True, "no CharacterStore.kt")
+        return
+    text = open(path, encoding="utf-8").read()
+    start = text.find("class CharacterFolder")
+    end = text.find("\n}", start)
+    if start < 0 or end < 0:
+        report("CharacterFolder 的常数在类外都带了前缀", True, "class not found")
+        return
+    inside, outside = text[start:end], text[end:]
+    names = re.findall(r"\b(?:const )?val ([A-Z][A-Z0-9_]*) =", inside)
+    bad = []
+    for name in names:
+        for m in re.finditer(r"(?<![.\w])" + name + r"\b", outside):
+            line = outside[:m.start()].count("\n") + text[:end].count("\n") + 2
+            bad.append("%s:%d  %s 少了 CharacterFolder. 前缀" % ("CharacterStore.kt", line, name))
+    report("CharacterFolder 的常数在类外都带了前缀",
+           not bad, "; ".join(bad[:4]))
+
+    # 反向的那一半：这些名字**确实**还在（改名的镜像会红，但这一句说的是"检查没白跑"）。
+    report("而且这一个检查真的找到了那些常数", len(names) >= 3, "%d 个：%s"
+           % (len(names), ", ".join(names[:6])))
+
+
 def check_chip_lists():
     """
     paintChips takes strings, paintSwatches takes colours, and both take a list.
@@ -419,6 +458,7 @@ def main():
     check_references()
     check_strict_parse()
     check_private_companions()
+    check_folder_constants_qualified()
     check_chip_lists()
     check_view_resources()
     check_one_home_for_a_file_name()

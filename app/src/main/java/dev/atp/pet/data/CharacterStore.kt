@@ -1033,7 +1033,7 @@ class CharacterStore(private val context: Context) {
             )
         }
         folder.rigDir.mkdirs()
-        val temp = File(folder.rigDir, ANIMATIONS_FILE + ".tmp")
+        val temp = File(folder.rigDir, CharacterFolder.ANIMATIONS_FILE + ".tmp")
         temp.writeText(arr.toString(2))
         val target = folder.animationsFile
         if (target.exists()) target.delete()
