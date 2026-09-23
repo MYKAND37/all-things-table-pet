@@ -1,6 +1,8 @@
 package dev.atp.pet.data
 
 import android.content.Context
+import dev.atp.pet.engine.anim.AnimFrame
+import dev.atp.pet.engine.anim.AnimationSpec
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropSpec
@@ -75,6 +77,7 @@ class CharacterFolder(val dir: File, val rig: String = "") {
      * default rig's file stays where it always was, so nobody's saved poses move.
      */
     val posesFile: File get() = File(rigDir, POSES_FILE)
+    val animationsFile: File get() = File(rigDir, ANIMATIONS_FILE)
 
     fun specText(): String = specFile.readText()
 
@@ -114,6 +117,12 @@ class CharacterFolder(val dir: File, val rig: String = "") {
 
         /** Saved poses live beside the spec, not inside it: they are the user's, not the package's. */
         val POSES_FILE = "poses.json"
+
+        /**
+         * 动画，和 poses.json 一个地方、一个理由：帧里写的是**骨头名字**的角度，
+         * 换一套身体那些名字就不存在了。
+         */
+        val ANIMATIONS_FILE = "animations.json"
 
         /** One folder per KIND of particle (not per drop). See Subjects. */
         val PARTICLES_DIR = "particles"
@@ -934,6 +943,102 @@ class CharacterStore(private val context: Context) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 这个骨骼套的动画。
+     *
+     * 和 [loadPoses] 一样按**骨骼套**读：一帧里是骨头名字，换一套身体就一个都对不上。
+     * 读坏了(半截文件、手改错了)就当没有 —— 一个动画读不出来不该让整个测试场空掉，和
+     * character.json 那边同一条规矩：坏文件降级，不传染。
+     */
+    fun loadAnimations(folder: CharacterFolder): List<AnimationSpec> {
+        val file = folder.animationsFile
+        if (!file.isFile) return emptyList()
+        return try {
+            val arr = JSONArray(file.readText())
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                val id = o.optString("id", "")
+                if (id.isEmpty()) return@mapNotNull null
+                val frameArr = o.optJSONArray("frames") ?: JSONArray()
+                val frames = (0 until frameArr.length()).mapNotNull { j ->
+                    val f = frameArr.optJSONObject(j) ?: return@mapNotNull null
+                    val angleObj = f.optJSONObject("angles")
+                    val angles = LinkedHashMap<String, Float>()
+                    if (angleObj != null) {
+                        for (key in angleObj.keys()) {
+                            angles[key] = angleObj.optDouble(key, 0.0).toFloat()
+                        }
+                    }
+                    AnimFrame(
+                        angles = angles,
+                        state = f.optString("state", ""),
+                        seconds = f.optDouble("seconds", 0.4).toFloat(),
+                    )
+                }
+                AnimationSpec(
+                    id = id,
+                    name = o.optString("name", id),
+                    frames = frames,
+                    // 速度原样读进来，夹的动作在 Anim.speedOf（播放那一刻）—— 那里是唯一
+                    // 一次"这个数会变成时间"的地方，手改出来的 0 或者负数在那里被挡住，
+                    // 而不是在这里被悄悄改掉、让用户以为文件里写的就是 1。
+                    speed = o.optDouble("speed", 1.0).toFloat(),
+                    loop = o.optBoolean("loop", true),
+                )
+            }
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** 写一段动画（同 id 覆盖），和 poses.json 一样走临时文件 + 改名。 */
+    fun saveAnimation(folder: CharacterFolder, spec: AnimationSpec): Boolean {
+        return try {
+            val kept = loadAnimations(folder).filter { it.id != spec.id }
+            writeAnimations(folder, kept + spec)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    fun deleteAnimation(folder: CharacterFolder, id: String): Boolean {
+        return try {
+            writeAnimations(folder, loadAnimations(folder).filter { it.id != id })
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    private fun writeAnimations(folder: CharacterFolder, all: List<AnimationSpec>): Boolean {
+        val arr = JSONArray()
+        for (a in all) {
+            val frames = JSONArray()
+            for (f in a.frames) {
+                val angles = JSONObject()
+                for ((bone, value) in f.angles) angles.put(bone, value.toDouble())
+                frames.put(
+                    JSONObject()
+                        .put("angles", angles)
+                        .put("state", f.state)
+                        .put("seconds", f.seconds.toDouble())
+                )
+            }
+            arr.put(
+                JSONObject()
+                    .put("id", a.id).put("name", a.name)
+                    .put("speed", a.speed.toDouble()).put("loop", a.loop)
+                    .put("frames", frames)
+            )
+        }
+        folder.rigDir.mkdirs()
+        val temp = File(folder.rigDir, ANIMATIONS_FILE + ".tmp")
+        temp.writeText(arr.toString(2))
+        val target = folder.animationsFile
+        if (target.exists()) target.delete()
+        temp.renameTo(target)
+        return true
     }
 
     // ── 逻辑（每个角色一份）────────────────────────────────────────────────

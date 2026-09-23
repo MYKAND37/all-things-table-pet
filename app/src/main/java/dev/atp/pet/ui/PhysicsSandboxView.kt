@@ -12,6 +12,8 @@ import android.view.MotionEvent
 import android.view.View
 import dev.atp.pet.R
 import dev.atp.pet.data.CharacterFolder
+import dev.atp.pet.engine.anim.Anim
+import dev.atp.pet.engine.anim.AnimationSpec
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
 import dev.atp.pet.engine.fluid.Fluid
@@ -303,6 +305,34 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** Named actions, so a rule can say "摆动作 挥手". */
     private var poseByName: Map<String, Map<String, Float>> = emptyMap()
+
+    /** The animations of the current rig, by id. Handed over with the load, like the poses. */
+    private var animations: List<AnimationSpec> = emptyList()
+
+    /** The one being played, or null. See [playAnimation]. */
+    private var playing: AnimationSpec? = null
+
+    /**
+     * How long the animation has been playing, in REAL seconds.
+     *
+     * Real, not animation-time: the speed factor is applied inside [Anim.sample], so "2×" has
+     * exactly one place it can be wrong (and that place is mirrored in tools/anim_check.py).
+     */
+    private var playClock = 0f
+
+    /**
+     * The switch the animation's CURRENT frame turns on, or "".
+     *
+     * It goes into the renderer's state map and nowhere else -- it is not a state the user
+     * declared and it does not show up on the switch chips. That is the whole of "绘制动画":
+     * a frame's drawing is a set of layer variants keyed by a tag, and showing that frame is
+     * turning the tag on. See mergedStates.
+     */
+    private var animState = ""
+
+    /** Which frame is showing, for the panel that says 第 3/8 帧. */
+    private var animFrame = 0
+    private var animFrames = 0
 
     private var clock = 0f
     private var bubble: String? = null
@@ -692,6 +722,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
          * fires, the name resolves to nothing, and the pet goes limp.
          */
         poses: Map<String, Map<String, Float>>,
+        /**
+         * The animations of the same rig, by id -- also a parameter, for the same reason: the
+         * desktop pet is a second instance of this view, and an animation it never heard of is
+         * a rule that says 播放动画 and does nothing.
+         */
+        animations: List<AnimationSpec>,
     ): Boolean {
         // A character whose file cannot be read must not take the app down with it. This is
         // on the way IN -- the bench loads on launch and again after every edit -- so a
@@ -766,6 +802,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldProp = null
         framed = false
         poseByName = poses
+        this.animations = animations
+        stopAnimation()
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.SPAWN))
@@ -795,7 +833,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * meaning anything at the same moment. Handed in rather than looked up, because this view
      * has no store -- see [playPose].
      */
-    fun swapRig(folder: CharacterFolder, poses: Map<String, Map<String, Float>>): Boolean {
+    fun swapRig(
+        folder: CharacterFolder,
+        poses: Map<String, Map<String, Float>>,
+        animations: List<AnimationSpec>,
+    ): Boolean {
         val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return false
         val old = spec
         val where = ragdoll?.rootPos
@@ -861,8 +903,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
 
         rig = folder.rig
-        // 动作跟着这一套身体走：换套之后旧套的动作名不该再指得动任何东西。
+        // 动作和动画都跟着这一套身体走：换套之后旧套的名字不该再指得动任何东西。
         poseByName = poses
+        this.animations = animations
+        stopAnimation()
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.RIG_SWAP))
@@ -962,6 +1006,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
             val bone = Subjects.partId(subject)
             for ((id, on) in e.states) out[Subjects.stateTag(bone, id)] = on
         }
+        // 动画当前那一帧的开关。放在最后，所以它压得住同名的用户开关 —— 正在播的动画就是
+        // 现在该画的东西。它只进这一张**画图用的**表：开关小方块、规则引擎读的都是引擎里
+        // 那份，所以一个只在动画里出现的名字不会变成一只看得见却关不掉的开关。
+        if (animState.isNotEmpty()) out[animState] = true
         return out
     }
 
@@ -1166,6 +1214,59 @@ class PhysicsSandboxView @JvmOverloads constructor(
         return true
     }
 
+    /** 交给这一只的动画表（跟着骨骼套走，见 load）。 */
+    fun setAnimations(list: List<AnimationSpec>) {
+        animations = list
+    }
+
+    /** 这一只现在摆着的姿势：每个骨头当前的角度。动画的"加一帧"抓的就是它。 */
+    fun currentAngles(): Map<String, Float> =
+        skeleton?.bones?.associate { it.name to it.rotation } ?: emptyMap()
+
+    /**
+     * 播放一段动画。名字（id）不认识就什么都不做，返回 false。
+     *
+     * 姿势由**插值**给出：每一帧都把这一时刻的角度交给布娃娃当目标，所以"手从 A 走到 B"
+     * 是求解器自己走出来的，不是我们算了一条轨迹 —— 半路上被打一下、被拽一下，它照样接得
+     * 回来（这正是"演算动画"和"播放一段录像"的区别）。
+     *
+     * [animState] 那一半是图：当前帧的开关亮着，其余帧的开关**不在**渲染器的开关表里
+     * （那张表每帧重建，见 mergedStates），所以逐帧绘制不需要"记得把上一帧关掉"。
+     */
+    fun playAnimation(id: String): Boolean {
+        val anim = animations.firstOrNull { it.id == id } ?: return false
+        if (anim.frames.isEmpty()) return false
+        playing = anim
+        playClock = 0f
+        animFrame = 0
+        animFrames = anim.frames.size
+        animState = anim.frames.first().state
+        invalidate()
+        return true
+    }
+
+    /**
+     * 停：**用户按的那个停止**。
+     *
+     * 图回到默认那一套（animState 清掉），姿势留着 —— 停下来的地方就是你看着的那个样子。
+     * 不循环的动画**走完**时不清图（见 stepAnimation）：一个画了 8 帧的动画播完最后一下
+     * 就变回默认图，是"播完了"看起来像"坏了"。
+     */
+    fun stopAnimation() {
+        playing = null
+        playClock = 0f
+        animState = ""
+        animFrame = 0
+        animFrames = 0
+        invalidate()
+    }
+
+    /** 正在播什么，给界面那一行用：("挥手", 第几帧, 共几帧) 或 null。 */
+    fun animationInfo(): Triple<String, Int, Int>? {
+        val anim = playing ?: return null
+        return Triple(anim.name, animFrame, animFrames)
+    }
+
     /** null clears back to limp. */
     fun applyPose(angles: Map<String, Float>?, home: Boolean = true) {
         val rag = ragdoll ?: return
@@ -1332,6 +1433,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 // 以前这里是 applyPose(poseByName[名字])，查不到就是 null，而 null 是"回到
                 // 瘫软"。于是一个打错的名字、或者换骨骼套之后留下的旧名字，看起来像宠物瘫了。
                 "pose" -> if (!playPose(a.text)) engine?.note("没有「" + a.text + "」这个动作")
+                // 播放动画：和摆动作同一套说法 —— 名字不认识就什么都不做，而且说一句。
+                "playAnim" -> if (!playAnimation(a.text)) {
+                    engine?.note("没有「" + a.text + "」这个动画")
+                }
                 "morph" -> {
                     // 一次变身之后世界会被整个换掉，所以这个动作本身要有个限速：一套「A 出现
                     // 时变成 B、B 出现时变成 A」的规则是两行就能写出来的东西，而没有限速的
@@ -1762,6 +1867,29 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     // -- simulation ---------------------------------------------------------
 
+    /**
+     * 播放中的动画往前走一步：算出这一刻的姿势和图，交给这一帧。
+     *
+     * 放在 renderer.states 之前、rag.step 之前，两个理由各一个：状态表交出去之前得已经
+     * 是这一帧的那一份，而姿势是**目标**——求解器在这一帧里朝它走，所以要先给。
+     */
+    private fun stepAnimation(dt: Float, rag: Ragdoll) {
+        val anim = playing ?: return
+        playClock += dt
+        val s = Anim.sample(anim, playClock) ?: run {
+            stopAnimation()
+            return
+        }
+        animState = s.state
+        animFrame = s.frame
+        animFrames = s.frames
+        if (s.angles.isNotEmpty()) rag.applyPose(s.angles)
+        // 不循环的走完了就停下 —— 停在最后一帧上：姿势留到最后那一帧，图也留着。
+        if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
+            playing = null
+        }
+    }
+
     private fun simulate(dt: Float) {
         val s = spec ?: return
         val sk = skeleton ?: return
@@ -1815,6 +1943,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // the layers use -- "hand_L:sweat" -- and the character's own go in under their plain
         // names. That is the whole of the two levels as far as drawing is concerned:
         // LayerSpec.visible needs no change, because a tag is a key either way.
+        stepAnimation(dt, rag)
         renderer?.states = mergedStates()
 
         val pins = heldBones.entries.mapNotNull { entry ->

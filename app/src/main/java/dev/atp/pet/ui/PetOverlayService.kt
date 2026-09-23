@@ -91,14 +91,27 @@ class PetOverlayService : Service() {
                     ).show()
                 }
             }
+            // 播放动画：和摆动作一样，作用于桌面上这一只。
+            ACTION_ANIM -> {
+                val id = intent.getStringExtra(EXTRA_ID).orEmpty()
+                if (id.isNotEmpty() && pet?.playAnimation(id) != true) {
+                    Toast.makeText(
+                        this, getString(R.string.pet_summon_anim_missing, id), Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
             ACTION_RIG -> {
                 val name = intent.getStringExtra(EXTRA_ID).orEmpty()
                 val folder = petFolder(this)?.withRig(name)
                 // 动作是**跟着骨骼套**的，所以换套要连动作表一起换 —— 少了这一句，换套之后
                 // 旧套的动作名还在，规则照样"摆得动"一个这套身体里不存在的动作。
                 val poses = folder?.let { CharacterStore(this).loadPoses(it) } ?: emptyList()
+                val anims = folder?.let { CharacterStore(this).loadAnimations(it) } ?: emptyList()
                 if (folder != null) rememberRig(this, name)
-                if (folder != null && pet?.swapRig(folder, poses.associate { it.name to it.angles }) != true) {
+                if (folder != null && pet?.swapRig(
+                        folder, poses.associate { it.name to it.angles }, anims,
+                    ) != true
+                ) {
                     Toast.makeText(
                         this, getString(R.string.character_unreadable, folder.id),
                         Toast.LENGTH_LONG,
@@ -147,6 +160,7 @@ class PetOverlayService : Service() {
         val metrics = resources.displayMetrics
 
         val poses = store.loadPoses(folder)
+        val animations = store.loadAnimations(folder)
         val view = PhysicsSandboxView(this).apply {
             setDesktopMode(true)
             load(
@@ -159,6 +173,9 @@ class PetOverlayService : Service() {
                 // 就什么都不发生（以前还会把宠物弄瘫）。桌面这一只是第二个实例，忘了这一份
                 // 的症状是"在测试场好好的，召唤到桌面上就不摆动作了"。
                 poses.associate { it.name to it.angles },
+                // 动画也一样必须交过来：规则里写「播放动画 挥手」，名字在这一边查不到就
+                // 什么都不发生 —— 桌面这一只是第二个实例（1.15.2 的动作表踩过一次）。
+                animations,
             )
         }
         pet = view
@@ -334,6 +351,7 @@ class PetOverlayService : Service() {
         const val ACTION_STATE = "dev.atp.pet.overlay.STATE"
         const val ACTION_RIG = "dev.atp.pet.overlay.RIG"
         const val ACTION_POSE = "dev.atp.pet.overlay.POSE"
+        const val ACTION_ANIM = "dev.atp.pet.overlay.ANIM"
         const val ACTION_SETTINGS = "dev.atp.pet.overlay.SETTINGS"
         const val EXTRA_ID = "id"
 

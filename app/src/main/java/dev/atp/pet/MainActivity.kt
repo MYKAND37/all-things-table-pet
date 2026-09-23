@@ -20,6 +20,9 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.FileProvider
+import dev.atp.pet.engine.anim.Anim
+import dev.atp.pet.engine.anim.AnimFrame
+import dev.atp.pet.engine.anim.AnimationSpec
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.PetPackage
 import dev.atp.pet.data.Settings
@@ -506,6 +509,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun reloadSandbox(folder: CharacterFolder): Boolean {
         val poses = store.loadPoses(folder)
+        val animations = store.loadAnimations(folder)
         // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
         // match: two places that say what the stiffness is would otherwise disagree the moment
         // somebody changed the setting.
@@ -518,6 +522,7 @@ class MainActivity : AppCompatActivity() {
             // 动作预设按名字交给测试场（规则里的「摆动作 挥手」查的就是它）。和骨骼套走，
             // 所以换套之后旧套的名字不再指得动东西。
             poses.associate { it.name to it.angles },
+            animations,
         )
         if (!loaded) {
             // The bench is empty on purpose, so say so: an empty bench and a pet that has
@@ -543,6 +548,13 @@ class MainActivity : AppCompatActivity() {
         // （id 一样、套不一样，是最容易看漏的一种）。
         if (current.id != folder.id || current.rig != folder.rig) return
         sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
+    }
+
+    /** 动画文件变了：测试场手里那份名单跟着变。和 [refreshPoseNames] 同一条理由。 */
+    private fun refreshAnimations(folder: CharacterFolder) {
+        val current = summoned ?: return
+        if (current.id != folder.id || current.rig != folder.rig) return
+        sandboxView.setAnimations(store.loadAnimations(folder))
     }
 
     /**
@@ -1000,6 +1012,264 @@ class MainActivity : AppCompatActivity() {
         if (poses.isEmpty()) {
             box.addView(label(getString(R.string.action_empty), 11f, MUTED, top = 14))
         }
+
+        fillAnimationList(box, folder, spec)
+    }
+
+    /**
+     * 动画那一段：一串会动的帧，播放/停止在这里，编辑在下一层。
+     *
+     * 和上面那张动作表放在同一个弹窗里，因为它们是同一个问题的两种答案 —— 「让它摆这个样子」
+     * 和「让它把这一串样子演一遍」。动画的每一帧可以带姿势（演算）、带一套图（绘制），或者
+     * 两样都带（半演算），所以列表里每帧写的是"哪套图 · 几节骨头"。
+     */
+    private fun fillAnimationList(box: LinearLayout, folder: CharacterFolder, spec: CharacterSpec?) {
+        val anims = store.loadAnimations(folder)
+        box.addView(
+            label(
+                getString(R.string.anim_title) + " (" + anims.size + ")",
+                13f, INK, top = 16, bottom = 4,
+            )
+        )
+        box.addView(label(getString(R.string.anim_hint), 10f, MUTED, bottom = 8))
+
+        val playing = sandboxView.animationInfo()
+        for (anim in anims) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(10), dp(8), dp(10), dp(8))
+                isClickable = true
+                isFocusable = true
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(5) }
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            val here = playing?.takeIf { it.first == anim.name }
+            text.addView(label(anim.name + if (here != null) " · 播放中" else "", 14f, INK))
+            text.addView(
+                label(
+                    getString(
+                        R.string.anim_detail,
+                        anim.frames.size,
+                        "%.2f×".format(anim.speed),
+                        "%.2f".format(Anim.realDuration(anim)),
+                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else "",
+                    10f, MUTED,
+                )
+            )
+            row.addView(text)
+
+            val play = label(
+                getString(if (here != null) R.string.anim_stop else R.string.anim_play),
+                12f, INK,
+            )
+            play.setPadding(dp(10), dp(6), dp(10), dp(6))
+            play.background = getDrawable(
+                if (here != null) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            play.setOnClickListener {
+                if (here != null) {
+                    sandboxView.stopAnimation()
+                } else if (!sandboxView.playAnimation(anim.id)) {
+                    Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+                }
+                fillActionList(box, folder)
+            }
+            row.addView(play)
+
+            row.setOnClickListener { askAnimation(folder, anim, box) }
+            box.addView(row)
+        }
+
+        val add = label(getString(R.string.anim_new), 13f, INK)
+        add.setPadding(dp(14), dp(11), dp(14), dp(11))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(4) }
+        add.setOnClickListener { askAnimation(folder, null, box) }
+        box.addView(add)
+
+        if (anims.isEmpty()) {
+            box.addView(label(getString(R.string.anim_empty), 10f, MUTED, top = 8))
+        }
+    }
+
+    /**
+     * 一段动画的编辑页：名字、速度、循环，和帧的列表。
+     *
+     * 帧是**抓当前这一只的样子**存下来的（[PhysicsSandboxView.currentAngles]）：用户先用手
+     * 或者用动作表把宠物摆好，再回来按「用现在的姿势加一帧」。这不是顺手，而是这个功能唯一
+     * 说得通的入口 —— 帧就是"我看到的样子"，而不是一串要手敲的角度。
+     */
+    private fun askAnimation(folder: CharacterFolder, existing: AnimationSpec?, listBox: LinearLayout) {
+        var speed = existing?.speed ?: 1f
+        var loop = existing?.loop ?: true
+        val id = existing?.id ?: nextAnimationId(folder)
+        val frames = (existing?.frames ?: emptyList()).toMutableList()
+
+        val nameInput = EditText(this).apply {
+            setText(existing?.name ?: "")
+            hint = getString(R.string.anim_name)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+        }
+        val (speedRow, speedOf) = stepperRow(
+            getString(R.string.anim_speed), speed, 0.25f, 0.25f, 4f,
+        ) { "%.2f×".format(it) }
+        val loopChip = label(getString(R.string.anim_loops), 12f, INK)
+        loopChip.setPadding(dp(10), dp(8), dp(10), dp(8))
+        fun paintLoop() {
+            loopChip.background = getDrawable(
+                if (loop) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            loopChip.setTextColor(if (loop) INK else MUTED)
+            loopChip.text = getString(if (loop) R.string.anim_loops else R.string.anim_once)
+        }
+        loopChip.setOnClickListener { loop = !loop; paintLoop() }
+
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(6), dp(6), dp(6), dp(6))
+        }
+        val frameBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+
+        fun write() {
+            val name = nameInput.text.toString().trim().ifEmpty { id }
+            store.saveAnimation(folder, AnimationSpec(id, name, frames.toList(), speedOf(), loop))
+            refreshAnimations(folder)
+            fillActionList(listBox, folder)
+        }
+
+        fun fillFrames() {
+            frameBox.removeAllViews()
+            for ((i, f) in frames.withIndex()) {
+                val row = label(
+                    getString(
+                        R.string.anim_frame_detail, i + 1,
+                        if (f.state.isEmpty()) getString(R.string.anim_no_art) else f.state,
+                        "%.2f".format(f.seconds),
+                        f.angles.size,
+                    ),
+                    12f, INK,
+                )
+                row.setPadding(dp(10), dp(8), dp(10), dp(8))
+                row.background = getDrawable(R.drawable.menu_item_idle)
+                row.layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = dp(4) }
+                row.setOnClickListener {
+                    askFrame(folder, frames, i) { fillFrames(); write() }
+                }
+                frameBox.addView(row)
+            }
+            if (frames.isEmpty()) {
+                frameBox.addView(label(getString(R.string.anim_no_frames), 10f, MUTED, bottom = 4))
+            }
+        }
+
+        val capture = label(getString(R.string.anim_capture), 13f, INK)
+        capture.setPadding(dp(14), dp(11), dp(14), dp(11))
+        capture.background = getDrawable(R.drawable.menu_item_selected)
+        capture.setOnClickListener {
+            val angles = sandboxView.currentAngles()
+            pickList(
+                getString(R.string.anim_frame_art),
+                switchChoices().choices,
+                getString(R.string.logic_no_states),
+                "",
+            ) { state ->
+                frames.add(AnimFrame(angles = angles, state = state, seconds = 0.4f))
+                fillFrames()
+                write()
+                true
+            }
+        }
+
+        val preview = label(getString(R.string.anim_preview), 12f, INK)
+        preview.setPadding(dp(12), dp(8), dp(12), dp(8))
+        preview.background = getDrawable(R.drawable.menu_item_idle)
+        preview.setOnClickListener {
+            write()
+            if (!sandboxView.playAnimation(id)) {
+                Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        box.addView(nameInput)
+        box.addView(speedRow)
+        box.addView(loopChip)
+        box.addView(label(getString(R.string.anim_frames), 11f, MUTED, top = 10, bottom = 6))
+        box.addView(frameBox)
+        box.addView(capture)
+        box.addView(preview)
+
+        AlertDialog.Builder(this)
+            .setTitle(R.string.anim_title)
+            .setView(scrolling(box))
+            .setPositiveButton(R.string.depth_save) { _, _ -> write() }
+            // 删除要问一句：里面是用户一帧一帧抓出来的东西，一个走神的点击不该把它带走。
+            .setNeutralButton(R.string.action_delete) { _, _ ->
+                AlertDialog.Builder(this)
+                    .setTitle(getString(R.string.anim_delete, nameInput.text.toString().trim()))
+                    .setPositiveButton(R.string.depth_remove) { _, _ ->
+                        store.deleteAnimation(folder, id)
+                        sandboxView.stopAnimation()
+                        refreshAnimations(folder)
+                        fillActionList(listBox, folder)
+                    }
+                    .setNegativeButton(R.string.depth_cancel, null)
+                    .show()
+            }
+            .setNegativeButton(R.string.depth_cancel, null)
+            .show()
+        paintLoop()
+        fillFrames()
+    }
+
+    /** 一帧：几秒、画哪套图。姿势是抓来的，不在这里改（改姿势要用测试场那双手）。 */
+    private fun askFrame(
+        folder: CharacterFolder,
+        frames: MutableList<AnimFrame>,
+        index: Int,
+        onChanged: () -> Unit,
+    ) {
+        val frame = frames.getOrNull(index) ?: return
+        val copy = frames.toMutableList()
+        pickList(
+            getString(R.string.anim_frame_art),
+            switchChoices().choices,
+            getString(R.string.logic_no_states),
+            frame.state,
+        ) { state ->
+            askNumber(
+                getString(R.string.anim_frame_seconds),
+                frame.seconds, 0.1f, 30f,
+            ) { seconds ->
+                copy[index] = frame.copy(state = state, seconds = seconds)
+                frames.clear()
+                frames.addAll(copy)
+                onChanged()
+                true
+            }
+            true
+        }
+    }
+
+    private fun nextAnimationId(folder: CharacterFolder): String {
+        val taken = store.loadAnimations(folder).map { it.id }.toSet()
+        var i = 1
+        while (("anim" + i) in taken) i++
+        return "anim" + i
     }
 
     /** One row of the action list: a picture, a name, and the two things you can do to it. */
@@ -1276,8 +1546,11 @@ class MainActivity : AppCompatActivity() {
     private fun chooseRig(pane: CharacterFolder, name: String) {
         val pet = pane.withRig("")
         val folder = pet.withRig(name)
-        if (summoned?.id == pet.id &&
-            !sandboxView.swapRig(folder, store.loadPoses(folder).associate { it.name to it.angles })
+        if (summoned?.id == pet.id && !sandboxView.swapRig(
+                folder,
+                store.loadPoses(folder).associate { it.name to it.angles },
+                store.loadAnimations(folder),
+            )
         ) {
             Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
                 .show()
@@ -1375,7 +1648,12 @@ class MainActivity : AppCompatActivity() {
     private fun switchRig(name: String) {
         val pet = summoned ?: return
         val folder = pet.withRig(name)
-        if (!sandboxView.swapRig(folder, store.loadPoses(folder).associate { it.name to it.angles })) {
+        if (!sandboxView.swapRig(
+                folder,
+                store.loadPoses(folder).associate { it.name to it.angles },
+                store.loadAnimations(folder),
+            )
+        ) {
             Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
                 .show()
             return
@@ -1536,6 +1814,21 @@ class MainActivity : AppCompatActivity() {
                     null,
                 ) { name ->
                     PetOverlayService.send(this, PetOverlayService.ACTION_POSE, name)
+                    true
+                }
+            }
+        }
+        // 播放动画：和摆动作并排，列的是这一套身体的动画。
+        row(getString(R.string.pet_summon_anim)) {
+            ifRunning {
+                pickList(
+                    getString(R.string.pet_summon_anim),
+                    summoned?.let { store.loadAnimations(it).map { a -> a.id to a.name } }
+                        ?: emptyList(),
+                    getString(R.string.logic_no_anims),
+                    null,
+                ) { id ->
+                    PetOverlayService.send(this, PetOverlayService.ACTION_ANIM, id)
                     true
                 }
             }
@@ -6208,6 +6501,7 @@ class MainActivity : AppCompatActivity() {
         "random" -> statName(a.stat) + " 随机 " +
             trim(minOf(a.value, a.value2)) + ".." + trim(maxOf(a.value, a.value2))
         "pose" -> "摆动作 " + a.text
+        "playAnim" -> "播放动画 " + a.text
         "morph" -> "变身 " + a.text
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
@@ -6868,6 +7162,17 @@ class MainActivity : AppCompatActivity() {
                 // 换骨骼套: the bodies of the pet that is on the bench -- the same list the rig
                 // row shows. Empty means the default one, which is what a rule written before
                 // this existed would have meant anyway.
+                // 播放动画：列的是这一套骨骼套的动画（和测试场那张动画表同一个来源）。
+                "anim" -> pickList(
+                    getString(R.string.logic_pick_anim),
+                    summoned?.let { store.loadAnimations(it).map { a -> a.id to a.name } }
+                        ?: emptyList(),
+                    getString(R.string.logic_no_anims),
+                    existing?.text ?: "",
+                ) { id ->
+                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    true
+                }
                 "rig" -> pickList(
                     getString(R.string.logic_pick_rig),
                     summoned?.rigs()?.map { it to rigLabel(it) } ?: emptyList(),

@@ -472,6 +472,15 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
      */
     SET_RIG("setRig", "换骨骼套", "rig"),
 
+    /**
+     * 播放一段动画（1.17.0）。
+     *
+     * 和 [POSE] 是两层：一个动作是**一个样子**，一段动画是**一串会动的时间轴**（关键帧之间
+     * 由求解器插值走完，见 engine/anim）。动画按名字找，和动作一样由宿主动手 —— 帧属于
+     * 哪一套骨骼套只有宿主知道。
+     */
+    PLAY_ANIM("playAnim", "播放动画", "anim"),
+
     WAIT("wait", "等一会儿", "seconds"),
     STATE_ON("stateOn", "打开状态", "state"),
     STATE_OFF("stateOff", "关闭状态", "state"),

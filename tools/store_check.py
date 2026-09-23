@@ -186,6 +186,10 @@ def poses_file_name():
     return kotlin_val("POSES_FILE", "poses.json")
 
 
+def animations_file_name():
+    return kotlin_val("ANIMATIONS_FILE", "animations.json")
+
+
 def reference_file_name():
     return kotlin_val("REFERENCE_FILE", "reference.png")
 
@@ -213,6 +217,11 @@ def rig_parts(character_id, rig=""):
 def rig_poses(character_id, rig=""):
     """Poses belong to the RIG: a pose is a set of bone angles, and bones get renamed."""
     return rig_dir(character_id, rig) + "/" + poses_file_name()
+
+
+def rig_animations(character_id, rig=""):
+    """动画也跟着骨骼套走：一帧里是骨头名字的角度，换一套身体那些名字就不存在了。"""
+    return rig_dir(character_id, rig) + "/" + animations_file_name()
 
 
 def logic_file_name():
@@ -570,6 +579,15 @@ def main():
            rig_poses("female_base", "mech"))
     report("而默认套的动作也还在老地方",
            rig_poses("female_base") == "characters/female_base/" + poses_file_name())
+    report("动画也跟着骨骼套（帧里写的是骨头名字）",
+           rig_animations("female_base", "mech") ==
+           "characters/female_base/%s/mech/%s" % (rigs_dir(), animations_file_name()),
+           rig_animations("female_base", "mech"))
+    report("默认套的动画在默认套的老地方",
+           rig_animations("female_base") == "characters/female_base/" + animations_file_name())
+    report("动画不在 parts/ 里（那里是每根骨头一张图）",
+           "/parts/" not in rig_animations("female_base", "mech")
+           and animations_file_name() != poses_file_name())
     report("参考图跟着那一套走（它是这副身体的画）",
            rig_reference("female_base", "mech") ==
            "characters/female_base/%s/mech/%s" % (rigs_dir(), reference_file_name()),
@@ -584,6 +602,30 @@ def main():
            "characters/female_base/liquids/slime/" + logic_file_name() and
            object_logic_path("particle:spark", "female_base") ==
            "characters/female_base/particles/spark/" + logic_file_name())
+    # 动画的写和读必须说同一批键。这一版最容易只做一半的地方：写的时候叫 "frames"、
+    # 读的时候 optJSONArray("frame")，两种都不报错，症状只有"存好的动画播放起来是空的"。
+    kt = open(STORE_KT, encoding="utf-8").read()
+    write_body = kt[kt.find("private fun writeAnimations"):]
+    write_body = write_body[:write_body.find("\n    }")]
+    read_body = kt[kt.find("fun loadAnimations"):]
+    read_body = read_body[:read_body.find("fun saveAnimation")]
+    keys = lambda text, pat: set(re.findall(pat, text))
+    written = keys(write_body, r'\.put\("(\w+)"')
+    read_keys = keys(read_body, r'(?:optString|optDouble|optBoolean|optJSONObject|optJSONArray)\("(\w+)"')
+    report("动画：写出去的和读回来的是同一批键",
+           written == read_keys and {"id", "name", "frames", "speed", "loop"} <= written,
+           "写 %s / 读 %s" % (sorted(written), sorted(read_keys)))
+    frame_written = keys(write_body[write_body.find("val frames = JSONArray()"):],
+                         r'\.put\("(\w+)"')
+    frame_read = keys(read_body, r'(?:optString|optDouble|optJSONObject)\("(\w+)"')
+    report("动画：每一帧的字段也对得上（角度 / 开关 / 秒数）",
+           {"angles", "state", "seconds"} <= frame_written
+           and {"angles", "state", "seconds"} <= frame_read,
+           "帧写 %s" % sorted(frame_written))
+    # 坏文件降级成"没有动画"，不是把测试场一起带走 —— 和 character.json 同一条规矩。
+    report("动画文件坏了当没有（不传染）",
+           "return emptyList()" in read_body and "catch (e: Exception)" in read_body)
+
     # saveRig/saveDepth 落盘时写的临时文件：它必须和它要换掉的那个文件在同一个目录里，
     # 否则换套之后 .tmp 会留在桌宠根目录，而 rename 是跨目录的。
     kt = open(STORE_KT, encoding="utf-8").read()

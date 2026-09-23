@@ -222,6 +222,10 @@ def main():
         ("部件测全局的状态", "logic_pick_state"),
         # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
         ("桌面上的摆动作", "pet_summon_pose"),
+        # 动画：三个入口各一条 —— 测试场那张动作列表、规则里的动作、桌面上的长按菜单。
+        ("动画（测试场）", "anim_title"),
+        ("规则里播放动画", "logic_pick_anim"),
+        ("桌面上播放动画", "pet_summon_anim"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -490,9 +494,13 @@ def main():
     report("动作是 load 的参数（没有默认值：忘了就编译不过）",
            "poses: Map<String, Map<String, Float>>," in load_fn)
     report("load 把它装进这一只的动作表", "poseByName = poses" in bench)
-    report("换骨骼套也要一起换（动作跟着套走）",
-           "fun swapRig(folder: CharacterFolder, poses: Map<String, Map<String, Float>>)" in bench
-           and bench.count("poseByName = poses") >= 2)
+    swap_fn = bench[bench.find("fun swapRig("):]
+    swap_fn = swap_fn[:swap_fn.find("): Boolean {")]
+    report("换骨骼套也要一起换（动作和动画都跟着套走）",
+           "poses: Map<String, Map<String, Float>>," in swap_fn
+           and "animations: List<AnimationSpec>," in swap_fn
+           and bench.count("poseByName = poses") >= 2
+           and bench.count("this.animations = animations") >= 2)
     report("两个实例都交动作表（测试场 + 桌面那一只）",
            "poses.associate { it.name to it.angles }" in activity
            and "poses.associate { it.name to it.angles }" in overlay)
@@ -529,6 +537,53 @@ def main():
     report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
+
+    print("== 动画：帧、速度、两个实例都拿得到 ==")
+    # 「加入动画功能，一个是纯演算动画（摆 A、摆 B，中间自己走），另一个是绘制动画（画不同的
+    # 帧然后播放，帧之间还能调骨骼）」。两件事是**同一个模型**：一帧 = 可选姿势 + 可选开关。
+    # 采样（插值、速度、循环）是纯数学，镜像在 tools/anim_check.py 里十六句；这里盯的是接线：
+    # 谁拿得到动画表、播放器有没有真的每帧把姿势和图交出去、以及那条动作/入口通不通。
+    anim_kt = next((t for p, t in files.items() if p.endswith("engine/anim/Animation.kt")), "")
+    report("动画是一个纯引擎模块（没有 Android、可以被镜像）",
+           "data class AnimFrame(" in anim_kt and "class AnimationSpec(" in anim_kt
+           and "object Anim {" in anim_kt and "android" not in anim_kt)
+    report("一帧有姿势、有图、有秒数三样（演算 / 绘制 / 半演算）",
+           "val angles: Map<String, Float> = emptyMap()" in anim_kt
+           and "val state: String = \"\"" in anim_kt and "val seconds: Float = 0.4f" in anim_kt)
+    report("动画是 load / swapRig 的参数（第二个实例忘不掉）",
+           "animations: List<AnimationSpec>," in load_fn and "animations: List<AnimationSpec>," in swap_fn)
+    report("load 和换套都把它装进这一只，并且停掉正在播的",
+           bench.count("this.animations = animations") >= 2 and bench.count("stopAnimation()") >= 2)
+    report("两个实例都交动画表（测试场 + 桌面那一只）",
+           activity.count("store.loadAnimations(") >= 3 and "store.loadAnimations(" in overlay)
+    # 播放：每帧采样一次，姿势当**目标**交给求解器（所以半路被打一下接得回来），
+    # 图只进"画图用的"那张开关表 —— 不进引擎，所以不会变成一只关不掉的开关。
+    step_anim = bench[bench.find("private fun stepAnimation("):]
+    step_anim = step_anim[:step_anim.find("\n    }")]
+    report("每帧按时间采样，姿势交给求解器当目标",
+           "Anim.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim)
+    report("不循环的走完就停在最后一帧（图不弹回默认）",
+           "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)" in step_anim)
+    report("当前帧的开关只进画图那张表",
+           "if (animState.isNotEmpty()) out[animState] = true" in bench
+           and "private fun mergedStates()" in bench)
+    report("用户按的停止会把图还回默认（和「走完」不一样）",
+           "fun stopAnimation()" in bench and 'animState = ""' in bench)
+    report("播不了就说出来（名字不认识 / 一帧都没有）",
+           "没有「\" + a.text + \"」这个动画" in bench and "anim_empty_play" in activity)
+    # 入口：测试场那张动作列表里的动画段 + 长按菜单 + 规则里的「播放动画」。
+    report("动作列表里有动画段（播放 / 停止 / 新建 / 编辑）",
+           "private fun fillAnimationList(" in activity and "private fun askAnimation(" in activity)
+    report("抓帧抓的是测试场现在这一只的姿势",
+           "sandboxView.currentAngles()" in activity and "fun currentAngles()" in bench)
+    report("规则里能播放动画（动作种类 + 选它的地方 + 有人执行）",
+           'PLAY_ANIM("playAnim", "播放动画", "anim")' in engine_kt.replace("RuleEngine.kt", "")
+           or '"playAnim", "播放动画", "anim"' in next(
+               (t for p, t in files.items() if p.endswith("LogicSpec.kt")), "")
+           and '"anim" -> pickList(' in activity and '"playAnim" ->' in bench)
+    report("桌面上也能播（长按菜单 + ACTION_ANIM + 服务处理）",
+           "pet_summon_anim" in activity and "ACTION_ANIM" in overlay
+           and "pet?.playAnimation(id)" in overlay)
 
     print("== 执行器之间能插计时器：盒子在空档里，插入不是替换 ==")
     # 「在一个逻辑中如果有多个执行器，应能在执行器中间插入计时器，第一个执行器前也可以」。

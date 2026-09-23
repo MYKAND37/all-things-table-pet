@@ -45,6 +45,8 @@
     <string name="pet_summon_state">切换状态…</string>
     <string name="pet_summon_rig">换骨骼套…</string>
     <string name="pet_summon_pose">摆动作…</string>
+    <string name="pet_summon_anim">播放动画…</string>
+    <string name="pet_summon_anim_missing">桌面上这一只没有「%1$s」这段动画（动画是跟着骨骼套的）</string>
     <string name="pet_summon_pose_missing">桌面上这一只没有「%1$s」这个动作（动作是跟着骨骼套的）</string>
     <string name="pet_summon_must_run">先把桌宠召唤到桌面上</string>
     <string name="overlay_close">收回</string>
@@ -321,6 +323,27 @@
     <!-- 测试场：动作列表 -->
     <string name="sandbox_actions">动作</string>
     <string name="action_list_title">动作列表</string>
+    <string name="anim_title">动画</string>
+    <string name="anim_delete">删掉「%1$s」这段动画？帧是抓出来的，删了就没了。</string>
+    <string name="anim_hint">一串帧，按顺序演一遍：每帧可以带姿势（关键帧之间自己走）、带一套图，或者两样都带。速度是整套的倍率，不改你已经摆好的帧。</string>
+    <string name="anim_detail">%1$d 帧 · %2$s · 一遍 %3$s 秒</string>
+    <string name="anim_loops">循环</string>
+    <string name="anim_once">播一遍</string>
+    <string name="anim_play">▶ 播放</string>
+    <string name="anim_stop">⏹ 停止</string>
+    <string name="anim_new">＋ 新动画</string>
+    <string name="anim_empty">还没有动画。点「＋ 新动画」，然后把宠物摆好、按「用现在的姿势加一帧」。</string>
+    <string name="anim_empty_play">这段动画一帧都没有，先加一帧</string>
+    <string name="anim_name">动画名称</string>
+    <string name="anim_speed">速度（整套的倍率）</string>
+    <string name="anim_frames">帧</string>
+    <string name="anim_no_frames">还没有帧。把宠物摆好，按下面那个按钮抓一帧。</string>
+    <string name="anim_capture">＋ 用现在的姿势加一帧</string>
+    <string name="anim_preview">▶ 试播</string>
+    <string name="anim_frame_art">这一帧画哪套图</string>
+    <string name="anim_no_art">不动图</string>
+    <string name="anim_frame_seconds">这一帧走多久（秒）</string>
+    <string name="anim_frame_detail">帧 %1$d · %2$s · %3$s 秒 · %4$d 节骨头</string>
     <string name="action_close">关闭</string>
     <string name="action_none_hint">松开动作，回到站姿</string>
     <string name="action_joints">%1$d 个关节</string>
@@ -561,6 +584,8 @@
     <string name="logic_pick_action">做什么</string>
     <string name="logic_pick_text">说什么</string>
     <string name="logic_pick_bone">哪个部位</string>
+    <string name="logic_pick_anim">播放哪段动画</string>
+    <string name="logic_no_anims">这一套身体还没有动画。去测试场的「动作列表 → 动画」做一个。</string>
     <string name="logic_pick_pose">哪个动作</string>
     <string name="logic_pick_prop">哪个道具</string>
     <string name="logic_pick_burst">什么粒子</string>
