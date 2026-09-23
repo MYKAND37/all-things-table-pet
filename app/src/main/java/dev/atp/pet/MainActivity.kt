@@ -502,7 +502,7 @@ class MainActivity : AppCompatActivity() {
      * character is a second thing that can disagree with itself.
      */
     private fun reloadSandbox(folder: CharacterFolder): Boolean {
-        sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
+        val poses = store.loadPoses(folder)
         // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
         // match: two places that say what the stiffness is would otherwise disagree the moment
         // somebody changed the setting.
@@ -512,6 +512,9 @@ class MainActivity : AppCompatActivity() {
         val loaded = sandboxView.load(
             folder, store.loadLogic(folder.id), store.loadProps(), store.propsDir,
             store.loadObjectLogic(folder),
+            // 动作预设按名字交给测试场（规则里的「摆动作 挥手」查的就是它）。和骨骼套走，
+            // 所以换套之后旧套的名字不再指得动东西。
+            poses.associate { it.name to it.angles },
         )
         if (!loaded) {
             // The bench is empty on purpose, so say so: an empty bench and a pet that has
@@ -523,6 +526,20 @@ class MainActivity : AppCompatActivity() {
         sandboxView.applySettings(settings)
         buildPetChooser()
         return loaded
+    }
+
+    /**
+     * 动作文件变了，测试场手里那份名单跟着变。
+     *
+     * 存一个动作、改名、删掉，都不会重建宠物（那会把测试场上正在掉的那一只丢掉），所以
+     * 这一句得单独说。名字是规则唯一的凭据 —— 「摆动作 挥手」查的就是这份名单。
+     */
+    private fun refreshPoseNames(folder: CharacterFolder) {
+        val current = summoned ?: return
+        // 同一只**而且同一套身体**：动作是按套存的，在另一套上编辑动作不该改这一只的名单
+        // （id 一样、套不一样，是最容易看漏的一种）。
+        if (current.id != folder.id || current.rig != folder.rig) return
+        sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
     }
 
     /**
@@ -543,8 +560,9 @@ class MainActivity : AppCompatActivity() {
         val previous = summoned
         summoned = wanted
         activePose = null
-        // 桌面上的那一只跟着走：召唤按钮送出去的就是"场上的这只"。
-        PetOverlayService.rememberPet(this, wanted.id)
+        // 桌面上的那一只跟着走：召唤按钮送出去的就是"场上的这只"，连它穿的那套骨骼一起
+        // （动作是按套存的，身体记错了动作名就对不上）。
+        PetOverlayService.rememberPet(this, wanted.id, rig = wanted.rig)
         if (reloadSandbox(wanted)) {
             buildPetChooser()
             return
@@ -1080,6 +1098,7 @@ class MainActivity : AppCompatActivity() {
                 if (store.savePose(folder, next, angles)) {
                     store.deletePose(folder, name)
                     if (activePose == name) activePose = next
+                    refreshPoseNames(folder)
                     Toast.makeText(this, getString(R.string.action_renamed), Toast.LENGTH_SHORT).show()
                 }
                 fillActionList(box, folder)
@@ -1094,6 +1113,7 @@ class MainActivity : AppCompatActivity() {
             .setTitle(getString(R.string.action_delete) + " · " + name)
             .setPositiveButton(R.string.depth_remove) { _, _ ->
                 store.deletePose(folder, name)
+                refreshPoseNames(folder)
                 if (activePose == name) {
                     activePose = null
                     sandboxView.applyPose(null)
@@ -1253,15 +1273,18 @@ class MainActivity : AppCompatActivity() {
     private fun chooseRig(pane: CharacterFolder, name: String) {
         val pet = pane.withRig("")
         val folder = pet.withRig(name)
-        if (summoned?.id == pet.id && !sandboxView.swapRig(folder)) {
+        if (summoned?.id == pet.id &&
+            !sandboxView.swapRig(folder, store.loadPoses(folder).associate { it.name to it.angles })
+        ) {
             Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
                 .show()
             buildPartList(pane)
             return
         }
         if (summoned?.id == pet.id) {
-            sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
             summoned = folder
+            // 和 switchRig 同一条：桌面那一只的记性跟着走（新套，动作名属于旧套所以清掉）。
+            PetOverlayService.rememberPet(this, pet.id, null, folder.rig)
         }
         opened = folder
         buildPetChooser()
@@ -1349,13 +1372,15 @@ class MainActivity : AppCompatActivity() {
     private fun switchRig(name: String) {
         val pet = summoned ?: return
         val folder = pet.withRig(name)
-        if (!sandboxView.swapRig(folder)) {
+        if (!sandboxView.swapRig(folder, store.loadPoses(folder).associate { it.name to it.angles })) {
             Toast.makeText(this, getString(R.string.character_unreadable, pet.id), Toast.LENGTH_LONG)
                 .show()
             return
         }
-        sandboxView.setPoseNames(store.loadPoses(folder).associate { it.name to it.angles })
         summoned = folder
+        // 桌面那一只的记性跟着走：新的一套身体，而且"正摆着的动作"这个名字属于旧套了
+        // （动作是按骨骼套存的），所以那边记成"新套 + 不摆动作"。
+        PetOverlayService.rememberPet(this, pet.id, null, folder.rig)
         if (opened?.id == pet.id) {
             opened = folder
             buildPartList(folder)
@@ -1414,7 +1439,9 @@ class MainActivity : AppCompatActivity() {
         ) {
             requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 0)
         }
-        PetOverlayService.rememberPet(this, pet.id)
+        // 动作一起记下来：桌面上那一只接着做测试场上正摆着的那个动作（召唤是"把这一只送
+        // 出去"，不是"另起一只"）。
+        PetOverlayService.rememberPet(this, pet.id, activePose, pet.rig)
         PetOverlayService.start(this)
         petSummon.postDelayed({ refreshSummonButton() }, 600)
         Toast.makeText(this, R.string.pet_summon_started, Toast.LENGTH_SHORT).show()
@@ -1490,6 +1517,22 @@ class MainActivity : AppCompatActivity() {
                     null,
                 ) { tag ->
                     PetOverlayService.send(this, PetOverlayService.ACTION_STATE, tag)
+                    true
+                }
+            }
+        }
+        // 摆动作：和测试场那张动作表是同一批预设（同一个 poses.json），只是这一次摆的是
+        // 桌面上那一只。动作跟着骨骼套走，所以列的是这只桌宠现在这套身体的动作。
+        row(getString(R.string.pet_summon_pose)) {
+            ifRunning {
+                pickList(
+                    getString(R.string.pet_summon_pose),
+                    summoned?.let { store.loadPoses(it).map { p -> p.name to p.name } }
+                        ?: emptyList(),
+                    getString(R.string.logic_no_poses),
+                    null,
+                ) { name ->
+                    PetOverlayService.send(this, PetOverlayService.ACTION_POSE, name)
                     true
                 }
             }
@@ -3710,7 +3753,10 @@ class MainActivity : AppCompatActivity() {
                     getString(if (ok) R.string.rig_pose_saved else R.string.rig_save_failed),
                     Toast.LENGTH_SHORT,
                 ).show()
-                if (ok && summoned?.id == folder.id) buildPetChooser()
+                if (ok) {
+                    refreshPoseNames(folder)
+                    if (summoned?.id == folder.id) buildPetChooser()
+                }
             }
             .setNegativeButton(R.string.depth_cancel, null)
             .show()

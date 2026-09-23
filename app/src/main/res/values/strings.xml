@@ -35,7 +35,7 @@
     <string name="pet_summon">召唤到桌面</string>
     <string name="pet_summon_send_home">收回桌宠</string>
     <string name="pet_summon_menu">桌面上那一只</string>
-    <string name="pet_summon_hint">长按这里可以给它换道具、切状态、换身体</string>
+    <string name="pet_summon_hint">长按这里可以给它换道具、切状态、换身体、摆动作</string>
     <string name="pet_summon_need_permission">要让桌宠浮在别的 App 上面，得先在系统设置里允许「显示在其他应用上层」。</string>
     <string name="pet_summon_open_settings">去打开</string>
     <string name="pet_summon_started">桌宠已经到桌面上了</string>
@@ -44,6 +44,8 @@
     <string name="pet_summon_prop">召唤道具…</string>
     <string name="pet_summon_state">切换状态…</string>
     <string name="pet_summon_rig">换骨骼套…</string>
+    <string name="pet_summon_pose">摆动作…</string>
+    <string name="pet_summon_pose_missing">桌面上这一只没有「%1$s」这个动作（动作是跟着骨骼套的）</string>
     <string name="pet_summon_must_run">先把桌宠召唤到桌面上</string>
     <string name="overlay_close">收回</string>
     <string name="overlay_mode_touchable">可摸宠物（点这里切成穿透）</string>

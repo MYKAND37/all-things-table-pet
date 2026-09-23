@@ -682,6 +682,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propSpecs: List<PropSpec>,
         propsDir: File?,
         objectLogic: Map<String, LogicSpec> = emptyMap(),
+        /**
+         * The preset actions of THIS rig, by name (see [playPose]).
+         *
+         * A parameter of load rather than a setter to be remembered, and that is the whole
+         * point: 动作 are per rig, a rule says 「摆动作 挥手」 BY NAME, and the name has to mean
+         * something in whichever instance is running the rules. The desktop pet is a second
+         * instance of this view, and forgetting the setter there is invisible -- the rule
+         * fires, the name resolves to nothing, and the pet goes limp.
+         */
+        poses: Map<String, Map<String, Float>>,
     ): Boolean {
         // A character whose file cannot be read must not take the app down with it. This is
         // on the way IN -- the bench loads on launch and again after every edit -- so a
@@ -755,6 +765,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         heldOffsets.clear()
         heldProp = null
         framed = false
+        poseByName = poses
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.SPAWN))
@@ -778,8 +789,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * The room follows the rig only when the new spec actually asks for a different one. Two
      * rigs of one pet almost always share a floor -- the scene is the pet's, not the body's --
      * and rebuilding the world on every switch would drop whatever is on the table.
+     *
+     * [poses] comes with the folder for the same reason it does in [load]: 动作预设 belong to
+     * the RIG, so the new body brings its own list, and the old one's names have to stop
+     * meaning anything at the same moment. Handed in rather than looked up, because this view
+     * has no store -- see [playPose].
      */
-    fun swapRig(folder: CharacterFolder): Boolean {
+    fun swapRig(folder: CharacterFolder, poses: Map<String, Map<String, Float>>): Boolean {
         val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return false
         val old = spec
         val where = ragdoll?.rootPos
@@ -845,6 +861,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         }
 
         rig = folder.rig
+        // 动作跟着这一套身体走：换套之后旧套的动作名不该再指得动任何东西。
+        poseByName = poses
         lastFrameNs = System.nanoTime()
         report()
         fire(GameEvent(EventType.RIG_SWAP))
@@ -1120,8 +1138,32 @@ class PhysicsSandboxView @JvmOverloads constructor(
         )
     }
 
+    /**
+     * The preset actions of the current rig, once more. See [load] for why this is normally a
+     * parameter of the load and not a setter: this one exists for the case where the FILE
+     * changed and the world did not -- 存了一个新动作, or deleted one. Editing a pose list does
+     * not rebuild the pet (that would throw away the one mid-fall on the bench).
+     */
     fun setPoseNames(poses: Map<String, Map<String, Float>>) {
         poseByName = poses
+    }
+
+    /**
+     * 摆出某个预设动作，**按名字**。
+     *
+     * The name is how a rule writes it down (「摆动作 挥手」), and the answer to "what if there
+     * is no such action" is NOT "clear the pose": that made a typo, or a rig switch that left
+     * the old names behind, look like a pet that had gone limp. Nothing happens and the caller
+     * is told, so the one place that can say so out loud (the log, the menu) can.
+     *
+     * [home] is off for rules: a pet that has been thrown into a corner should strike the pose
+     * where it is, not teleport home in the middle of being thrown. A person picking an action
+     * from a menu wants the opposite -- see [applyPose].
+     */
+    fun playPose(name: String, home: Boolean = false): Boolean {
+        val angles = poseByName[name] ?: return false
+        applyPose(angles, home)
+        return true
     }
 
     /** null clears back to limp. */
@@ -1286,7 +1328,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     bubbleLeft = BUBBLE_SECONDS
                     bubbleAt = subjectPoint(acting)
                 }
-                "pose" -> applyPose(poseByName[a.text], home = false)
+                // 按名字摆动作：名字不在这一套身体的动作表里就什么都不做，而且说一句 ——
+                // 以前这里是 applyPose(poseByName[名字])，查不到就是 null，而 null 是"回到
+                // 瘫软"。于是一个打错的名字、或者换骨骼套之后留下的旧名字，看起来像宠物瘫了。
+                "pose" -> if (!playPose(a.text)) engine?.note("没有「" + a.text + "」这个动作")
                 "morph" -> {
                     // 一次变身之后世界会被整个换掉，所以这个动作本身要有个限速：一套「A 出现
                     // 时变成 B、B 出现时变成 A」的规则是两行就能写出来的东西，而没有限速的

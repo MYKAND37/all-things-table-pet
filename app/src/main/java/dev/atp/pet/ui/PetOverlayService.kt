@@ -80,10 +80,24 @@ class PetOverlayService : Service() {
                 val tag = intent.getStringExtra(EXTRA_ID).orEmpty()
                 if (tag.isNotEmpty()) pet?.toggleState(tag)
             }
+            // 摆动作：和 App 里那张动作表是同一批预设（同一个 poses.json），只是这一次
+            // 摆的是桌面上这一只。
+            ACTION_POSE -> {
+                val name = intent.getStringExtra(EXTRA_ID).orEmpty()
+                if (name.isNotEmpty() && pet?.playPose(name, home = true) != true) {
+                    Toast.makeText(
+                        this, getString(R.string.pet_summon_pose_missing, name), Toast.LENGTH_SHORT,
+                    ).show()
+                }
+            }
             ACTION_RIG -> {
                 val name = intent.getStringExtra(EXTRA_ID).orEmpty()
                 val folder = petFolder(this)?.withRig(name)
-                if (folder != null && pet?.swapRig(folder) != true) {
+                // 动作是**跟着骨骼套**的，所以换套要连动作表一起换 —— 少了这一句，换套之后
+                // 旧套的动作名还在，规则照样"摆得动"一个这套身体里不存在的动作。
+                val poses = folder?.let { CharacterStore(this).loadPoses(it) } ?: emptyList()
+                if (folder != null) rememberRig(this, name)
+                if (folder != null && pet?.swapRig(folder, poses.associate { it.name to it.angles }) != true) {
                     Toast.makeText(
                         this, getString(R.string.character_unreadable, folder.id),
                         Toast.LENGTH_LONG,
@@ -131,6 +145,7 @@ class PetOverlayService : Service() {
         }
         val metrics = resources.displayMetrics
 
+        val poses = store.loadPoses(folder)
         val view = PhysicsSandboxView(this).apply {
             setDesktopMode(true)
             load(
@@ -139,10 +154,17 @@ class PetOverlayService : Service() {
                 store.loadProps(),
                 store.propsDir,
                 store.loadObjectLogic(folder),
+                // 动作**必须**一起交过来：规则里写的是「摆动作 挥手」，名字在这一边查不到
+                // 就什么都不发生（以前还会把宠物弄瘫）。桌面这一只是第二个实例，忘了这一份
+                // 的症状是"在测试场好好的，召唤到桌面上就不摆动作了"。
+                poses.associate { it.name to it.angles },
             )
         }
         pet = view
         applyPetSettings()
+        // 桌面上这一只接着做测试场上正摆着的那个动作。召唤是"把这一只送到桌面上"，不是
+        // "另起一只"：动作是眼睛看得见的那一部分，掉了最明显。
+        rememberedPose(this)?.let { view.playPose(it, home = false) }
 
         // 宠物那一层：满屏。世界就是屏幕 —— 它落在屏幕底边上，也会在整块屏幕里被拖来拖去。
         val petLayer = FrameLayout(this).apply { addView(view) }
@@ -279,6 +301,7 @@ class PetOverlayService : Service() {
         const val ACTION_PROP = "dev.atp.pet.overlay.PROP"
         const val ACTION_STATE = "dev.atp.pet.overlay.STATE"
         const val ACTION_RIG = "dev.atp.pet.overlay.RIG"
+        const val ACTION_POSE = "dev.atp.pet.overlay.POSE"
         const val ACTION_SETTINGS = "dev.atp.pet.overlay.SETTINGS"
         const val EXTRA_ID = "id"
 
@@ -288,6 +311,12 @@ class PetOverlayService : Service() {
         /** Where the pet on the bench is remembered, so the floating one is the same pet. */
         private const val PREFS = "overlay"
         private const val KEY_PET = "pet"
+
+        /** 召唤时测试场上摆着的那个预设动作的名字，跟着宠物一起过来。 */
+        private const val KEY_POSE = "pose"
+
+        /** 召唤时它穿着的那套骨骼，同理：动作是按套存的。 */
+        private const val KEY_RIG = "rig"
 
         /** Whether the windows are up. Read by the app's button, which is the way in and out. */
         @Volatile
@@ -301,16 +330,39 @@ class PetOverlayService : Service() {
          * parameter because the two are separate processes' worth of state -- the button in the
          * app must be able to summon the pet it is showing without a handshake.
          */
-        fun rememberPet(context: Context, id: String) {
+        fun rememberPet(
+            context: Context,
+            id: String,
+            pose: String? = null,
+            /** 测试场上这一只正穿着哪套骨骼。动作是按骨骼套存的，身体记错了动作就全对不上。 */
+            rig: String = "",
+        ) {
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_PET, id).apply()
+                .edit().putString(KEY_PET, id).putString(KEY_POSE, pose.orEmpty())
+                .putString(KEY_RIG, rig).apply()
         }
+
+        /** 桌面上这一只换了身体：记下来，下一次召唤还是这副。 */
+        fun rememberRig(context: Context, name: String) {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putString(KEY_RIG, name).apply()
+        }
+
+        /** 测试场上正摆着的那个动作，""=没摆。见 [show]。 */
+        private fun rememberedPose(context: Context): String? = context
+            .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_POSE, "").orEmpty().ifEmpty { null }
 
         fun petFolder(context: Context): CharacterFolder? {
             val store = CharacterStore(context)
-            val wanted = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(KEY_PET, "").orEmpty()
-            return store.folder(wanted) ?: store.list().firstOrNull()
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            val wanted = prefs.getString(KEY_PET, "").orEmpty()
+            val rig = prefs.getString(KEY_RIG, "").orEmpty()
+            val folder = store.folder(wanted) ?: store.list().firstOrNull() ?: return null
+            // 骨骼套跟着宠物一起过来。动作预设是**按套**存的，所以身体不对，规则里那些
+            // 动作名在这一边一个都对不上 —— 而"桌面上那只不摆动作"看起来像是动作坏了。
+            // 那一套已经不在了就用默认的，宁可换个身体也不要一只不出来的桌宠。
+            return if (rig.isNotEmpty() && rig in folder.rigs()) folder.withRig(rig) else folder
         }
 
         fun start(context: Context) {

@@ -143,6 +143,18 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
     /** Newest last, capped: this is a readout, not a database. */
     fun log(): List<String> = lines.toList()
 
+    /**
+     * A line from the WORLD about an action it was handed.
+     *
+     * The engine logs what it decided; only the bench knows whether the prop existed, whether
+     * the pose name meant anything, whether that body could be swapped in. Those failures used
+     * to be silent -- the rule fired, the action was handed over, and nothing happened -- and
+     * the log is exactly where somebody looks when a rule "does not work".
+     */
+    fun note(text: String) {
+        log("    " + text)
+    }
+
     fun reset() {
         stats.reset()
         for (s in spec.states) states[s.id] = s.initial

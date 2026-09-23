@@ -220,6 +220,8 @@ def main():
         # 「部件也可以测全局的状态」：挑状态那张表就是入口（「如果」那一排 chip 和
         # 「就 → 改变状态」共用它）。
         ("部件测全局的状态", "logic_pick_state"),
+        # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
+        ("桌面上的摆动作", "pet_summon_pose"),
     ]
     missing = []
     for name, key in ENTRIES:
@@ -475,6 +477,58 @@ def main():
            "shadowed" in switches and "logic_state_shadowed" in activity)
     report("状态那一段有说明文字（哪个是全局、哪个是这一节的）",
            "logic_state_scope" in activity)
+
+    print("== 桌面上的那一只也要会摆动作：动作表跟着实例走 ==")
+    # 「在桌面上时，桌宠没能正常做预设的动作」。成因有三个，都在这条路上：
+    #  1. 动作表是**另设**的（setPoseNames），测试场设了，桌面那一只（第二个实例）没设 ——
+    #     于是「摆动作 挥手」查不到名字，而查不到就是 null，null 是"回到瘫软"；
+    #  2. 桌面上没有任何入口能摆动作（长按菜单里没有这一行）；
+    #  3. 动作是**按骨骼套**存的，而桌面那一只开出来永远是默认那套身体，动作名自然对不上。
+    overlay = next((t for p, t in files.items() if p.endswith("PetOverlayService.kt")), "")
+    load_fn = bench[bench.find("fun load("):]
+    load_fn = load_fn[:load_fn.find("): Boolean {")]
+    report("动作是 load 的参数（没有默认值：忘了就编译不过）",
+           "poses: Map<String, Map<String, Float>>," in load_fn)
+    report("load 把它装进这一只的动作表", "poseByName = poses" in bench)
+    report("换骨骼套也要一起换（动作跟着套走）",
+           "fun swapRig(folder: CharacterFolder, poses: Map<String, Map<String, Float>>)" in bench
+           and bench.count("poseByName = poses") >= 2)
+    report("两个实例都交动作表（测试场 + 桌面那一只）",
+           "poses.associate { it.name to it.angles }" in activity
+           and "poses.associate { it.name to it.angles }" in overlay)
+    # 「查不到就什么都不做」：以前是 applyPose(poseByName[名字])，null 是**清空动作** ——
+    # 一个打错的名字、或者换套之后留下的旧名字，看起来像宠物瘫了。
+    play = bench[bench.find("fun playPose("):]
+    play = play[:play.find("\n    }")]
+    report("按名字摆动作：查不到就不动，而且告诉调用方",
+           "val angles = poseByName[name] ?: return false" in play
+           and "applyPose(angles, home)" in play and "return true" in play)
+    # 断言要看**代码**，不是注释：这行注释就在解释"以前这里是 applyPose(poseByName[名字])"。
+    bench_code = [l for l in bench.split("\n") if not l.lstrip().startswith(("//", "*", "/*"))]
+    report("规则里的「摆动作」走 playPose，不再直接拿 map",
+           '"pose" -> if (!playPose(a.text))' in bench
+           and not any("applyPose(poseByName[" in l for l in bench_code))
+    report("名字不存在时会在日志里说一句（世界也可以写日志）",
+           "engine?.note(" in bench and "fun note(text: String)" in engine_kt)
+    # 入口：长按召唤按钮 → 摆动作… → ACTION_POSE → 桌面那一只摆出来。
+    report("长按菜单里有「摆动作」，发的是 ACTION_POSE",
+           "pet_summon_pose" in activity and "PetOverlayService.ACTION_POSE" in activity)
+    report("服务收得到，而且名字不在这一套身体里会说一句",
+           "ACTION_POSE ->" in overlay and "playPose(name, home = true)" in overlay
+           and "pet_summon_pose_missing" in overlay)
+    # 测试场那一侧：动作文件改了（存/改名/删），手里那份名单要跟着改 —— 改动作不重建宠物。
+    report("存 / 改名 / 删动作之后名单会刷新",
+           "private fun refreshPoseNames(" in activity
+           and activity.count("refreshPoseNames(folder)") >= 3)
+    # 骨骼套跟着宠物过去：动作是按套存的，身体记错了名字就全对不上。
+    report("召唤时连它穿的那套骨骼一起记下来",
+           "KEY_RIG" in overlay and "rememberPet(this, wanted.id, rig = wanted.rig)" in activity
+           and "rememberPet(this, pet.id, activePose, pet.rig)" in activity)
+    report("桌面那一只开出来就是那套身体（不在了就退回默认，不是不出来）",
+           "rig in folder.rigs()" in overlay and "folder.withRig(rig)" in overlay)
+    report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
+           "rememberRig(this, name)" in overlay
+           and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
 
     print("== functions defined and called from nowhere (a reading list) ==")
     orphans = 0
