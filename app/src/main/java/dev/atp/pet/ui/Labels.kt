@@ -71,7 +71,7 @@ object Labels {
         "goto" to R.string.vocab_action_goto,
     )
 
-    private val PROPKINDS = mapOf(
+    private val PROP_KINDS = mapOf(
         "hold" to R.string.vocab_propkind_hold,
         "device" to R.string.vocab_propkind_device,
         "throw" to R.string.vocab_propkind_throw,

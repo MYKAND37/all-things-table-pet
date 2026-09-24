@@ -224,6 +224,78 @@ def check_folder_constants_qualified():
            % (len(names), ", ".join(names[:6])))
 
 
+def check_upper_case_names():
+    """
+    A bare SCREAMING_CASE name that is one or two letters away from a name this tree declares
+    is a typo, and a typo is a build that does not compile.
+
+    The fourth of the same family (private companion member, folder constant, cross-package
+    object): mechanical, invisible locally, only CI compiles -- and this one has cost two builds
+    (`ANIMATIONS_FILE` reached bare, `PROP_KINDS` written where the map was called `PROPKINDS`).
+
+    Why "close to a declared name" rather than "declared at all": the framework has constants
+    this tree never declares (`Service.START_NOT_STICKY`, which a subclass may write bare) and
+    hex colour literals look like constants too (`0xFF171528`). Those must not be reported. A
+    name that is a couple of edits from one of OUR names is a different animal: it is somebody
+    meaning to write that name. Two edits is the whole tolerance -- exactly the distance between
+    PROP_KINDS and PROPKINDS.
+    """
+    declared = set()
+    files = list(kotlin_files())
+    for path in files:
+        text = open(path, encoding="utf-8").read()
+        declared |= set(re.findall(r"\b(?:const )?val ([A-Z][A-Z0-9_]*)\b", text))
+        declared |= set(re.findall(r"\b(?:object|class) ([A-Z][A-Z0-9_]*)\b", text))
+        for body in re.findall(r"enum class \w+[^{]*\{([^}]*)\}", text, re.S):
+            declared |= set(re.findall(r"([A-Z][A-Z0-9_]*)\s*[,()\n]", body))
+    by_length = {}
+    for name in declared:
+        by_length.setdefault(len(name), []).append(name)
+
+    def close_to(name):
+        """A declared name within two edits, or ""."""
+        for length in range(len(name) - 2, len(name) + 3):
+            for other in by_length.get(length, ()):
+                if edits(name, other) <= 2:
+                    return other
+        return ""
+
+    def edits(a, b):
+        """Bounded Levenshtein; the bound is 3 because anything further is not interesting."""
+        if a == b:
+            return 0
+        prev = list(range(len(b) + 1))
+        for i, ca in enumerate(a, 1):
+            cur = [i]
+            for j, cb in enumerate(b, 1):
+                cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+            if min(cur) > 3:
+                return 9
+            prev = cur
+        return prev[-1]
+
+    bad = []
+    for path in files:
+        text = open(path, encoding="utf-8").read()
+        imported = set(re.findall(r"^import\s+[\w.]*\b([A-Z][A-Z0-9_]*)\s*$", text, re.M))
+        seen = set()
+        for i, line in enumerate(text.split("\n"), 1):
+            code = line.split("//")[0]
+            if code.lstrip().startswith(("*", "/*")):
+                continue
+            for m in re.finditer(r"(?<![\w.])[A-Z][A-Z0-9_]{2,}\b", code):
+                name = m.group(0)
+                if name in declared or name in imported or name in seen:
+                    continue
+                seen.add(name)
+                near = close_to(name)
+                if near:
+                    bad.append("%s:%d 用了 %s —— 是不是想写 %s？"
+                               % (os.path.basename(path), i, name, near))
+    report("全大写名字没有拼错的（离本树某个名字只有一两个字母的名字）",
+           not bad, "; ".join(bad[:5]))
+
+
 def report_hardcoded_text():
     """
     界面里还硬写着的中文：**报数，不判红**。
@@ -538,6 +610,7 @@ def main():
     check_private_companions()
     check_folder_constants_qualified()
     check_object_imports()
+    check_upper_case_names()
     report_hardcoded_text()
     check_chip_lists()
     check_view_resources()
