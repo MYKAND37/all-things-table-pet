@@ -27,9 +27,8 @@
     <string name="particle_sprayed">喷了 %1$s · 回测试场看</string>
     <string name="particle_add">＋ 加一种粒子</string>
     <string name="menu_anims">动画管理</string>
-    <string name="anim_page_hint">一只桌宠的动画都在这儿：一串帧按顺序演一遍。每一帧可以带姿势（关键帧之间自己走）、带一套图，或者两样都带。播放仍然在测试场看得见 —— 动画是演给眼睛看的。</string>
+    <string name="anim_page_hint">一只桌宠的动画都在这儿：一串帧按顺序演一遍，每一帧可以带姿势（关键帧之间自己走）、带一套图，或者两样都带。右边就是这只桌宠本人：拖关节摆姿势、点上面的图开关换图，改完按「存入这一帧」。这一页也能播。</string>
     <string name="anim_need_pet">动画属于一只桌宠（和它的某套骨骼）：先去测试场上面选一只。</string>
-    <string name="anim_playing">播放中</string>
     <string name="menu_liquids">液体管理</string>
     <string name="menu_settings">全局设置</string>
 
@@ -217,6 +216,7 @@
     <string name="rig_mode_pose">摆姿势</string>
     <string name="rig_mode_bones">改骨骼</string>
     <string name="rig_save_bones">保存骨骼</string>
+    <string name="rig_view_fit">视角摆正了：不转、不偏、整幅画都在画面里</string>
     <string name="rig_reset">复位</string>
     <string name="rig_reference">参考图</string>
     <string name="rig_reset_bones">重置骨骼</string>
@@ -383,12 +383,45 @@
     <string name="anim_name">动画名称</string>
     <string name="anim_speed">速度（整套的倍率）</string>
     <string name="anim_frames">帧</string>
+    <string name="anim_frames_elsewhere">帧在动画这一页里编：左边那条横带选帧，右边就是角色，摆好按「存入这一帧」。</string>
     <string name="anim_no_frames">还没有帧。把宠物摆好，按下面那个按钮抓一帧。</string>
     <string name="anim_capture">＋ 用现在的姿势加一帧</string>
     <string name="anim_preview">▶ 试播</string>
     <string name="anim_frame_art">这一帧画哪套图</string>
     <string name="anim_no_art">不动图</string>
     <string name="anim_frame_seconds">这一帧走多久（秒）</string>
+
+    <!-- 动画工作台（1.22.0）：左边这一段，右边角色。 -->
+    <string name="anim_pick_one">先在左边选一段动画</string>
+    <string name="anim_frame_add">＋ 帧</string>
+    <string name="anim_save_frame">存入这一帧</string>
+    <string name="anim_frame_shorter">帧 −0.1s</string>
+    <string name="anim_frame_longer">帧 ＋0.1s</string>
+    <string name="anim_drop_frame">删掉这一帧</string>
+    <string name="anim_reset_pose">复位姿势</string>
+    <string name="anim_turn">转 90°</string>
+    <string name="anim_fit">摆正视角</string>
+    <string name="anim_bones">骨骼</string>
+    <string name="anim_edit_bones">改骨骼</string>
+    <string name="anim_pose_mode">摆姿势</string>
+    <string name="anim_save_bones">存骨骼</string>
+    <string name="anim_meta">名字/速度</string>
+    <string name="anim_states_label">图：</string>
+    <string name="anim_state_plain">底图</string>
+    <string name="anim_frame_chip">%1$d · %2$ss</string>
+    <string name="anim_need_frame">先选一帧</string>
+    <string name="anim_no_states">这套骨骼还没有第二套图。要加，去 桌宠管理 → 部位 → ＋加一张状态图。</string>
+    <string name="anim_no_frames_strip">还没有帧。按「＋ 帧」把现在的样子存成一帧。</string>
+    <string name="anim_studio_hint">左边选一段、选一帧；右边直接拖关节摆姿势，改完按「存入这一帧」。双指缩放/旋转，单指拖动画面，双击复位姿势。</string>
+    <string name="anim_frame_saved">第 %1$d 帧存好了：%2$d 节骨头 · 图 %3$s</string>
+    <string name="anim_frame_added">在第 %1$d 帧后面加了一帧，它现在就是刚才那个样子</string>
+    <string name="anim_frame_dropped">第 %1$d 帧删掉了，后面的帧接上来</string>
+    <string name="anim_frame_seconds_now">第 %1$d 帧改成 %2$s 秒</string>
+    <string name="anim_turn_done">视角转到 %1$d° · 单指拖动画面，双指缩放/旋转，「摆正视角」回来</string>
+    <string name="anim_playing_hint">正在演这一遍 · 碰一下右边就停下来（停下来之后才能改）</string>
+    <string name="anim_frame_status">第 %1$d/%2$d 帧 · %3$s 秒 · %4$d 节骨头 · 图 %5$s</string>
+    <string name="anim_dirty_hint">改过了 —— 按「存入这一帧」才会留下</string>
+    <string name="anim_bone_mode_hint">改骨骼：蓝点是关节、橙点是末端，拖它们把骨架对上画。改完按「存骨骼」，它写回你正在看的这一只。</string>
     <string name="anim_frame_detail">帧 %1$d · %2$s · %3$s 秒 · %4$d 节骨头</string>
     <string name="action_close">关闭</string>
     <string name="action_none_hint">松开动作，回到站姿</string>

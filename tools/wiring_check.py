@@ -610,12 +610,89 @@ def main():
            and "R.id.menuAnims ->" in activity and "Pane.ANIMS" in activity)
     report("按 MenuItem 的规矩进 menuItems（rail 检查会盯着顺序）",
            "findViewById(R.id.menuAnims)," in activity)
-    report("页面自己建（buildAnimList），并且和测试场共用那个编辑器",
+    report("页面自己建（buildAnimList），而且工作台和测试场共用那个编辑器（withFrames 分岔）",
            "private fun buildAnimList(" in activity
-           and "askAnimation(folder, anim) { buildAnimList() }" in activity)
+           and "askAnimation(folder, anim, withFrames = false)" in activity)
     report("编辑器不再绑定某一个容器（改完叫回调，谁开的重画谁）",
-           "existing: AnimationSpec?, after: () -> Unit" in activity
+           "existing: AnimationSpec?," in activity
+           and "withFrames: Boolean = true," in activity
            and "after()" in activity)
+
+    print("== 动画工作台：右边是角色，左边是帧（1.22.0）==")
+    # 「动画管理那一页右边应能对角色进行预览，然后动画应集成骨骼调整，部位状态切换等功能，
+    # 还要有调整关键帧，旋转，放大，平移等」。这一节每一条都钉那句话里的一个词，因为"我加了
+    # 一个功能"和"用户能找到、能用上那个功能"在这个应用里已经不止一次不是同一件事。
+    skel_kt = next((t for p, t in files.items() if p.endswith("ui/SkeletonView.kt")), "")
+    # 引擎那一份（下面「动画：帧、速度」那一节也会再取一次，两边看的是同一个文件）。
+    anim_kt = next((t for p, t in files.items() if p.endswith("engine/anim/Animation.kt")), "")
+    report("右边真的是一只角色（第二个骨骼视图），不是又一个列表",
+           "dev.atp.pet.ui.SkeletonView" in layout_text and "@+id/animView" in layout_text
+           and "animView = findViewById(R.id.animView)" in activity
+           and "animView.load(folder)" in activity)
+    report("左边是一段和它的帧：动画列表 + 关键帧横带 + 末尾的「＋ 帧」",
+           "@+id/animFrames" in layout_text and "private fun buildFrameStrip(" in activity
+           and "private fun paintFrameChips(" in activity and "@+id/animFrameAdd" in layout_text)
+    report("选中一帧就摆上去，而且姿势取的是 Anim.framePose（和播放器同一刻，不是另算一套）",
+           "animView.applyPose(Anim.framePose(anim, animFrameIndex))" in activity
+           and "fun framePose(a: AnimationSpec, index: Int)" in anim_kt)
+    report("改姿势就地改：拖关节 → onPoseEdited → 提示「存入这一帧」",
+           "var onPoseEdited: (() -> Unit)?" in skel_kt
+           and "animView.onPoseEdited =" in activity and "R.string.anim_dirty_hint" in activity)
+    report("骨架本身也能在这页改（改骨骼 / 存骨骼两个 chip）",
+           "@+id/animEditBones" in layout_text and "@+id/animSaveBones" in layout_text
+           and "private fun toggleStudioBoneMode(" in activity
+           and "animView.setBoneEditMode(animBoneMode)" in activity)
+    # 这条是这一版最容易写错的地方：工作台演的是 summoned ?: opened，而骨骼页那个 saveBones()
+    # 写的是 opened。"打开 A、放上场 B"的时候写错一只，事后极难发现（名字都对）。
+    studio_save = activity[activity.find("private fun saveStudioBones("):]
+    studio_save = studio_save[:studio_save.find("\n    }")]
+    report("工作台里改骨骼写回**正在看的这一只**（不是 opened）",
+           "store.saveRig(" in studio_save and "folder, bones" in studio_save
+           and "opened" not in studio_save)
+    report("点位状态切换：一帧可以同时开好几套图（+ 拼起来，拆开才生效）",
+           "@+id/animStates" in layout_text and "private fun buildStateChips(" in activity
+           and "Anim.joinStates(animLiveStates)" in activity
+           and "fun statesOf(state: String)" in anim_kt and "fun joinStates(" in anim_kt)
+    report("图开关的名单是**声明过的**状态（写一个不存在的名字，播放时谁都对不上）",
+           "val keys = previewStateKeys(folder)" in activity)
+    report("一帧什么开关都不开也是合法的一帧（有「底图」这条路回去）",
+           "R.string.anim_state_plain" in activity and "animLiveStates.clear()" in activity)
+    report("旋转 / 放大 / 平移都在：视图旋转、双指旋转的增量、以及聚焦时的反变换",
+           "var viewRotation = 0f" in skel_kt and "fun rotateBy(" in skel_kt
+           and "private fun angleOf(" in skel_kt and "private fun anchorAt(" in skel_kt)
+    report("旋转是视图的（骨架/图/参考图一起转），所以画布只转一次",
+           "canvas.rotate(viewRotation, pivotX, pivotY)" in skel_kt and "val turned = viewRotation != 0f" in skel_kt)
+    report("「摆正视角」把旋转、缩放、偏移一起收回来",
+           "fun resetView()" in skel_kt and "computeFit(width, height, s)" in skel_kt
+           and "setRotation(0f)" in skel_kt)
+    report("工作台里也能播（不是只能跑去测试场）",
+           "private fun toggleStudioPlay(" in activity and "private val studioTick" in activity
+           and "Anim.startSeconds(anim, animFrameIndex)" in activity)
+    report("关键帧四件事各有一个人：加、存、删、改时长",
+           "private fun captureStudioFrame(" in activity and "private fun saveStudioFrame(" in activity
+           and "private fun dropStudioFrame(" in activity and "private fun nudgeStudioFrame(" in activity)
+    report("加帧是插在**这一帧后面**，不是永远加在末尾",
+           "(animFrameIndex + 1).coerceAtMost(anim.frames.size)" in activity)
+    report("存这一帧写的是整只的姿势（抓帧本来就抓一个完整的姿势）",
+           "angles = animView.currentAngles()" in activity)
+    report("时长两个方向各 0.1 秒，并且夹在界面那把尺子里",
+           "nudgeStudioFrame(-0.1f)" in activity and "nudgeStudioFrame(0.1f)" in activity
+           and "coerceIn(MIN_FRAME_SECONDS, MAX_FRAME_SECONDS)" in activity
+           and "const val MIN_FRAME_SECONDS = 0.1f" in activity)
+    report("底下那条每个 chip 都挂上了自己那一件事",
+           all(("R.id.%s" % i) in activity and ("setOnClickListener { %s" % fn) in activity
+               for i, fn in (("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "captureStudioFrame()"),
+                             ("animSaveFrame", "saveStudioFrame()"), ("animSlower", "nudgeStudioFrame(-0.1f)"),
+                             ("animLonger", "nudgeStudioFrame(0.1f)"), ("animDropFrame", "dropStudioFrame()"),
+                             ("animResetPose", "animView.resetPose()"), ("animTurn", "turnStudio(90f)"),
+                             ("animFit", "animView.resetView()"), ("animBones", "toggleStudioBones()"),
+                             ("animEditBones", "toggleStudioBoneMode()"))))
+    report("离开这一页就把它那套图解掉（两个实例不同时压在内存里）",
+           "private fun leaveAnimationStudio(" in activity and "animView.release()" in activity
+           and "if (currentPane == Pane.ANIMS && pane != Pane.ANIMS) leaveAnimationStudio()" in activity)
+    report("这一页也能自己播、自己停，且『停』和『碰一下』是两件事",
+           "private fun haltStudioPlay(" in activity and "private fun stopStudioPlay(" in activity
+           and "if (animPlaying) haltStudioPlay()" in activity)
 
     print("== 免责声明那道门：同意之前什么都不做，不同意就退出 ==")
     # 「将免责声明添加到用户打开的弹窗，确认后才能继续使用，不确认自己退出」（1.20.1）。
@@ -727,7 +804,9 @@ def main():
            and "object Anim {" in anim_kt and "android" not in anim_kt)
     report("一帧有姿势、有图、有秒数三样（演算 / 绘制 / 半演算）",
            "val angles: Map<String, Float> = emptyMap()" in anim_kt
-           and "val state: String = \"\"" in anim_kt and "val seconds: Float = 0.4f" in anim_kt)
+           and "val state: String = \"\"" in anim_kt
+           and "val seconds: Float = Anim.DEFAULT_FRAME_SECONDS" in anim_kt
+           and "const val DEFAULT_FRAME_SECONDS = 0.4f" in anim_kt)
     report("动画是 load / swapRig 的参数（第二个实例忘不掉）",
            "animations: List<AnimationSpec>," in load_fn and "animations: List<AnimationSpec>," in swap_fn)
     report("load 和换套都把它装进这一只，并且停掉正在播的",
@@ -742,9 +821,9 @@ def main():
            "Anim.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim)
     report("不循环的走完就停在最后一帧（图不弹回默认）",
            "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)" in step_anim)
-    report("当前帧的开关只进画图那张表",
-           "if (animState.isNotEmpty()) out[animState] = true" in bench
-           and "private fun mergedStates()" in bench)
+    report("当前帧的开关只进画图那张表（可以有好几个，拆开写进去）",
+           "for (tag in Anim.statesOf(animState)) out[tag] = true" in bench
+           and "private fun mergedStates()" in bench and "animState = s.state" in step_anim)
     report("用户按的停止会把图还回默认（和「走完」不一样）",
            "fun stopAnimation()" in bench and 'animState = ""' in bench)
     report("播不了就说出来（名字不认识 / 一帧都没有）",

@@ -200,6 +200,35 @@ class MainActivity : AppCompatActivity() {
     private lateinit var rigLimitMax: View
     private var rigBoneMode = false
 
+    /**
+     * 动画工作台（1.22.0）在编哪一段、哪一帧，以及右边那只看的是什么。
+     *
+     * [animEditId] 是**选中的那一段**（不是"打开的那个弹窗"）：工作台没有"确定/取消"，
+     * 每一次改动就地存下去，所以"我在编哪一段"必须是界面上一直看得见的一件事。
+     *
+     * [animLiveStates] 是**预览里亮着的图**：它从选中的那一帧来，点开关会改它，按
+     * 「存入这一帧」才写回帧里 —— 和姿势同一个规矩，看到的不等于存下的，存下的要按一下。
+     *
+     * [animViewRig] 是右边载入的那套身体（rig 目录）。换桌宠/换骨骼之后要重载，靠它判断 ——
+     * 比"每次都重载"省一次解图，比"相信调用方一定会重载"可靠。
+     */
+    private var animEditId: String? = null
+    private var animFrameIndex = 0
+    private val animLiveStates = linkedSetOf<String>()
+    private var animViewRig = ""
+    private var animShowBones = true
+    private var animBoneMode = false
+    private var animPlaying = false
+    private var animClock = 0f
+    private var animLastTick = 0L
+    private var animShownFrame = -1
+    private var animPlayingSpec: AnimationSpec? = null
+    /** 帧那一排方块，按顺序放着：播放时只改高亮，不整排重建。 */
+    private var animFrameChips = mutableListOf<TextView>()
+
+    /** Which pane is on screen, so leaving one can do its own cleanup. See show(). */
+    private var currentPane = Pane.PLACEHOLDER
+
     /** The open bone list, so an edit can redraw it where it stands. */
     private var boneDialog: AlertDialog? = null
     private lateinit var boneListBox: LinearLayout
@@ -230,6 +259,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var particleList: LinearLayout
     private lateinit var animScroll: View
     private lateinit var animList: LinearLayout
+    private lateinit var animRow: View
+    private lateinit var animView: SkeletonView
+    private lateinit var animFrames: LinearLayout
+    private lateinit var animStates: LinearLayout
+    private lateinit var animBarScroll: View
+    private lateinit var animPlay: TextView
+    private lateinit var animBonesChip: TextView
+    private lateinit var animEditBones: TextView
+    private lateinit var animSaveBones: TextView
     private lateinit var settingsScroll: View
     private lateinit var settingsList: LinearLayout
     private lateinit var liquidBar: LinearLayout
@@ -324,6 +362,39 @@ class MainActivity : AppCompatActivity() {
         particleScroll = findViewById(R.id.particleScroll)
         animScroll = findViewById(R.id.animScroll)
         animList = findViewById(R.id.animList)
+        animRow = findViewById(R.id.animRow)
+        animView = findViewById(R.id.animView)
+        animFrames = findViewById(R.id.animFrames)
+        animStates = findViewById(R.id.animStates)
+        animBarScroll = findViewById(R.id.animBarScroll)
+        animPlay = findViewById(R.id.animPlay)
+        animBonesChip = findViewById(R.id.animBones)
+        animEditBones = findViewById(R.id.animEditBones)
+        animSaveBones = findViewById(R.id.animSaveBones)
+        animPlay.setOnClickListener { toggleStudioPlay() }
+        findViewById<View>(R.id.animFrameAdd).setOnClickListener { captureStudioFrame() }
+        findViewById<View>(R.id.animSaveFrame).setOnClickListener { saveStudioFrame() }
+        findViewById<View>(R.id.animSlower).setOnClickListener { nudgeStudioFrame(-0.1f) }
+        findViewById<View>(R.id.animLonger).setOnClickListener { nudgeStudioFrame(0.1f) }
+        findViewById<View>(R.id.animDropFrame).setOnClickListener { dropStudioFrame() }
+        findViewById<View>(R.id.animResetPose).setOnClickListener { animView.resetPose() }
+        findViewById<View>(R.id.animTurn).setOnClickListener { turnStudio(90f) }
+        findViewById<View>(R.id.animFit).setOnClickListener { animView.resetView() }
+        animBonesChip.setOnClickListener { toggleStudioBones() }
+        animEditBones.setOnClickListener { toggleStudioBoneMode() }
+        animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
+        findViewById<View>(R.id.animMeta).setOnClickListener {
+            val folder = studioFolder() ?: return@setOnClickListener
+            val anim = studioAnimation(folder) ?: return@setOnClickListener
+            // 名字/速度/循环，外加"删掉这一段"。帧本身在这页里编，所以那个弹窗不带帧那一半。
+            askAnimation(folder, anim, withFrames = false) { buildAnimList() }
+        }
+        // 工作台里摆姿势：姿势是**抓帧的内容**，所以拖动本身不改任何东西，改的是"现在这个样子"。
+        animView.onInfo = { statusLine.text = it }
+        animView.onPoseEdited = {
+            if (animPlaying) haltStudioPlay()
+            markStudioDirty()
+        }
         particleList = findViewById(R.id.particleList)
         settingsScroll = findViewById(R.id.settingsScroll)
         settingsList = findViewById(R.id.settingsList)
@@ -401,6 +472,9 @@ class MainActivity : AppCompatActivity() {
         alignPane = findViewById(R.id.alignPane)
         alignView = findViewById(R.id.alignView)
         statusLine = findViewById(R.id.statusLine)
+        // 初始那一眼也要对：布局里「存骨骼」是可见的，而它只该在改骨骼的时候出现。
+        // 放在这一行**之后** —— applyAnimBoneMode 会写状态栏，而它是 lateinit。
+        applyAnimBoneMode()
 
         alignView.onInfo = { statusLine.text = it }
         findViewById<View>(R.id.alignCancel).setOnClickListener {
@@ -678,6 +752,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun show(pane: Pane) {
+        // 离开动画页要收自己的摊子：停播、把预览那套图解掉（两套图同时留在内存里没必要）。
+        // 用"上一个是谁"而不是"谁在调我"，因为 show() 有二十几个调用点，靠它们记得收摊是
+        // 记不住的（这个应用里"建好了但到不了"的 bug 已经有四个了）。
+        if (currentPane == Pane.ANIMS && pane != Pane.ANIMS) leaveAnimationStudio()
+        currentPane = pane
+
         placeholder.visibility = if (pane == Pane.PLACEHOLDER) View.VISIBLE else View.GONE
         sandboxPane.visibility = if (pane == Pane.SANDBOX) View.VISIBLE else View.GONE
         petListScroll.visibility = if (pane == Pane.PET_LIST) View.VISIBLE else View.GONE
@@ -690,7 +770,8 @@ class MainActivity : AppCompatActivity() {
         logicPane.visibility = if (pane == Pane.PET_LOGIC) View.VISIBLE else View.GONE
         liquidScroll.visibility = if (pane == Pane.LIQUIDS) View.VISIBLE else View.GONE
         particleScroll.visibility = if (pane == Pane.PARTICLES) View.VISIBLE else View.GONE
-        animScroll.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
+        animRow.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
+        animBarScroll.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
         settingsScroll.visibility = if (pane == Pane.SETTINGS) View.VISIBLE else View.GONE
         rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         if (pane != Pane.PET_RIG && rigBoneMode) {
@@ -698,10 +779,16 @@ class MainActivity : AppCompatActivity() {
             skeletonView.setBoneEditMode(false)
             applyRigMode()
         }
+        if (pane != Pane.ANIMS && animBoneMode) {
+            animBoneMode = false
+            animView.setBoneEditMode(false)
+            applyAnimBoneMode()
+        }
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN ||
                 pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES ||
-                pane == Pane.LIQUIDS || pane == Pane.PARTICLES || pane == Pane.SETTINGS
+                pane == Pane.LIQUIDS || pane == Pane.PARTICLES || pane == Pane.SETTINGS ||
+                pane == Pane.ANIMS
             ) View.VISIBLE else View.GONE
 
         when (pane) {
@@ -1169,8 +1256,17 @@ class MainActivity : AppCompatActivity() {
      * 帧是**抓当前这一只的样子**存下来的（[PhysicsSandboxView.currentAngles]）：用户先用手
      * 或者用动作表把宠物摆好，再回来按「用现在的姿势加一帧」。这不是顺手，而是这个功能唯一
      * 说得通的入口 —— 帧就是"我看到的样子"，而不是一串要手敲的角度。
+     *
+     * [withFrames] 是给动画工作台留的（1.22.0）：那一页自己就是帧的编辑器（左帧带、右角色），
+     * 所以它只要这个弹窗的**另一半**（名字/速度/循环/删掉），不要第二个改帧的地方 —— 两个
+     * 地方都能改帧，就会有"我在这边改的怎么没了"。
      */
-    private fun askAnimation(folder: CharacterFolder, existing: AnimationSpec?, after: () -> Unit) {
+    private fun askAnimation(
+        folder: CharacterFolder,
+        existing: AnimationSpec?,
+        withFrames: Boolean = true,
+        after: () -> Unit,
+    ) {
         var speed = existing?.speed ?: 1f
         var loop = existing?.loop ?: true
         val id = existing?.id ?: nextAnimationId(folder)
@@ -1237,6 +1333,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 工作台的「＋ 帧」也走这个默认值（Anim.DEFAULT_FRAME_SECONDS），两处一个来源。
         val capture = label(getString(R.string.anim_capture), 13f, INK)
         capture.setPadding(dp(14), dp(11), dp(14), dp(11))
         capture.background = getDrawable(R.drawable.menu_item_selected)
@@ -1248,7 +1345,9 @@ class MainActivity : AppCompatActivity() {
                 getString(R.string.logic_no_states),
                 "",
             ) { state ->
-                frames.add(AnimFrame(angles = angles, state = state, seconds = 0.4f))
+                frames.add(
+                    AnimFrame(angles = angles, state = state, seconds = Anim.DEFAULT_FRAME_SECONDS)
+                )
                 fillFrames()
                 write()
                 true
@@ -1268,10 +1367,14 @@ class MainActivity : AppCompatActivity() {
         box.addView(nameInput)
         box.addView(speedRow)
         box.addView(loopChip)
-        box.addView(label(getString(R.string.anim_frames), 11f, MUTED, top = 10, bottom = 6))
-        box.addView(frameBox)
-        box.addView(capture)
-        box.addView(preview)
+        if (withFrames) {
+            box.addView(label(getString(R.string.anim_frames), 11f, MUTED, top = 10, bottom = 6))
+            box.addView(frameBox)
+            box.addView(capture)
+            box.addView(preview)
+        } else {
+            box.addView(label(getString(R.string.anim_frames_elsewhere), 10f, MUTED, top = 10))
+        }
 
         AlertDialog.Builder(this)
             .setTitle(R.string.anim_title)
@@ -1313,7 +1416,7 @@ class MainActivity : AppCompatActivity() {
         ) { state ->
             askNumber(
                 getString(R.string.anim_frame_seconds),
-                frame.seconds, 0.1f, 30f,
+                frame.seconds, MIN_FRAME_SECONDS, MAX_FRAME_SECONDS,
             ) { seconds ->
                 copy[index] = frame.copy(state = state, seconds = seconds)
                 frames.clear()
@@ -5587,45 +5690,48 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 动画管理：一只桌宠的动画，一个页面（1.21.0）。
+     * 动画管理：一只桌宠的动画，一个页面（1.21.0；1.22.0 起右边是角色本人）。
      *
      * 和测试场那张动作表里的动画段是同一批数据（`animations.json`），但用途不同：那边是
-     * 「现在让它演一遍」，这里是「我把这几段整理好」—— 新建、改帧、改速度、删掉、试播。
-     * 播放仍然只在测试场看得见（动画是**演给眼睛看**的，放在这页里播没有人看得到宠物）。
+     * 「现在让它演一遍」，这里是「这几段我一段一段摆出来」。
+     *
+     * 这一版把角色搬到了右边：**摆一帧本来就是对着角色摆的**。1.21.0 那一版是"在测试场摆好、
+     * 抓一帧、回这页填秒数"，中间隔着一个页面切换，而摆姿势时想看的那一帧（上一帧、下一帧）
+     * 恰好只在另一页上。左边 = 演什么，右边 = 演出来是什么样，中间不需要来回跑。
      */
     private fun buildAnimList() {
         animList.removeAllViews()
-        animList.addView(label(getString(R.string.menu_anims), 17f, INK, bottom = 4))
-        animList.addView(label(getString(R.string.anim_page_hint), 11f, MUTED, bottom = 10))
+        animList.addView(label(getString(R.string.menu_anims), 16f, INK, bottom = 4))
 
-        val folder = summoned ?: opened
+        val folder = studioFolder()
         if (folder == null) {
             animList.addView(label(getString(R.string.anim_need_pet), 12f, MUTED))
+            clearAnimationStudio()
             return
         }
         val anims = store.loadAnimations(folder)
-        val playing = sandboxView.animationInfo()
+        // 选中的那一段得真的还在：换了一只桌宠、或者刚把它删掉，都会让它不在名单里。
+        // 这里退回第一段，而不是留着一个不存在的 id 让每一处都判空。
+        if (anims.none { it.id == animEditId }) animEditId = anims.firstOrNull()?.id
+
         for (anim in anims) {
+            val here = anim.id == animEditId
             val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = getDrawable(R.drawable.menu_item_idle)
-                setPadding(dp(12), dp(9), dp(12), dp(9))
+                orientation = LinearLayout.VERTICAL
+                background = getDrawable(
+                    if (here) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+                )
+                setPadding(dp(10), dp(8), dp(10), dp(8))
                 isClickable = true
                 isFocusable = true
             }
             row.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(6) }
+            ).apply { bottomMargin = dp(5) }
 
-            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-            text.layoutParams = LinearLayout.LayoutParams(
-                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
-            )
-            val here = playing?.takeIf { it.first == anim.name }
-            text.addView(label(anim.name + if (here != null) " · " + getString(R.string.anim_playing) else "", 14f, INK))
-            text.addView(
+            row.addView(label(anim.name, 13f, INK))
+            row.addView(
                 label(
                     getString(
                         R.string.anim_detail,
@@ -5636,39 +5742,523 @@ class MainActivity : AppCompatActivity() {
                     10f, MUTED,
                 )
             )
-            row.addView(text)
-
-            val play = label(
-                getString(if (here != null) R.string.anim_stop else R.string.anim_play), 11f, INK,
-            )
-            play.setPadding(dp(8), dp(6), dp(8), dp(6))
-            play.setOnClickListener {
-                if (here != null) {
-                    sandboxView.stopAnimation()
-                } else if (!sandboxView.playAnimation(anim.id)) {
-                    Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+            // 点一段就编这一段：没有"确定"，右边马上换成它。再点一下同一段 = 从头看一遍
+            // （回到第 1 帧、视图摆正）—— 迷路了有个不用想的回车键。
+            row.setOnClickListener {
+                haltStudioPlay()
+                if (here) {
+                    animFrameIndex = 0
+                    animView.resetView()
+                } else {
+                    animEditId = anim.id
+                    animFrameIndex = 0
                 }
                 buildAnimList()
             }
-            row.addView(play)
-
-            row.setOnClickListener { askAnimation(folder, anim) { buildAnimList() } }
             animList.addView(row)
         }
 
         val add = label(getString(R.string.anim_new), 13f, INK)
-        add.setPadding(dp(14), dp(11), dp(14), dp(11))
+        add.setPadding(dp(12), dp(10), dp(12), dp(10))
         add.background = getDrawable(R.drawable.menu_item_selected)
         add.layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(4) }
-        add.setOnClickListener { askAnimation(folder, null) { buildAnimList() } }
+        // 新动画先问名字/速度（帧在这页里编），建完直接选中它 —— 建一段空的然后要用户
+        // 再去列表里找它，是让用户走一趟多余的路。
+        add.setOnClickListener {
+            askAnimation(folder, null, withFrames = false) {
+                animEditId = store.loadAnimations(folder).lastOrNull()?.id ?: animEditId
+                animFrameIndex = 0
+                buildAnimList()
+            }
+        }
         animList.addView(add)
 
         if (anims.isEmpty()) {
             animList.addView(label(getString(R.string.anim_empty), 10f, MUTED, top = 8))
         }
+
+        loadAnimationStudio(folder)
+    }
+
+    // ── 动画工作台（1.22.0）────────────────────────────────────────────────
+
+    /**
+     * 工作台演的是**哪一只**。
+     *
+     * `summoned ?: opened`，和这一页从 1.21.0 起就用的那条规矩一样：测试场上放着谁，
+     * 动画就是谁的（动画按骨骼套存，骨骼是那一只的）。
+     */
+    private fun studioFolder(): CharacterFolder? = summoned ?: opened
+
+    private fun studioAnimation(folder: CharacterFolder): AnimationSpec? =
+        store.loadAnimations(folder).firstOrNull { it.id == animEditId }
+
+    /** 右边跟上左边：载入这一只的身体（换过才重载），摆上选中的那一帧。 */
+    private fun loadAnimationStudio(folder: CharacterFolder) {
+        val rigKey = folder.rigDir.absolutePath
+        if (rigKey != animViewRig) {
+            animView.load(folder)
+            animView.setShowSkeleton(animShowBones)
+            animView.setBoneEditMode(animBoneMode)
+            animView.resetView()
+            animViewRig = rigKey
+        }
+        val anim = studioAnimation(folder)
+        if (anim == null) {
+            clearAnimationStudio()
+            return
+        }
+        buildFrameStrip(folder, anim)
+        showStudioFrame(folder, anim, animFrameIndex)
+    }
+
+    /**
+     * 把第 [index] 帧摆到右边的角色上：它的姿势，和它开着的那几套图。
+     *
+     * 姿势取 [Anim.framePose]（帧起点那一刻的样子），不是"帧里写着的角度" —— 这两件事在
+     * 「下一帧才写的骨头」上不一样，而右边演的必须是**播放时会演出来的那个**。
+     */
+    private fun showStudioFrame(folder: CharacterFolder, anim: AnimationSpec, index: Int) {
+        val frames = anim.frames
+        animFrameIndex = index.coerceIn(0, max(0, frames.size - 1))
+        animLiveStates.clear()
+        animLiveStates.addAll(Anim.statesOf(frames.getOrNull(animFrameIndex)?.state ?: ""))
+        animView.applyPose(Anim.framePose(anim, animFrameIndex))
+        applyStudioStates()
+        buildStateChips(folder)
+        paintFrameChips(animFrameIndex)
+        statusLine.text = frameStatusText(anim, animFrameIndex)
+    }
+
+    /** 预览里亮哪几套图。只进渲染器那张画图表，不碰引擎里的开关 —— 这里是在**看**。 */
+    private fun applyStudioStates() {
+        val map = LinkedHashMap<String, Boolean>()
+        for (tag in animLiveStates) map[tag] = true
+        // 参考图不画：工作台问的是"这一帧看起来是什么样"，rig 的参考图回答的是另一个问题。
+        animView.setPreview(map, true, reference = false)
+    }
+
+    /** 关键帧那条横带：一帧一个方块，末尾是「＋ 帧」。 */
+    private fun buildFrameStrip(folder: CharacterFolder, anim: AnimationSpec) {
+        animFrames.removeAllViews()
+        animFrameChips = mutableListOf()
+        for ((i, f) in anim.frames.withIndex()) {
+            val chip = label(
+                getString(R.string.anim_frame_chip, i + 1, "%.1f".format(Anim.frameSeconds(f))),
+                11f, INK,
+            )
+            chip.setPadding(dp(8), dp(6), dp(8), dp(6))
+            chip.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { marginEnd = dp(4) }
+            chip.setOnClickListener { onFrameChipTapped(folder, i) }
+            animFrames.addView(chip)
+            animFrameChips.add(chip)
+        }
+        val plus = label(getString(R.string.anim_frame_add), 11f, INK)
+        plus.setPadding(dp(8), dp(6), dp(8), dp(6))
+        plus.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { marginStart = dp(2) }
+        plus.setOnClickListener { captureStudioFrame() }
+        animFrames.addView(plus)
+        if (anim.frames.isEmpty()) {
+            animFrames.addView(label(getString(R.string.anim_no_frames_strip), 10f, MUTED))
+        }
+        paintFrameChips(animFrameIndex)
+    }
+
+    /** 帧方块的高亮。播放时每换一帧都要改，所以**只改背景**，不重建那一排。 */
+    private fun paintFrameChips(index: Int) {
+        for ((i, chip) in animFrameChips.withIndex()) {
+            val here = i == index
+            chip.background = getDrawable(
+                if (here) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            chip.setTextColor(if (here) INK else MUTED)
+        }
+    }
+
+    /** 点一个帧方块：停播（在看的那一帧上停），然后摆到这一帧。 */
+    private fun onFrameChipTapped(folder: CharacterFolder, index: Int) {
+        haltStudioPlay()
+        val anim = studioAnimation(folder) ?: return
+        showStudioFrame(folder, anim, index)
+    }
+
+    /**
+     * 这一帧画哪几套图。
+     *
+     * 名单是 [previewStateKeys]：这只桌宠声明过的状态（角色的 + 每个部位自己的，部位那个带
+     * 骨头标签）。**只列声明过的**，因为一帧里写一个不存在的名字，播放时两边都对不上 ——
+     * 用户看到的是"这一帧的图没出来"，而没有任何地方说得出为什么。
+     *
+     * 可以同时开好几个（一帧的 state 是一串，见 [Anim.statesOf]）：一帧里既要换手的图、又要
+     * 换头的图，是这个功能真正要解决的场面。
+     */
+    private fun buildStateChips(folder: CharacterFolder) {
+        animStates.removeAllViews()
+        animStates.addView(label(getString(R.string.anim_states_label), 10f, MUTED, bottom = 4))
+        val keys = previewStateKeys(folder)
+        if (keys.isEmpty()) {
+            animStates.addView(label(getString(R.string.anim_no_states), 10f, MUTED))
+            return
+        }
+        // 先给一个「底图」：一帧什么开关都不开也是合法的一帧，而"怎么回到一个都不开"
+        // 不能是"把刚才点过的都再点一遍"。
+        val plain = label(getString(R.string.anim_state_plain), 11f, MUTED)
+        chipLook(plain, animLiveStates.isEmpty())
+        plain.setOnClickListener {
+            animLiveStates.clear()
+            studioStatesChanged(folder)
+        }
+        animStates.addView(plain)
+
+        for ((tag, text) in keys) {
+            val on = tag in animLiveStates
+            val chip = label((if (on) "✓ " else "") + text, 11f, if (on) INK else MUTED)
+            chipLook(chip, on)
+            chip.setOnClickListener {
+                if (!animLiveStates.add(tag)) animLiveStates.remove(tag)
+                studioStatesChanged(folder)
+            }
+            animStates.addView(chip)
+        }
+    }
+
+    private fun chipLook(chip: TextView, on: Boolean) {
+        chip.setPadding(dp(8), dp(6), dp(8), dp(6))
+        chip.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { marginEnd = dp(4) }
+        chip.background = getDrawable(
+            if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+        )
+    }
+
+    /** 换了一套图：重画那一排（✓ 的位置变了），预览跟着换，并记下"和这一帧不一样了"。 */
+    private fun studioStatesChanged(folder: CharacterFolder) {
+        applyStudioStates()
+        buildStateChips(folder)
+        markStudioDirty()
+    }
+
+    /** 用户改过预览（姿势或图）：说明"现在看到的不等于存下来的"。 */
+    private fun markStudioDirty() {
+        val anim = studioFolder()?.let { studioAnimation(it) } ?: return
+        statusLine.text = getString(R.string.anim_dirty_hint) + " · " + frameStatusText(anim, animFrameIndex)
+    }
+
+    /** 状态栏那一行：第几帧、多久、存的是几节骨头、哪几套图。 */
+    private fun frameStatusText(anim: AnimationSpec, index: Int): String {
+        val frame = anim.frames.getOrNull(index)
+        if (frame == null) return getString(R.string.anim_no_frames_strip)
+        val art = if (frame.state.isEmpty()) getString(R.string.anim_no_art) else frame.state
+        return getString(R.string.anim_frame_status, index + 1, anim.frames.size,
+            "%.2f".format(Anim.frameSeconds(frame)), frame.angles.size, art)
+    }
+
+    // ── 工作台底下那条：每一件都是"对这一帧做什么" ──────────────────────
+
+    /** 播放/停止。播的是**右边这一只**：动画在工作台里也能看，不用跑测试场。 */
+    private fun toggleStudioPlay() {
+        if (animPlaying) {
+            stopStudioPlay()
+            return
+        }
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        if (anim.frames.isEmpty()) {
+            Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+            return
+        }
+        // 从**选中的那一帧**开始演：站在第 3 帧上按播放，想看的就是第 3 帧之后那一段。
+        animClock = Anim.startSeconds(anim, animFrameIndex) / Anim.speedOf(anim)
+        animPlaying = true
+        animPlayingSpec = anim
+        animLastTick = System.nanoTime()
+        animShownFrame = -1
+        animPlay.text = getString(R.string.anim_stop)
+        statusLine.text = getString(R.string.anim_playing_hint)
+        animView.postOnAnimation(studioTick)
+    }
+
+    /** 播放的时钟。dt 是**真实经过的秒数** —— 采样是纯函数，这里只剩"把时间加起来"。 */
+    private val studioTick = object : Runnable {
+        override fun run() {
+            if (!animPlaying) return
+            val now = System.nanoTime()
+            val dt = ((now - animLastTick) / 1_000_000_000f).coerceIn(0f, 0.1f)
+            animLastTick = now
+            animClock += dt
+            val folder = studioFolder()
+            val anim = animPlayingSpec
+            val s = if (anim == null) null else Anim.sample(anim, animClock)
+            if (s == null || folder == null) {
+                stopStudioPlay()
+                return
+            }
+            animFrameIndex = s.frame
+            if (s.frame != animShownFrame) {
+                animShownFrame = s.frame
+                paintFrameChips(s.frame)
+            }
+            animView.applyPose(s.angles)
+            // 图在**帧边界**换，不在中间换 —— 一帧可以同时开着好几套（Anim.statesOf）。
+            val live = Anim.statesOf(s.state)
+            if (live != animLiveStates.toList()) {
+                animLiveStates.clear()
+                animLiveStates.addAll(live)
+                buildStateChips(folder)
+                applyStudioStates()
+            }
+            // 不循环的演完了就停：和测试场同一条规矩（停在最后一帧上，图留着）。
+            if (!anim.loop && animClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
+                stopStudioPlay()
+                return
+            }
+            animView.postOnAnimation(this)
+        }
+    }
+
+    /**
+     * 停时钟，**不动**预览里的姿势和那一排高亮。
+     *
+     * 用户碰一下右边（拖关节）时用的是这一个：那一刻屏幕上的姿势正是他要接着改的那个，
+     * 把它复位回帧里写的角度，等于把他刚拖的那一下吃掉。
+     */
+    private fun haltStudioPlay() {
+        if (!animPlaying) return
+        animPlaying = false
+        animPlayingSpec = null
+        animView.removeCallbacks(studioTick)
+        animPlay.text = getString(R.string.anim_play)
+    }
+
+    /** 用户按的那个停止：停时钟，并把预览摆回**选中的那一帧**（回到"我在改第 3 帧"）。 */
+    private fun stopStudioPlay() {
+        if (!animPlaying) return
+        haltStudioPlay()
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        buildFrameStrip(folder, anim)
+        showStudioFrame(folder, anim, animFrameIndex)
+    }
+
+    /** 「＋ 帧」：把**现在的样子**（姿势 + 开着的图）插到这一帧后面，并选中新的那一帧。 */
+    private fun captureStudioFrame() {
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        haltStudioPlay()
+        val at = if (anim.frames.isEmpty()) 0 else (animFrameIndex + 1).coerceAtMost(anim.frames.size)
+        val frame = AnimFrame(
+            angles = animView.currentAngles(),
+            state = Anim.joinStates(animLiveStates),
+            // 新的一帧先跟上一帧一样长：连抓几帧做一个动作时，节奏不该每帧都要重调一遍。
+            seconds = anim.frames.getOrNull(animFrameIndex)?.seconds ?: Anim.DEFAULT_FRAME_SECONDS,
+        )
+        val next = anim.frames.toMutableList().apply { add(at, frame) }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        animFrameIndex = at
+        buildAnimList()
+        Toast.makeText(
+            this, getString(R.string.anim_frame_added, at + 1), Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /**
+     * 「存入这一帧」：把现在这个姿势和这几套图写成这一帧的内容。
+     *
+     * 写的是**整只**（每一节骨头的角度），不是"只写动过的那几节"。这不是偷懒：抓帧本来就是
+     * 抓一个完整的姿势，而"只写动过的"需要一个"动过"的定义，那个定义在帧与帧之间是会变的
+     * （上一帧动过、这一帧没动，算不算？）。存成整只之后，这一帧在时间轴上的样子就是它现在
+     * 看起来的样子 —— 调试动画时这是唯一不会骗人的规矩。
+     */
+    private fun saveStudioFrame() {
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val frame = anim.frames.getOrNull(animFrameIndex)
+        if (frame == null) {
+            Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
+            return
+        }
+        haltStudioPlay()
+        val angles = animView.currentAngles()
+        val state = Anim.joinStates(animLiveStates)
+        val next = anim.frames.toMutableList().apply {
+            this[animFrameIndex] = frame.copy(angles = angles, state = state)
+        }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        buildAnimList()
+        Toast.makeText(
+            this,
+            getString(
+                R.string.anim_frame_saved, animFrameIndex + 1, angles.size,
+                state.ifEmpty { getString(R.string.anim_no_art) },
+            ),
+            Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /** 「帧 −0.1s / ＋0.1s」：这一帧走多久。夹在 0.1 秒和 30 秒之间，和那个数字弹窗同一把尺子。 */
+    private fun nudgeStudioFrame(delta: Float) {
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val frame = anim.frames.getOrNull(animFrameIndex)
+        if (frame == null) {
+            Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
+            return
+        }
+        haltStudioPlay()
+        val seconds = (frame.seconds + delta).coerceIn(MIN_FRAME_SECONDS, MAX_FRAME_SECONDS)
+        val next = anim.frames.toMutableList().apply {
+            this[animFrameIndex] = frame.copy(seconds = seconds)
+        }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        buildAnimList()
+        statusLine.text = getString(
+            R.string.anim_frame_seconds_now, animFrameIndex + 1, "%.2f".format(seconds),
+        )
+    }
+
+    /**
+     * 「删掉这一帧」。
+     *
+     * 不问一句 —— 和"删掉整段动画要问"不一样：一帧是刚才那一秒摆出来的东西，而整段是几十帧
+     * 攒起来的。问一个每次都要回答的问题，是在教用户不看问题就点确定。
+     */
+    private fun dropStudioFrame() {
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        if (anim.frames.isEmpty()) {
+            Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
+            return
+        }
+        haltStudioPlay()
+        val gone = animFrameIndex
+        val next = anim.frames.toMutableList().apply { removeAt(gone.coerceIn(0, size - 1)) }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        animFrameIndex = gone.coerceAtMost(max(0, next.size - 1))
+        buildAnimList()
+        Toast.makeText(
+            this, getString(R.string.anim_frame_dropped, gone + 1), Toast.LENGTH_SHORT,
+        ).show()
+    }
+
+    /** 「转 90°」：绕着视图中心转，斜着画的身体才摆得顺手。 */
+    private fun turnStudio(delta: Float) {
+        animView.rotateBy(delta)
+        statusLine.text = getString(R.string.anim_turn_done, Math.round(animView.viewRotation))
+    }
+
+    private fun toggleStudioBones() {
+        animShowBones = !animShowBones
+        animView.setShowSkeleton(animShowBones)
+        applyAnimBoneMode()
+    }
+
+    /** 「改骨骼 / 摆姿势」：把骨架本身拖到画上（改完要按「存骨骼」）。 */
+    private fun toggleStudioBoneMode() {
+        animBoneMode = !animBoneMode
+        // 改骨骼看得见骨头才改得动：手柄不画但位置还在，可"看不见"这件事没人该去猜。
+        if (animBoneMode) {
+            animShowBones = true
+            animView.setShowSkeleton(true)
+        }
+        animView.setBoneEditMode(animBoneMode)
+        applyAnimBoneMode()
+    }
+
+    /** 底下那条里跟着状态变的字：骨骼开关、改骨骼/摆姿势、存骨骼。 */
+    private fun applyAnimBoneMode() {
+        animEditBones.text = getString(
+            if (animBoneMode) R.string.anim_pose_mode else R.string.anim_edit_bones
+        )
+        animEditBones.background = getDrawable(
+            if (animBoneMode) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+        )
+        animBonesChip.text = getString(R.string.anim_bones) + if (animShowBones) " ✓" else ""
+        animSaveBones.visibility = if (animBoneMode) View.VISIBLE else View.GONE
+        if (animBoneMode) statusLine.text = getString(R.string.anim_bone_mode_hint)
+    }
+
+    /**
+     * 工作台里存骨骼。
+     *
+     * 故意**不**复用骨骼页那个 `saveBones()`：那个写的是 `opened`（"打开的桌宠"），而工作台
+     * 演的是 `summoned ?: opened` —— "打开 A、放上场 B"的时候这两只不是一个，写错一只是那种
+     * 事后极难发现的错（名字都对，就是写到了别人身上）。所以这里让调用方把 folder 传进来。
+     */
+    private fun saveStudioBones(folder: CharacterFolder) {
+        if (animView.addingBone) {
+            Toast.makeText(this, R.string.rig_bone_unfinished, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val bones = animView.rigBones()
+        val problem = RigEdit.problem(bones)
+        if (problem != null) {
+            Toast.makeText(this, problem, Toast.LENGTH_LONG).show()
+            return
+        }
+        val ok = store.saveRig(
+            folder, bones, animView.rigLayers(), animView.renames(), animView.rigNodes(),
+        )
+        Toast.makeText(
+            this,
+            getString(if (ok) R.string.rig_bones_saved else R.string.rig_save_failed),
+            Toast.LENGTH_SHORT,
+        ).show()
+        if (!ok) return
+        animBoneMode = false
+        animView.setBoneEditMode(false)
+        // 骨骼变了，图要按新的骨头重挂一遍（和骨骼页存完那句 load 是同一件事）。
+        animView.load(folder)
+        animView.setShowSkeleton(animShowBones)
+        animView.resetView()
+        applyAnimBoneMode()
+        reloadSummoned(folder)
+        buildAnimList()
+    }
+
+    /** 存一段动画。存不下就说出来，不假装成功 —— 界面上的数字会立刻对不上。 */
+    private fun writeStudioAnimation(folder: CharacterFolder, spec: AnimationSpec): Boolean {
+        if (!store.saveAnimation(folder, spec)) {
+            Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            return false
+        }
+        refreshAnimations(folder)
+        return true
+    }
+
+    /** 没有东西可演（没有桌宠 / 一段动画都没有）：停播、清空，不留上一只的残影。 */
+    private fun clearAnimationStudio() {
+        haltStudioPlay()
+        animEditId = null
+        animFrameIndex = 0
+        animLiveStates.clear()
+        animFrameChips = mutableListOf()
+        animFrames.removeAllViews()
+        animStates.removeAllViews()
+        animView.setShowSkeleton(false)
+        animView.setPreview(emptyMap(), false, reference = false)
+        if (animViewRig.isNotEmpty()) {
+            animView.release()
+            animViewRig = ""
+        }
+        statusLine.text = getString(R.string.anim_pick_one)
+    }
+
+    /** 离开这一页：停播，把预览那套图解掉，下次进来重载。 */
+    private fun leaveAnimationStudio() {
+        haltStudioPlay()
+        animView.release()
+        animViewRig = ""
     }
 
     private fun buildSettingsPane() {
@@ -8423,6 +9013,16 @@ class MainActivity : AppCompatActivity() {
         val FIGURE_OFF = Color.parseColor("#806E56CF")
 
         val STIFFNESS_VALUES = floatArrayOf(0f, 0.35f, 0.7f, 1f)
+
+        /**
+         * 一帧能走多久，界面这一层的上下限。
+         *
+         * 和引擎那里的 [Anim.MIN_FRAME]（0.05）不是一回事：那个是"除法不会炸"的下限，这个是
+         * "手感上还有意义"的下限。工作台的 ±0.1 秒和那个输入秒数的弹窗共用这两个数 ——
+         * 两个地方各写一遍 0.1 和 30，就会出现"弹窗里能填 0.05、工作台回不去"这种不一致。
+         */
+        const val MIN_FRAME_SECONDS = 0.1f
+        const val MAX_FRAME_SECONDS = 30f
 
     }
 

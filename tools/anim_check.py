@@ -35,6 +35,8 @@ def kotlin_const(name, default):
 MIN_FRAME = kotlin_const("MIN_FRAME", 0.05)
 MIN_SPEED = kotlin_const("MIN_SPEED", 0.1)
 MAX_SPEED = kotlin_const("MAX_SPEED", 4.0)
+#: 新抓的一帧默认走多久。界面（抓帧）和引擎（AnimFrame 的默认值）用同一个数。
+DEFAULT_FRAME_SECONDS = kotlin_const("DEFAULT_FRAME_SECONDS", 0.4)
 
 
 # ------------------------------- mirror of Anim -------------------------------
@@ -42,6 +44,43 @@ MAX_SPEED = kotlin_const("MAX_SPEED", 4.0)
 
 def frame_seconds(f):
     return max(MIN_FRAME, float(f.get("seconds", 0.4)))
+
+
+def states_of(state):
+    """一帧里写着的那几个图的开关。分隔符 `+`。
+
+    `+` 进不了状态 id（`RigEdit.sanitise` 把它换成下划线），所以这里怎么拆都不会有歧义。
+    """
+    return [p.strip() for p in (state or "").split("+") if p.strip()]
+
+
+def join_states(states):
+    """反过来拼回去：去重、保序（先点的先写）。"""
+    out = []
+    for s in states:
+        s = s.strip()
+        if s and s not in out:
+            out.append(s)
+    return "+".join(out)
+
+
+def frame_pose(a, index):
+    """第 index 帧**开始那一刻**的姿势 —— 编辑器和播放器必须看到同一个东西。"""
+    frames = a["frames"]
+    if index < 0 or index >= len(frames):
+        return {}
+    here = frames[index]
+    nxt = frames[index + 1] if index + 1 < len(frames) else (
+        frames[0] if a.get("loop", True) else None)
+    if nxt is None or nxt is here:
+        return dict(here.get("angles", {}))
+    return blend(here, nxt, 0.0)
+
+
+def start_seconds(a, index):
+    """第 index 帧在动画自己的时间里从第几秒开始。"""
+    i = min(max(index, 0), len(a["frames"]))
+    return sum(frame_seconds(f) for f in a["frames"][:i])
 
 
 def duration(a):
@@ -105,7 +144,7 @@ def anim(frames, speed=1.0, loop=True):
     return {"id": "a", "name": "a", "speed": speed, "loop": loop, "frames": frames}
 
 
-def frame(angles=None, state="", seconds=0.4):
+def frame(angles=None, state="", seconds=DEFAULT_FRAME_SECONDS):
     return {"angles": angles or {}, "state": state, "seconds": seconds}
 
 
@@ -203,6 +242,75 @@ def main():
            abs(frame_seconds({"seconds": 0.0}) - MIN_FRAME) < 1e-9
            and sample(z, 0.5)["angles"]["arm"] is not None)
     report("负的秒数也一样", frame_seconds({"seconds": -3.0}) == MIN_FRAME)
+
+    print("\n一帧可以同时开好几个图的开关（1.22.0）")
+    kt_anim = open(KT, encoding="utf-8").read()
+    report("默认帧时长只有一个来源（Kotlin 的常数 = 这份镜像）",
+           abs(DEFAULT_FRAME_SECONDS - 0.4) < 1e-9
+           and "val seconds: Float = Anim.DEFAULT_FRAME_SECONDS" in kt_anim,
+           "%.2f" % DEFAULT_FRAME_SECONDS)
+    report("拆 / 拼的规矩在 Kotlin 那边也是加号，而且去了空",
+           "state.split('+')" in kt_anim and 'joinToString("+")' in kt_anim
+           and ".filter { it.isNotEmpty() }" in kt_anim)
+    report("空 = 什么都不开", states_of("") == [] and states_of("   ") == [])
+    report("加号拆开", states_of("帧2+出汗") == ["帧2", "出汗"])
+    report("多余的加号 / 空格不会拆出空名字", states_of(" a + b + ") == ["a", "b"])
+    report("拼回去：去重、保序（先点的先写）", join_states(["b", "a", "b"]) == "b+a")
+    report("拆了再拼是原样", join_states(states_of("帧2+出汗")) == "帧2+出汗")
+    report("什么都不开拼回空串 —— 和没写过是同一个值", join_states([]) == "")
+    # 分隔符不能出现在 id 里，否则 "a+b" 是"两个开关"还是"一个名字"就分不出来。
+    # 这条读的是 Kotlin 源码里那份 sanitise 的字符表，不靠记性。
+    kt_rig = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/skeleton/RigEdit.kt"),
+                  encoding="utf-8").read()
+    report("状态 id 里进不了加号（sanitise 会把它换成下划线）",
+           '"/\\\\:*?\\"<>|+"' in kt_rig)
+
+    print("\n编辑器看到的那一帧，就是播放器演到那一刻的样子")
+    # 帧起始的姿势必须**等于** sample 在那一刻的结果，不能是"另算一套"：编辑器摆好、
+    # 存下去、一播却不一样，是最难查的那种错。时间用二进制精确的值（0.5 秒、整倍数速度），
+    # 所以边界上的相等是精确的，不需要容差兜着。
+    cases = [
+        ("两帧循环", anim([frame({"arm": -30.0}, seconds=0.5),
+                       frame({"arm": 60.0}, seconds=0.5)]), 1.0),
+        ("三帧不循环", anim([frame({"arm": -30.0}, seconds=0.5),
+                         frame({"arm": 0.0, "leg": 10.0}, seconds=0.5),
+                         frame({"arm": 60.0}, seconds=0.5)], loop=False), 1.0),
+        ("2 倍速", anim([frame({"arm": -30.0}, seconds=0.5),
+                       frame({"arm": 60.0}, seconds=0.5)], speed=2.0), 2.0),
+        ("一帧", anim([frame({"arm": 33.0}, state="帧1", seconds=0.5)]), 1.0),
+        ("0 秒的帧也在里面", anim([frame({"arm": 1.0}, seconds=0.0),
+                             frame({"arm": 50.0}, seconds=0.5)]), 1.0),
+    ]
+    for label, a, speed in cases:
+        ok = True
+        detail = ""
+        for i in range(len(a["frames"])):
+            pose = frame_pose(a, i)
+            s = sample(a, start_seconds(a, i) / speed_of(a))
+            if s is None or s["frame"] != i:
+                ok = False
+                detail = "第 %d 帧落到了第 %s 帧" % (i + 1, s["frame"] + 1 if s else "?")
+                break
+            if set(pose.keys()) != set(s["angles"].keys()) or any(
+                    abs(pose[k] - s["angles"][k]) > 1e-6 for k in pose):
+                ok = False
+                detail = "第 %d 帧 %s ≠ %s" % (i + 1, pose, s["angles"])
+                break
+        report("%s：每一帧的起始姿势都和播放器一致" % label, ok, detail)
+
+    # 这条是上一条最容易出错的地方，单独说一遍：下一帧新引入的骨头，在这一帧里**已经是**
+    # 下一帧的值（blend 的"没写到的一侧保持另一侧"）。编辑器照这个显示，才不会摆出一个
+    # 引擎演不出来的姿势。
+    inherit = anim([frame({"arm": 10.0}, seconds=0.5),
+                    frame({"arm": 90.0, "leg": 20.0}, seconds=0.5)])
+    report("下一帧才写的骨头，在这一帧里就已经是那个值（不是 0）",
+           abs(frame_pose(inherit, 0)["leg"] - 20.0) < 1e-6, str(frame_pose(inherit, 0)))
+    report("没有这一帧时给空表（不是崩）",
+           frame_pose(inherit, 9) == {} and frame_pose(inherit, -1) == {})
+    report("帧起点的时间：前面几帧加起来", abs(start_seconds(inherit, 1) - 0.5) < 1e-9
+           and start_seconds(inherit, 0) == 0.0)
+    report("帧起点的时间会夹住（越界不返回负数）",
+           start_seconds(inherit, -5) == 0.0 and abs(start_seconds(inherit, 99) - 1.0) < 1e-9)
 
     print("")
     if FAILURES:

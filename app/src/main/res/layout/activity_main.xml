@@ -300,20 +300,89 @@
                     android:padding="12dp" />
             </ScrollView>
 
-            <!-- ── 动画管理 ─────────────────────────── -->
-            <ScrollView
-                android:id="@+id/animScroll"
+            <!-- ── 动画管理：左边这一段和它的帧，右边是角色 ─────────── -->
+            <!--
+                右边能看见角色（1.22.0），因为"摆一帧"本来就是对着角色摆的：在左边改数字、
+                跑到测试场看效果、再跑回来，那不是编辑动画，那是来回跑。
+            -->
+            <LinearLayout
+                android:id="@+id/animRow"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
+                android:orientation="horizontal"
                 android:visibility="gone">
 
                 <LinearLayout
-                    android:id="@+id/animList"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="0.85"
+                    android:orientation="vertical">
+
+                    <ScrollView
+                        android:id="@+id/animScroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/animList"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:padding="10dp" />
+                    </ScrollView>
+
+                    <!-- 关键帧那条横带：一帧一个方块，末尾的 ＋ 是"把现在的样子抓成一帧"。 -->
+                    <HorizontalScrollView
+                        android:id="@+id/animFramesScroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/glass_panel"
+                        android:paddingStart="4dp"
+                        android:paddingEnd="4dp"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/animFrames"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal"
+                            android:paddingTop="6dp"
+                            android:paddingBottom="6dp" />
+                    </HorizontalScrollView>
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="match_parent"
+                    android:layout_weight="1.15"
                     android:orientation="vertical"
-                    android:padding="12dp" />
-            </ScrollView>
+                    android:paddingStart="6dp">
+
+                    <!-- 这一帧画哪几套图：开着的那几个就是预览里亮着的。 -->
+                    <HorizontalScrollView
+                        android:id="@+id/animStatesScroll"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:scrollbars="none">
+
+                        <LinearLayout
+                            android:id="@+id/animStates"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:gravity="center_vertical"
+                            android:orientation="horizontal" />
+                    </HorizontalScrollView>
+
+                    <dev.atp.pet.ui.SkeletonView
+                        android:id="@+id/animView"
+                        android:layout_width="match_parent"
+                        android:layout_height="0dp"
+                        android:layout_weight="1" />
+                </LinearLayout>
+            </LinearLayout>
 
             <!-- ── 全局设置 ─────────────────────────── -->
             <ScrollView
@@ -582,6 +651,96 @@
                         android:id="@+id/rigLimitMax"
                         style="@style/AlignButton"
                         android:text="@string/rig_limit_set_max" />
+                </LinearLayout>
+            </HorizontalScrollView>
+
+            <!--
+                动画工作台的底下那条：都是"对这一帧做什么"。顺序照着做一帧的顺序排 ——
+                先播看一遍、再把现在的样子存进这一帧、再调时长，最后才是加帧删帧。
+            -->
+            <HorizontalScrollView
+                android:id="@+id/animBarScroll"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:scrollbars="none"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/animBar"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:gravity="center"
+                    android:orientation="horizontal"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp">
+
+                    <TextView
+                        android:id="@+id/animPlay"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_play" />
+
+                    <TextView
+                        android:id="@+id/animFrameAdd"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_frame_add" />
+
+                    <TextView
+                        android:id="@+id/animSaveFrame"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_save_frame" />
+
+                    <TextView
+                        android:id="@+id/animSlower"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_frame_shorter" />
+
+                    <TextView
+                        android:id="@+id/animLonger"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_frame_longer" />
+
+                    <TextView
+                        android:id="@+id/animDropFrame"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_drop_frame" />
+
+                    <TextView
+                        android:id="@+id/animResetPose"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_reset_pose" />
+
+                    <TextView
+                        android:id="@+id/animTurn"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_turn" />
+
+                    <TextView
+                        android:id="@+id/animFit"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_fit" />
+
+                    <TextView
+                        android:id="@+id/animBones"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_bones" />
+
+                    <TextView
+                        android:id="@+id/animEditBones"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_edit_bones" />
+
+                    <TextView
+                        android:id="@+id/animSaveBones"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_save_bones" />
+
+                    <TextView
+                        android:id="@+id/animMeta"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_meta" />
                 </LinearLayout>
             </HorizontalScrollView>
 

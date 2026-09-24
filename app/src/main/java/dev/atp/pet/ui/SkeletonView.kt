@@ -76,8 +76,10 @@ class SkeletonView @JvmOverloads constructor(
      */
     private var reference: Bitmap? = null
     private var refAlpha = 140
-    /** Whether the assembled pet is drawn at all. See [setPreviewStates]. */
+    /** Whether the assembled pet is drawn at all. See [setPreview]. */
     private var showParts = true
+    /** Whether the rig's reference picture is drawn under it. See [setPreview]. */
+    private var showReference = true
     /**
      * The states the preview is drawn WITH. Every state off is how this screen has always
      * looked; turning one on is how a drawing that a state hides gets looked at.
@@ -98,6 +100,46 @@ class SkeletonView @JvmOverloads constructor(
     private var lastPanX = 0f
     private var lastPanY = 0f
     private var pinchSpan = 0f
+
+    /**
+     * 画布转了多少度（1.22.0），以及它的两个三角函数值。
+     *
+     * 转的是**视图**，不是角色：角色躺在画布里，转的是看它的那只眼睛。所以骨架、图、参考图
+     * 一起转，拖关节算出来的角度一点没变 —— 那正是"斜着画的身体"需要的东西（斜着摆姿势，
+     * 手是顺着画走的，不是顺着屏幕走的）。
+     *
+     * 绕的是**视图中心**：`vx/vy`、`toCanvas`、双指缩放的中点对齐（[anchorAt]）全都用同一个
+     * 支点，所以四件事（缩放 / 旋转 / 平移 / 拖关节）互相之间不需要知道对方的存在。
+     * cos/sin 缓存在字段里而不是每帧算：`onDraw` 里每个点都要用，一次绘制几十次三角函数
+     * 是白烧的电。
+     */
+    var viewRotation = 0f
+        private set
+    private var cosR = 1f
+    private var sinR = 0f
+    private var pivotX = 0f
+    private var pivotY = 0f
+
+    /** 双指那一转从上一次事件到现在转了多少，靠它算增量。 */
+    private var twistAngle = 0f
+
+    /**
+     * 骨骼、关节、手柄画不画（1.22.0）。
+     *
+     * 动画预览要回答的是"这只桌宠看起来是什么样"，不是"它的骨头在哪"。关掉之后画面上只剩
+     * 角色本身 —— 和桌面上那只看到的是同一张图。**照样能拖**：手柄只是不画，位置还在，
+     * 所以"看不见骨头也要能摆姿势"这件事不用再做一个模式。
+     */
+    var showSkeleton = true
+        private set
+
+    /**
+     * 用户用手改动了姿势（拖关节、双击复位、按复位），不是程序摆上去的。
+     *
+     * 程序摆姿势（[applyPose]）**不**报这件事：动画工作台选中一帧就会调它，如果那也算"改动"，
+     * 界面上一进门就会显示"未保存"，而用户什么都没碰过。
+     */
+    var onPoseEdited: (() -> Unit)? = null
 
     /** The bone the side panel last picked, drawn with a ring so it can be found. */
     var selected: String? = null
@@ -330,15 +372,20 @@ class SkeletonView @JvmOverloads constructor(
     }
 
     /**
-     * Which states the preview is drawn with, and whether the assembled pet is drawn at all.
+     * Which states the preview is drawn with, whether the assembled pet is drawn at all, and
+     * whether the rig's own reference picture is drawn under it.
      *
      * This is the half of 「看不到参考图」 that is a bug rather than a missing feature: the
      * renderer draws a layer only if its state is on (see LayerSpec.visible), and until now
      * nothing on this screen ever set the map, so every drawing behind a state was skipped.
+     *
+     * [reference] exists for the animation workbench: there the question is "what does this
+     * frame LOOK like", and a rigging reference under the pet answers a different one.
      */
-    fun setPreview(states: Map<String, Boolean>, parts: Boolean) {
+    fun setPreview(states: Map<String, Boolean>, parts: Boolean, reference: Boolean = true) {
         previewStates = states
         showParts = parts
+        showReference = reference
         renderer?.states = states
         invalidate()
     }
@@ -713,6 +760,7 @@ class SkeletonView @JvmOverloads constructor(
 
     fun resetPose() {
         skeleton?.reset()
+        onPoseEdited?.invoke()
         invalidate()
     }
 
@@ -727,16 +775,15 @@ class SkeletonView @JvmOverloads constructor(
         skeleton?.find(name)?.let { Math.toDegrees(it.rotation.toDouble()).toFloat() }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
+        // 旋转的支点就是视图中心，尺寸一变就得跟着变 —— 不然转过之后窗口一改大小，
+        // 画面会绕着一个已经不在屏幕上的点转。
+        pivotX = w / 2f
+        pivotY = h / 2f
         val s = spec ?: return
-        val pad = 8f * density
-        fitScale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.canvasHeight)
+        computeFit(w, h, s)
         // Only refit while nobody has zoomed: a rotation should not throw away the view
         // somebody just spent a minute getting to.
-        if (!zoomed || oldw == 0) {
-            scale = fitScale
-            offsetX = (w - s.canvasWidth * scale) / 2f
-            offsetY = (h - s.canvasHeight * scale) / 2f
-        }
+        if (!zoomed || oldw == 0) placeFitted()
     }
 
     /**
@@ -751,8 +798,8 @@ class SkeletonView @JvmOverloads constructor(
         selected = name
         val p = bone.worldPosition
         scale = (fitScale * ZOOM_ON_PICK).coerceIn(fitScale * 0.25f, fitScale * 12f)
-        offsetX = width / 2f - p.x * scale
-        offsetY = height / 2f - p.y * scale
+        // 转过之后"居中"不能再用减法：得走那个反变换，否则点了名字骨头跑到画面外去。
+        anchorAt(p, width / 2f, height / 2f)
         zoomed = true
         invalidate()
         onInfo?.invoke(name + " · " + boneLabel(name))
@@ -784,6 +831,7 @@ class SkeletonView @JvmOverloads constructor(
         // gets captured comes from. Without this the capture would need a second trip to the
         // bone list to say which joint was meant -- after the drag that posed it.
         selected = h.bone.name
+        onPoseEdited?.invoke()
         invalidate()
     }
 
@@ -903,16 +951,118 @@ class SkeletonView @JvmOverloads constructor(
         return hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
+    /** 两指连线的方向，度。双指旋转用的就是它的变化量。 */
+    private fun angleOf(e: MotionEvent): Float {
+        if (e.pointerCount < 2) return 0f
+        return Math.toDegrees(
+            Math.atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())
+        ).toFloat()
+    }
+
     private fun midX(e: MotionEvent) = if (e.pointerCount >= 2) (e.getX(0) + e.getX(1)) / 2f else e.x
     private fun midY(e: MotionEvent) = if (e.pointerCount >= 2) (e.getY(0) + e.getY(1)) / 2f else e.y
 
-    private fun vx(p: Vec2) = offsetX + p.x * scale
-    private fun vy(p: Vec2) = offsetY + p.y * scale
-    private fun toCanvas(x: Float, y: Float) = Vec2((x - offsetX) / scale, (y - offsetY) / scale)
+    /**
+     * 画布坐标 ↔ 视图坐标。
+     *
+     * 顺序是**先缩放平移、后旋转**：`offset` 是没旋转的那套坐标里的，旋转绕 [pivotX]/[pivotY]
+     * （视图中心）。反过来算就是 [toCanvas] 里那个逆变换。旋转是 0 的时候 cos=1、sin=0，
+     * 这几行就是原来那两句乘法 —— 也就是说这一版没有给"没转过"的情况加任何代价。
+     */
+    private fun vx(p: Vec2): Float {
+        val u = offsetX + p.x * scale - pivotX
+        val v = offsetY + p.y * scale - pivotY
+        return pivotX + u * cosR - v * sinR
+    }
+
+    private fun vy(p: Vec2): Float {
+        val u = offsetX + p.x * scale - pivotX
+        val v = offsetY + p.y * scale - pivotY
+        return pivotY + u * sinR + v * cosR
+    }
+
+    private fun toCanvas(x: Float, y: Float): Vec2 {
+        val dx = x - pivotX
+        val dy = y - pivotY
+        val u = dx * cosR + dy * sinR
+        val v = -dx * sinR + dy * cosR
+        return Vec2((u + pivotX - offsetX) / scale, (v + pivotY - offsetY) / scale)
+    }
+
+    /**
+     * 让画布上的 [c] 正好落在视图的 ([x], [y]) 上。
+     *
+     * 双指缩放、双指旋转、双指一起挪，三件事都是这一句：手指底下原来那个画布点，变换之后
+     * 还得在手指底下。所以它们可以同时发生而互不干扰。
+     */
+    private fun anchorAt(c: Vec2, x: Float, y: Float) {
+        val dx = x - pivotX
+        val dy = y - pivotY
+        offsetX = pivotX + dx * cosR + dy * sinR - c.x * scale
+        offsetY = pivotY - dx * sinR + dy * cosR - c.y * scale
+    }
+
+    /** 角度收进 (-180, 180]：转十圈和没转是同一个朝向，数字不该一直涨上去。 */
+    private fun wrapDegrees(deg: Float): Float {
+        var d = (deg + 180f) % 360f
+        if (d < 0f) d += 360f
+        return d - 180f
+    }
+
+    private fun setRotation(deg: Float) {
+        viewRotation = wrapDegrees(deg)
+        val rad = Math.toRadians(viewRotation.toDouble())
+        cosR = cos(rad).toFloat()
+        sinR = sin(rad).toFloat()
+    }
+
+    /** 转一下（正数是顺时针）。界面那个「转 90°」按钮和双指旋转都走这里。 */
+    fun rotateBy(delta: Float) {
+        setRotation(viewRotation + delta)
+        invalidate()
+    }
+
+    private fun computeFit(w: Int, h: Int, s: CharacterSpec) {
+        val pad = 8f * density
+        fitScale = min((w - pad * 2) / s.canvasWidth, (h - pad * 2) / s.canvasHeight)
+    }
+
+    private fun placeFitted() {
+        val s = spec ?: return
+        scale = fitScale
+        offsetX = (width - s.canvasWidth * scale) / 2f
+        offsetY = (height - s.canvasHeight * scale) / 2f
+    }
+
+    /**
+     * 视图摆正：不转、不偏、缩放到"刚好装下"。
+     *
+     * 和双击复位（那只复位**姿势**）是两件事，所以是两个动作：摆姿势的时候常常先要把画布
+     * 转正看清，而看清之后要复位的往往是姿势而不是视角。
+     */
+    fun resetView() {
+        val s = spec ?: return
+        setRotation(0f)
+        zoomed = false
+        computeFit(width, height, s)
+        placeFitted()
+        invalidate()
+        onInfo?.invoke(context.getString(R.string.rig_view_fit))
+    }
+
+    fun setShowSkeleton(on: Boolean) {
+        showSkeleton = on
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         val s = spec ?: return
         val sk = skeleton ?: return
+
+        // 旋转是**视图**的：画框、参考图、角色、骨骼一起转，所以只在这一层做一次。
+        // 提示文字留到 restore 之后画 —— 一行说明横躺着没人看得懂。
+        val turned = viewRotation != 0f
+        if (turned) canvas.rotate(viewRotation, pivotX, pivotY)
 
         canvas.drawRect(
             offsetX, offsetY,
@@ -923,19 +1073,20 @@ class SkeletonView @JvmOverloads constructor(
         // The reference first, so both the assembled pet and the skeleton are drawn ON it.
         // Fitted, not stretched: an image exported at the canvas size fills the frame exactly,
         // and anything else keeps its proportions instead of being quietly distorted.
-        reference?.let { bmp ->
+        val ref = reference
+        if (showReference && ref != null) {
             val boxW = s.canvasWidth * scale
             val boxH = s.canvasHeight * scale
-            if (bmp.width > 0 && bmp.height > 0 && boxW > 0f && boxH > 0f) {
-                val k = min(boxW / bmp.width, boxH / bmp.height)
-                val w = bmp.width * k
-                val h = bmp.height * k
+            if (ref.width > 0 && ref.height > 0 && boxW > 0f && boxH > 0f) {
+                val k = min(boxW / ref.width, boxH / ref.height)
+                val w = ref.width * k
+                val h = ref.height * k
                 val left = offsetX + (boxW - w) / 2f
                 val top = offsetY + (boxH - h) / 2f
                 refPaint.alpha = refAlpha
                 canvas.drawBitmap(
-                    bmp,
-                    Rect(0, 0, bmp.width, bmp.height),
+                    ref,
+                    Rect(0, 0, ref.width, ref.height),
                     RectF(left, top, left + w, top + h),
                     refPaint,
                 )
@@ -948,6 +1099,14 @@ class SkeletonView @JvmOverloads constructor(
             canvas.scale(scale, scale)
             it.draw(canvas)
             canvas.restore()
+        }
+
+        // 骨骼这一层可以整层关掉（动画预览要的是角色，不是骨头）。关掉时连节点、碰撞范围、
+        // 选中环、手柄都不画 —— 手柄不画也照样能拖，只是看不见它在哪里。
+        if (!showSkeleton) {
+            if (turned) canvas.restore()
+            drawHint(canvas)
+            return
         }
 
         val fade = renderer != null
@@ -1028,14 +1187,25 @@ class SkeletonView @JvmOverloads constructor(
             }
         }
 
+        if (turned) canvas.restore()
+        drawHint(canvas)
+    }
+
+    /**
+     * 左上角那一行"这里能干什么"。
+     *
+     * 单独一个函数，因为 [onDraw] 有两处要画它（关了骨骼那一层就提前返回）—— 两条路都写一遍
+     * 的话，改了一处忘了另一处，关掉骨骼之后提示就变成旧的了。
+     */
+    private fun drawHint(canvas: Canvas) {
         canvas.drawText(
             when {
                 pendingName != null && pendingHead == null ->
                     "加骨骼 " + pendingName + " · 点一下起点（关节）"
                 pendingName != null ->
                     "加骨骼 " + pendingName + " · 再点一下末端"
-                editBones -> "蓝点 = 关节 · 橙点 = 末端 · 双指缩放"
-                else -> "拖关节摆姿势 · 双指缩放 · 双击复位"
+                editBones -> "蓝点 = 关节 · 橙点 = 末端 · 双指缩放/旋转"
+                else -> "拖关节摆姿势 · 双指缩放/旋转 · 双击复位"
             },
             10f * density, 16f * density, textPaint
         )
@@ -1106,6 +1276,7 @@ class SkeletonView @JvmOverloads constructor(
                     heldJoint = null
                     invalidate()
                     onInfo?.invoke("复位")
+                    onPoseEdited?.invoke()
                     lastTapAt = 0L
                     return true
                 }
@@ -1131,23 +1302,31 @@ class SkeletonView @JvmOverloads constructor(
                 heldJoint = null
                 panning = false
                 pinchSpan = span(event)
+                twistAngle = angleOf(event)
                 return true
             }
 
             MotionEvent.ACTION_MOVE -> {
                 if (event.pointerCount >= 2) {
                     val s = span(event)
+                    val focusX = midX(event)
+                    val focusY = midY(event)
+                    // 手指底下是画布上的哪一个点 —— 缩放、旋转、平移之后它还得在手指底下。
+                    val held = toCanvas(focusX, focusY)
                     if (pinchSpan > 1f && s > 1f) {
-                        val focusX = midX(event)
-                        val focusY = midY(event)
-                        val before = toCanvas(focusX, focusY)
                         scale = (scale * (s / pinchSpan)).coerceIn(fitScale * 0.25f, fitScale * 12f)
-                        // Keep the point between the fingers where it is.
-                        offsetX = focusX - before.x * scale
-                        offsetY = focusY - before.y * scale
-                        zoomed = true
+                    }
+                    // 双指转多少，画布就转多少：这是"斜着画的身体"唯一的摆法 —— 手顺着画走，
+                    // 而不是顺着屏幕走。增量是绝对角之差，跨过 ±180 时会被 wrapDegrees 收回来。
+                    val ang = angleOf(event)
+                    if (ang != twistAngle) {
+                        setRotation(viewRotation + (ang - twistAngle))
+                        twistAngle = ang
                     }
                     pinchSpan = s
+                    // 这一句同时管了三件事：张开是放大、转是旋转、一起挪是平移。
+                    anchorAt(held, focusX, focusY)
+                    zoomed = true
                     invalidate()
                     return true
                 }
@@ -1160,8 +1339,11 @@ class SkeletonView @JvmOverloads constructor(
                     return true
                 }
                 if (panning) {
-                    offsetX += event.x - lastPanX
-                    offsetY += event.y - lastPanY
+                    val dx = event.x - lastPanX
+                    val dy = event.y - lastPanY
+                    // 手指的位移在**屏幕**上，而 offset 是没旋转的那套坐标，所以转回去再加。
+                    offsetX += dx * cosR + dy * sinR
+                    offsetY += -dx * sinR + dy * cosR
                     lastPanX = event.x
                     lastPanY = event.y
                     zoomed = true
@@ -1176,6 +1358,7 @@ class SkeletonView @JvmOverloads constructor(
                 heldJoint = null
                 panning = false
                 pinchSpan = 0f
+                twistAngle = 0f
                 invalidate()
                 return true
             }

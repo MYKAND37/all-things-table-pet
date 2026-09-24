@@ -16,13 +16,16 @@ import kotlin.math.min
  *    「帧2」这套图（部位 → ＋加一张状态「帧2」的图），这一帧把它打开，那根骨头就换成那张画。
  *    于是"逐帧绘制"用的是现成的那条路，而"半演算"是免费的：图换了，骨骼照样按 [angles] 动。
  *
+ *    **可以同时开好几个**（1.22.0）：几个开关用 `+` 连起来，`"帧2+出汗"` 就是"这一帧既画
+ *    帧2 那套、也画手出汗那张"。一帧里要同时换两个部位的图，一个名字装不下。
+ *
  * [seconds] 是这一帧**走多久**（不是"停多久"）：0.4 表示用 0.4 秒从这一帧过渡到下一帧。
  * 一帧动画（只有一帧）就是"保持这个样子"。
  */
 data class AnimFrame(
     val angles: Map<String, Float> = emptyMap(),
     val state: String = "",
-    val seconds: Float = 0.4f,
+    val seconds: Float = Anim.DEFAULT_FRAME_SECONDS,
 )
 
 /**
@@ -70,11 +73,65 @@ object Anim {
      */
     const val MIN_FRAME = 0.05f
 
+    /**
+     * 新抓的一帧默认走多久。
+     *
+     * 是这里的一个常数而不是各写各的 `0.4f`：抓帧的地方（工作台、测试场那张动作表）都要一个
+     * 起点，而两个地方各自写一个数字，就会出现"同一件事在两个界面里默认不一样"。
+     */
+    const val DEFAULT_FRAME_SECONDS = 0.4f
+
     /** 速度的上下限。0 会让时间停住（等于卡在第一帧），负数是倒放 —— 都不是这一版要的。 */
     const val MIN_SPEED = 0.1f
     const val MAX_SPEED = 4f
 
     fun frameSeconds(frame: AnimFrame): Float = max(MIN_FRAME, frame.seconds)
+
+    /**
+     * 一帧的 state 里写着的那几个开关，拆成一个个名字。
+     *
+     * 分隔符是 `+`，而这个符号**进不了状态 id**：状态 id 走 `RigEdit.sanitise`，那里把 `+`
+     * 换成 `_`（和空格、`/` 一样的待遇）。所以 `"a+b"` 永远是"两个开关 a 和 b"，不会是
+     * "一个叫 a+b 的开关" —— 拆分的歧义在源头就被掐掉了。
+     *
+     * 空字符串（这一帧不换图）拆出来是空表，不是"一个叫空字符串的开关"。
+     */
+    fun statesOf(state: String): List<String> =
+        state.split('+').map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * 反过来：把几个开关拼成帧里存的那一个字符串。
+     *
+     * 去重但**保序**：先点「帧2」再点「出汗」和反过来是同一件事，而名字在原处比字母序好读。
+     * 空表拼回空字符串，所以"什么都不开"和"没写过"是同一个值 —— 帧的 state 只有一个空串。
+     */
+    fun joinStates(states: Collection<String>): String =
+        states.map { it.trim() }.filter { it.isNotEmpty() }.distinct().joinToString("+")
+
+    /**
+     * 第 [index] 帧**开始那一刻**的姿势，或者空表（没有这一帧）。
+     *
+     * 这就是编辑器里"选中第 3 帧"该显示的样子，而它不等于"第 3 帧里写的角度"：[blend] 那条
+     * 规矩（没写到的一侧保持另一侧的值）意味着**下一帧新引入的那根骨头，在这一帧里已经是
+     * 下一帧的值了**。编辑器必须照播放时的规矩显示，否则用户看到的是一个引擎演不出来的姿势
+     * —— 摆好了、存下去、一播却不一样，是最难查的那种错。
+     *
+     * 所以这里不是"另算一套"，就是把 `sample` 在帧起点那一瞬的结果取出来：`blend(这一帧,
+     * 下一帧, 0)`。循环时下一帧是第一帧，和播放时一模一样。
+     */
+    fun framePose(a: AnimationSpec, index: Int): Map<String, Float> {
+        val here = a.frames.getOrNull(index) ?: return emptyMap()
+        val next = a.frames.getOrNull(index + 1)
+            ?: if (a.loop) a.frames.firstOrNull() else null
+        return if (next == null || next === here) here.angles else blend(here, next, 0f)
+    }
+
+    /** 第 [index] 帧在动画自己的时间里从第几秒开始（给"跳到这一帧"用）。 */
+    fun startSeconds(a: AnimationSpec, index: Int): Float {
+        var sum = 0f
+        for (i in 0 until index.coerceIn(0, a.frames.size)) sum += frameSeconds(a.frames[i])
+        return sum
+    }
 
     /** 整套动画走完一遍要多久，**单位是动画自己的时间**（不含速度倍率）。 */
     fun duration(a: AnimationSpec): Float {

@@ -125,10 +125,15 @@ object RigEdit {
      * the name is the contract between the rig and the drawings. Anything a filesystem
      * would object to becomes an underscore; spaces go too, because a name with a space in
      * it is a name that gets mistyped.
+     *
+     * `+` 也在里面（1.22.0），理由和别的都不一样：它不是文件系统的问题，是**动画帧里的分隔符**
+     * —— 一帧可以同时开几个图的开关，写下来是 `"帧2+出汗"`（见 `Anim.statesOf`）。要是状态
+     * id 自己可以带 `+`，那一帧到底是"两个开关"还是"一个名字里带加号的开关"就分不出来了。
+     * 于是这个符号在**造名字**这一步就被换成下划线：歧义进不了数据。
      */
     fun sanitise(raw: String): String {
         val cleaned = raw.trim().map { c ->
-            if (c.isWhitespace() || c in "/\\:*?\"<>|") '_' else c
+            if (c.isWhitespace() || c in "/\\:*?\"<>|+") '_' else c
         }.joinToString("")
         return if (cleaned.all { it == '_' }) "" else cleaned
     }

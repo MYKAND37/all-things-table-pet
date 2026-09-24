@@ -1009,7 +1009,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // 动画当前那一帧的开关。放在最后，所以它压得住同名的用户开关 —— 正在播的动画就是
         // 现在该画的东西。它只进这一张**画图用的**表：开关小方块、规则引擎读的都是引擎里
         // 那份，所以一个只在动画里出现的名字不会变成一只看得见却关不掉的开关。
-        if (animState.isNotEmpty()) out[animState] = true
+        //
+        // 一帧可以同时开好几个（1.22.0），所以这里拆开写进去 —— 直接把 "帧2+出汗" 当成一个
+        // 名字放进去的话，图层表里两个名字都对不上，用户看到的是"这一帧的图没出来"。
+        for (tag in Anim.statesOf(animState)) out[tag] = true
         return out
     }
 
