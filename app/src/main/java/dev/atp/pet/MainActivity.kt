@@ -6017,8 +6017,14 @@ class MainActivity : AppCompatActivity() {
             animClock += dt
             val folder = studioFolder()
             val anim = animPlayingSpec
-            val s = if (anim == null) null else Anim.sample(anim, animClock)
-            if (s == null || folder == null) {
+            // 两样都得**各自**判：`s == null` 推不出 `anim != null`，编译器不会替我做这个跳跃
+            // （第一次写成一个 `if (s == null || folder == null)`，CI 在 6022 行报了三个错）。
+            if (anim == null || folder == null) {
+                stopStudioPlay()
+                return
+            }
+            val s = Anim.sample(anim, animClock)
+            if (s == null) {
                 stopStudioPlay()
                 return
             }

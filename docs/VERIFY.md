@@ -148,6 +148,13 @@ python3 tools/pose_preview_check.py
 都挂上了自己那一件事、离开这一页会把图解掉、以及**「停」和「碰一下」是两件事**（前者回到你在
 编的那一帧，后者只是停下时钟 —— 用户碰一下就被复位回帧里的角度，等于把他刚拖的那一下吃掉）。
 
+**本地那八条看不见的两类错**：`kotlin_check.py` 加了第九条 —— **View 子类不许声明平台自己的
+名字**（`setRotation` / `setAlpha` / `setScaleX` / `invalidate` 那一类，`override` 的除外）。
+它是被真错误逼出来的：这一版给"转画布"起名 `setRotation`（= 转整个控件），CI 报
+`hides member of supertype 'View' and needs 'override'`。加完用同一个错误反过来验过 —— 写回去
+立刻红，改回来立刻绿。另一条（`s == null` 推不出 `anim != null`）**故意没加检查**：判据要一张
+流图，写歪了就是误报，理由记在 `docs/JOURNAL.md` 第七节。
+
 **旋转是视图的**：`SkeletonView` 里 `vx/vy`、`toCanvas`、`anchorAt` 共用同一个支点（视图中心）
 和同一对 cos/sin 缓存，所以四件事（缩放 / 旋转 / 平移 / 拖关节）互不知情；旋转为 0 时
 cos=1、sin=0，那两行就退化成原来的两句乘法 —— 这一版没有给"没转过"的情况加任何代价。

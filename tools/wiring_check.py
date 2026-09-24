@@ -662,9 +662,12 @@ def main():
            and "private fun angleOf(" in skel_kt and "private fun anchorAt(" in skel_kt)
     report("旋转是视图的（骨架/图/参考图一起转），所以画布只转一次",
            "canvas.rotate(viewRotation, pivotX, pivotY)" in skel_kt and "val turned = viewRotation != 0f" in skel_kt)
+    # 看的是 resetView 的**函数体**：旋转归零、重新算 fit、重新摆位，三件事都得在它里面。
+    reset_body = skel_kt[skel_kt.find("fun resetView()"):]
+    reset_body = reset_body[:reset_body.find("\n    }")]
     report("「摆正视角」把旋转、缩放、偏移一起收回来",
-           "fun resetView()" in skel_kt and "computeFit(width, height, s)" in skel_kt
-           and "setRotation(0f)" in skel_kt)
+           "applyViewRotation(0f)" in reset_body and "computeFit(" in reset_body
+           and "placeFitted()" in reset_body)
     report("工作台里也能播（不是只能跑去测试场）",
            "private fun toggleStudioPlay(" in activity and "private val studioTick" in activity
            and "Anim.startSeconds(anim, animFrameIndex)" in activity)

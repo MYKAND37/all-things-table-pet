@@ -697,6 +697,57 @@ def check_view_resources():
     report("a View reads resources through context.*", not bad, "\n         ".join(bad))
 
 
+def check_platform_view_names():
+    """
+    A View subclass must not declare a name android.view.View already has.
+
+    This is here because it SHIPPED and CI caught it: the animation workbench needed "rotate the
+    canvas by this many degrees" and the obvious name for that is `setRotation` -- which is
+    View's own method (rotate the whole CONTROL). Kotlin refuses to compile it without
+    `override`:
+
+        e: SkeletonView.kt:1012 Cannot weaken access privilege 'public' for 'setRotation' in 'View'
+        e: SkeletonView.kt:1012 'setRotation' hides member of supertype 'View' and needs 'override'
+
+    Worth its own check for two reasons. One, the fix is a rename, and the next person reaching
+    for `setAlpha` / `setScaleX` / `setPivotY` on a View will hit exactly the same wall. Two,
+    the OTHER outcome of this mistake is worse than a red build: a signature that happens to
+    differ compiles fine and quietly does something else than the platform method of that name
+    -- `invalidate()` on a class that also wants to mean "this drawing is stale" is that shape
+    of bug.
+
+    Only names that are unambiguously View's are listed; `setPreview` / `setShowSkeleton` and
+    the like are our own vocabulary and stay allowed.
+    """
+    reserved = (
+        "setRotation", "setRotationX", "setRotationY", "setScaleX", "setScaleY",
+        "setPivotX", "setPivotY", "setAlpha", "setTranslationX", "setTranslationY",
+        "setElevation", "setX", "setY", "setZ", "setTag", "setBackground",
+        "setBackgroundColor", "setPadding", "setPaddingRelative", "setVisibility",
+        "setEnabled", "setClickable", "setFocusable", "setSelected", "setContentDescription",
+        "setLayerType", "setWillNotDraw", "setSystemUiVisibility",
+        "animate", "invalidate", "postInvalidate", "requestLayout", "bringToFront",
+        "scrollTo", "scrollBy", "computeScroll", "offsetLeftAndRight", "offsetTopAndBottom",
+        "getWidth", "getHeight", "getLeft", "getTop", "getRight", "getBottom",
+        "getX", "getY", "getAlpha", "getRotation", "getParent", "getTag", "getVisibility",
+    )
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        # 只看 View 的子类：判据和 check_view_resources 用同一个（构造函数的父类型）。
+        if not re.search(r"\)\s*:\s*\w*View\w*\(", text):
+            continue
+        for i, line in enumerate(text.split("\n"), 1):
+            code = line.split("//")[0]
+            if "override" in code:
+                continue
+            m = re.search(r"\b(?:fun|val|var)\s+(\w+)\s*[(<:=]", code)
+            if m and m.group(1) in reserved:
+                bad.append("%s:%d  %s" % (os.path.basename(path), i, line.strip()[:70]))
+    report("View 子类没有声明 View 自己的名字（setRotation 那种撞名编译不过）", not bad,
+           "\n         ".join(bad))
+
+
 def check_one_home_for_a_file_name():
     """
     A file the app writes and reads has to be named in exactly ONE place.
@@ -777,6 +828,7 @@ def main():
     report_hardcoded_text()
     check_chip_lists()
     check_view_resources()
+    check_platform_view_names()
     check_one_home_for_a_file_name()
     check_dialog_bodies_scroll()
     print("")

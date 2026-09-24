@@ -162,6 +162,27 @@
 写错一只是事后极难发现的那种（名字都对，就是写到了别人身上）。所以工作台的存骨骼自己一份、
 folder 由调用方传进来，并且加了一条断言：**那段代码里不许出现 `opened`**。）
 
+### 七、两个只有编译器看得见的错（1.22.0）
+
+这一版 CI 红了一次，两条错，都是**本地那八条检查看不见的类型错**——而那正是这台机器上唯一
+测不了的东西。
+
+1. `SkeletonView.kt`：我给"把画布转多少度"起名 `setRotation` —— **那是 `View` 自己的方法**
+   （转整个控件）。Kotlin 不肯编译：
+   `Cannot weaken access privilege 'public' for 'setRotation' in 'View'` /
+   `'setRotation' hides member of supertype 'View' and needs 'override'`。改成
+   `applyViewRotation`。这一条**已经补进 `kotlin_check.py`**（第九条检查）：View 子类不许声明
+   `setRotation` / `setAlpha` / `setScaleX` / `invalidate` 这类平台名字（`override` 的除外），
+   并且照例用真错误反过来验过 —— 把 `setRotation` 写回去，它立刻红。
+2. `MainActivity.kt:6022`：写成 `if (s == null || folder == null) return` 之后继续用 `anim`
+   （`AnimationSpec?`）。编译器说了三次"only safe calls on a nullable receiver"：
+   **`s == null` 推不出 `anim != null`**，那个 `s` 是 `if (anim == null) null else Anim.sample(...)`
+   算出来的，这个跳跃编译器不做。改成三个变量各自判。
+
+第 2 条**没有加检查**，理由写在这里：它的判据是"某个变量在这个条件下是不是非空"，那要一张
+流图，写歪了就是误报 —— 而误报比不检查更坏（第六节）。这一条只能靠"写的时候想一下"，所以它
+留在这份日志里，而不是留在检查里。
+
 ## 每一版的断言记录
 
 从 `docs/VERIFY.md` 搬来（原来在 README 的「关于验证」里）。每一段说的是：**这一版加了什么，

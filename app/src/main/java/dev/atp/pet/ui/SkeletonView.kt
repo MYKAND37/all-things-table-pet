@@ -1009,7 +1009,11 @@ class SkeletonView @JvmOverloads constructor(
         return d - 180f
     }
 
-    private fun setRotation(deg: Float) {
+    /**
+     * 设成某个角度。名字**不能**叫 `setRotation` —— 那是 `View` 自己的方法（转整个控件，
+     * 和这里转画布完全是两件事），重名要么编译不过，要么悄悄把控件一起转了。
+     */
+    private fun applyViewRotation(deg: Float) {
         viewRotation = wrapDegrees(deg)
         val rad = Math.toRadians(viewRotation.toDouble())
         cosR = cos(rad).toFloat()
@@ -1018,7 +1022,7 @@ class SkeletonView @JvmOverloads constructor(
 
     /** 转一下（正数是顺时针）。界面那个「转 90°」按钮和双指旋转都走这里。 */
     fun rotateBy(delta: Float) {
-        setRotation(viewRotation + delta)
+        applyViewRotation(viewRotation + delta)
         invalidate()
     }
 
@@ -1042,7 +1046,7 @@ class SkeletonView @JvmOverloads constructor(
      */
     fun resetView() {
         val s = spec ?: return
-        setRotation(0f)
+        applyViewRotation(0f)
         zoomed = false
         computeFit(width, height, s)
         placeFitted()
@@ -1320,7 +1324,7 @@ class SkeletonView @JvmOverloads constructor(
                     // 而不是顺着屏幕走。增量是绝对角之差，跨过 ±180 时会被 wrapDegrees 收回来。
                     val ang = angleOf(event)
                     if (ang != twistAngle) {
-                        setRotation(viewRotation + (ang - twistAngle))
+                        applyViewRotation(viewRotation + (ang - twistAngle))
                         twistAngle = ang
                     }
                     pinchSpan = s
