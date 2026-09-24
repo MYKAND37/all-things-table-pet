@@ -421,7 +421,8 @@
     <string name="anim_playing_hint">正在演这一遍 · 碰一下右边就停下来（停下来之后才能改）</string>
     <string name="anim_frame_status">第 %1$d/%2$d 帧 · %3$s 秒 · %4$d 节骨头 · 图 %5$s</string>
     <string name="anim_dirty_hint">改过了 —— 按「存入这一帧」才会留下</string>
-    <string name="anim_bone_mode_hint">改骨骼：蓝点是关节、橙点是末端，拖它们把骨架对上画。改完按「存骨骼」，它写回你正在看的这一只。</string>
+    <string name="anim_bone_mode_hint">改骨骼：蓝点是关节、橙点是末端，拖它们把骨架对上画。改完按「存骨骼」（写回你正在看的这一只）—— 不按就白改。</string>
+    <string name="anim_bones_unsaved">骨架改了还没按「存骨骼」，刚才那些改动没留下。</string>
     <string name="anim_frame_detail">帧 %1$d · %2$s · %3$s 秒 · %4$d 节骨头</string>
     <string name="action_close">关闭</string>
     <string name="action_none_hint">松开动作，回到站姿</string>

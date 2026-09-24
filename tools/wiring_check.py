@@ -690,6 +690,13 @@ def main():
     report("离开这一页就把它那套图解掉（两个实例不同时压在内存里）",
            "private fun leaveAnimationStudio(" in activity and "animView.release()" in activity
            and "if (currentPane == Pane.ANIMS && pane != Pane.ANIMS) leaveAnimationStudio()" in activity)
+    # 没有可编的那一段时，按底下那些 chip 不能什么都不发生：一个什么都不做的按钮和一个坏掉的
+    # 按钮长得一模一样（这一条和测试场那句「播不了就说出来」是同一条规矩）。
+    report("没有桌宠 / 没有动画时会说一句，不是按下去什么都不发生",
+           "private fun studioEdit()" in activity and activity.count("studioEdit() ?: return") >= 5
+           and "R.string.anim_need_pet" in activity and "R.string.anim_pick_one" in activity)
+    report("改骨骼没存就离开会说一句（不悄悄丢掉用户拖了半天的骨架）",
+           "R.string.anim_bones_unsaved" in activity and "if (animBoneMode) {" in activity)
     report("这一页也能自己播、自己停，且『停』和『碰一下』是两件事",
            "private fun haltStudioPlay(" in activity and "private fun stopStudioPlay(" in activity
            and "if (animPlaying) haltStudioPlay()" in activity)

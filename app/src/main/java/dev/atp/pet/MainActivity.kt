@@ -384,9 +384,8 @@ class MainActivity : AppCompatActivity() {
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
         findViewById<View>(R.id.animMeta).setOnClickListener {
-            val folder = studioFolder() ?: return@setOnClickListener
-            val anim = studioAnimation(folder) ?: return@setOnClickListener
             // 名字/速度/循环，外加"删掉这一段"。帧本身在这页里编，所以那个弹窗不带帧那一半。
+            val (folder, anim) = studioEdit() ?: return@setOnClickListener
             askAnimation(folder, anim, withFrames = false) { buildAnimList() }
         }
         // 工作台里摆姿势：姿势是**抓帧的内容**，所以拖动本身不改任何东西，改的是"现在这个样子"。
@@ -5796,6 +5795,26 @@ class MainActivity : AppCompatActivity() {
     private fun studioAnimation(folder: CharacterFolder): AnimationSpec? =
         store.loadAnimations(folder).firstOrNull { it.id == animEditId }
 
+    /**
+     * 底下那条要用的两样东西：哪一只、哪一段。缺哪个就说哪个。
+     *
+     * 「一个什么都不做的按钮和一个坏掉的按钮长得一模一样」—— 没有桌宠、或者一段动画都没有的
+     * 时候按「＋ 帧」「存入这一帧」，如果只是 `?: return`，用户看到的就是"这个按钮坏了"。
+     */
+    private fun studioEdit(): Pair<CharacterFolder, AnimationSpec>? {
+        val folder = studioFolder()
+        if (folder == null) {
+            Toast.makeText(this, R.string.anim_need_pet, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        val anim = studioAnimation(folder)
+        if (anim == null) {
+            Toast.makeText(this, R.string.anim_pick_one, Toast.LENGTH_SHORT).show()
+            return null
+        }
+        return folder to anim
+    }
+
     /** 右边跟上左边：载入这一只的身体（换过才重载），摆上选中的那一帧。 */
     private fun loadAnimationStudio(folder: CharacterFolder) {
         val rigKey = folder.rigDir.absolutePath
@@ -5972,8 +5991,7 @@ class MainActivity : AppCompatActivity() {
             stopStudioPlay()
             return
         }
-        val folder = studioFolder() ?: return
-        val anim = studioAnimation(folder) ?: return
+        val (_, anim) = studioEdit() ?: return
         if (anim.frames.isEmpty()) {
             Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
             return
@@ -6053,8 +6071,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 「＋ 帧」：把**现在的样子**（姿势 + 开着的图）插到这一帧后面，并选中新的那一帧。 */
     private fun captureStudioFrame() {
-        val folder = studioFolder() ?: return
-        val anim = studioAnimation(folder) ?: return
+        val (folder, anim) = studioEdit() ?: return
         haltStudioPlay()
         val at = if (anim.frames.isEmpty()) 0 else (animFrameIndex + 1).coerceAtMost(anim.frames.size)
         val frame = AnimFrame(
@@ -6081,8 +6098,7 @@ class MainActivity : AppCompatActivity() {
      * 看起来的样子 —— 调试动画时这是唯一不会骗人的规矩。
      */
     private fun saveStudioFrame() {
-        val folder = studioFolder() ?: return
-        val anim = studioAnimation(folder) ?: return
+        val (folder, anim) = studioEdit() ?: return
         val frame = anim.frames.getOrNull(animFrameIndex)
         if (frame == null) {
             Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
@@ -6108,8 +6124,7 @@ class MainActivity : AppCompatActivity() {
 
     /** 「帧 −0.1s / ＋0.1s」：这一帧走多久。夹在 0.1 秒和 30 秒之间，和那个数字弹窗同一把尺子。 */
     private fun nudgeStudioFrame(delta: Float) {
-        val folder = studioFolder() ?: return
-        val anim = studioAnimation(folder) ?: return
+        val (folder, anim) = studioEdit() ?: return
         val frame = anim.frames.getOrNull(animFrameIndex)
         if (frame == null) {
             Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
@@ -6134,8 +6149,7 @@ class MainActivity : AppCompatActivity() {
      * 攒起来的。问一个每次都要回答的问题，是在教用户不看问题就点确定。
      */
     private fun dropStudioFrame() {
-        val folder = studioFolder() ?: return
-        val anim = studioAnimation(folder) ?: return
+        val (folder, anim) = studioEdit() ?: return
         if (anim.frames.isEmpty()) {
             Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
             return
@@ -6254,9 +6268,17 @@ class MainActivity : AppCompatActivity() {
         statusLine.text = getString(R.string.anim_pick_one)
     }
 
-    /** 离开这一页：停播，把预览那套图解掉，下次进来重载。 */
+    /**
+     * 离开这一页：停播，把预览那套图解掉，下次进来重载。
+     *
+     * 改骨骼还没按「存骨骼」就离开的话，那些改动**真的会丢**（下次进来是按文件重新解的），
+     * 所以这里说一句 —— 悄悄丢掉用户刚拖了半天的骨架，是这个应用里最不该发生的一类事。
+     */
     private fun leaveAnimationStudio() {
         haltStudioPlay()
+        if (animBoneMode) {
+            Toast.makeText(this, R.string.anim_bones_unsaved, Toast.LENGTH_LONG).show()
+        }
         animView.release()
         animViewRig = ""
     }
