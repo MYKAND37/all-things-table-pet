@@ -296,6 +296,76 @@ def check_upper_case_names():
            not bad, "; ".join(bad[:5]))
 
 
+def check_local_function_scope():
+    """
+    A function declared INSIDE another function cannot be called from a member function.
+
+    The fifth of the same family (private companion member, folder constant, cross-package
+    object, misspelled constant): mechanical, invisible locally, only CI compiles. It cost a
+    build in 1.20.0 -- twice, in one commit -- because the settings pane keeps its helper as a
+    LOCAL function (`fun put(next: Settings)` inside buildSettingsPane, which is where the
+    "redraw this page" habit lives) and two new call sites reached for it from member
+    functions. Kotlin says `Unresolved reference: put`, which is a confusing way to say
+    "you are in the wrong scope".
+
+    How it decides: walk each file with a brace-depth stack, remembering which `fun` each line
+    is inside (the enclosing declaration, by depth). A name declared as a local function and
+    NOT declared as a member anywhere in the file may only be called from inside the function
+    that declares it. Local functions that shadow a member of the same name are left alone --
+    those are legal, and flagging them would be crying wolf.
+    """
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        lines = text.split("\n")
+        # 成员函数：4 空格缩进的 fun（含 override/private 等修饰）。
+        members = set(re.findall(r"^    (?:@\w+\s+)?(?:private |internal |override |open )*fun\s+(\w+)",
+                                 text, re.M))
+        # 局部函数：8 空格或更深缩进的 fun，以及它在哪个函数里面。
+        stack = []          # (depth, enclosing function name)
+        depth = 0
+        owner_of_line = []
+        # 局部函数名 -> **一组**声明它的函数。一个名字可以在两个函数里各有一个局部版本
+        # （`row` 就是这样），所以这里必须是集合，不能是"最后一个赢"。
+        local_decl = {}
+        for i, line in enumerate(lines, 1):
+            code = line.split("//")[0]
+            stripped = code.lstrip()
+            if code.lstrip().startswith(("*", "/*")):
+                owner_of_line.append(stack[-1][1] if stack else "")
+                continue
+            m = re.match(r"^(\s*)(?:private |internal |override |open )*fun\s+(\w+)", code)
+            owner_of_line.append(stack[-1][1] if stack else "")
+            if m and len(m.group(1)) >= 8 and code.strip().endswith("{"):
+                # owner 是空的时候，这不是"某个函数里的局部函数"，而是 **companion object /
+                # object 里的成员**（它们的缩进也是 8）。那类成员本来就能被实例方法调用。
+                if stack:
+                    local_decl.setdefault(m.group(2), set()).add(stack[-1][1])
+                stack.append((depth, m.group(2)))
+            elif m and len(m.group(1)) >= 4 and code.strip().endswith("{"):
+                stack.append((depth, m.group(2)))
+            depth += code.count("{") - code.count("}")
+            while stack and depth <= stack[-1][0]:
+                stack.pop()
+        for i, line in enumerate(lines, 1):
+            code = line.split("//")[0]
+            if code.lstrip().startswith(("*", "/*")):
+                continue
+            for name, homes in local_decl.items():
+                if name in members or re.search(r"fun\s+" + name + r"\b", code):
+                    continue
+                if re.search(r"(?<![\w.])" + name + r"\s*\(", code):
+                    here = owner_of_line[i - 1]
+                    # 只在"确实身处某个**成员**函数体内、而那个函数不是有这个名字的函数"时
+                    # 才报。花括号的深度对字符串里的 `{}` 是数不准的，所以这一条宁可漏，
+                    # 不可误报：`here` 是个局部函数名时说明跟踪已经不可信，那就不说话。
+                    if here in members and here not in homes:
+                        bad.append("%s:%d 调了 %s()，而它是 %s() 里的局部函数"
+                                   % (os.path.basename(path), i, name, "/".join(sorted(homes))))
+    report("局部函数没有被别处调用（只有编译器看得见的那种作用域错）",
+           not bad, "; ".join(bad[:4]))
+
+
 def report_hardcoded_text():
     """
     界面里还硬写着的中文：**报数，不判红**。
@@ -611,6 +681,7 @@ def main():
     check_folder_constants_qualified()
     check_object_imports()
     check_upper_case_names()
+    check_local_function_scope()
     report_hardcoded_text()
     check_chip_lists()
     check_view_resources()

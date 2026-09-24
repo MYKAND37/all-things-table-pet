@@ -3,6 +3,7 @@ package dev.atp.pet.data
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import java.io.InputStream
 import org.json.JSONObject
 import java.io.File
 

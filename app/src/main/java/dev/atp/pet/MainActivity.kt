@@ -2335,7 +2335,8 @@ class MainActivity : AppCompatActivity() {
             }
             // 换背景不该在手机上攒出一堆照片：留下新的，别的收掉。
             settingsStore.pruneBackgrounds(name)
-            put(settings.copy(background = name))
+            applySettingsChange(settings.copy(background = name))
+            buildSettingsPane()
             Toast.makeText(this, R.string.settings_theme_set, Toast.LENGTH_SHORT).show()
             return
         }
@@ -5356,6 +5357,25 @@ class MainActivity : AppCompatActivity() {
      * question.
      */
     /**
+     * 存一份设置，并让它立刻生效。
+     *
+     * 设置页里那个 `put()` 是**局部**函数（它顺手把那一页重画一遍），而改动还会从别处来
+     * —— 挑完背景图、选完浓淡。所以真正做事的是这一个：存盘 + 铺主题 + 交给测试场 +
+     * 推给桌面那一只。**局部函数不能被成员函数调用**，这条编译错这一版踩过一次。
+     */
+    private fun applySettingsChange(next: Settings) {
+        settings = next
+        settingsStore.save(next)
+        applyTheme()
+        sandboxView.applySettings(next)
+        // 全局设置本来就该是全局的：桌面上那只也得跟着换，不然"设置里选了半软、
+        // 桌面上还是垮的"会让人以为是同一个 bug 没修好。
+        if (PetOverlayService.running) {
+            PetOverlayService.send(this, PetOverlayService.ACTION_SETTINGS, "")
+        }
+    }
+
+    /**
      * 把用户自己的背景图铺上去（1.20.0）。
      *
      * 三件事：
@@ -5406,7 +5426,8 @@ class MainActivity : AppCompatActivity() {
                 .takeIf { it >= 0 }?.toString(),
         ) { picked ->
             val level = picked.toIntOrNull() ?: return@pickList false
-            put(settings.copy(backgroundDim = levels[level.coerceIn(0, 3)]))
+            applySettingsChange(settings.copy(backgroundDim = levels[level.coerceIn(0, 3)]))
+            buildSettingsPane()
             true
         }
     }
@@ -5417,16 +5438,8 @@ class MainActivity : AppCompatActivity() {
         settingsList.addView(label(getString(R.string.settings_hint), 11f, MUTED, bottom = 12))
 
         fun put(next: Settings) {
-            settings = next
-            settingsStore.save(next)
-            // 背景图是这台手机上的东西，改完立刻铺上（不用重启）。
-            applyTheme()
-            sandboxView.applySettings(next)
-            // 全局设置本来就该是全局的：桌面上那只也得跟着换，不然"设置里选了半软、
-            // 桌面上还是垮的"会让人以为是同一个 bug 没修好。
-            if (PetOverlayService.running) {
-                PetOverlayService.send(this, PetOverlayService.ACTION_SETTINGS, "")
-            }
+            applySettingsChange(next)
+            // 只有设置页需要重画自己；别处来的改动（挑图、选浓淡）自己会调这一句。
             buildSettingsPane()
         }
 
@@ -5475,7 +5488,8 @@ class MainActivity : AppCompatActivity() {
             remove.background = getDrawable(R.drawable.menu_item_idle)
             remove.setOnClickListener {
                 settingsStore.clearBackground(settings.background)
-                put(settings.copy(background = ""))
+                applySettingsChange(settings.copy(background = ""))
+                buildSettingsPane()
             }
             settingsList.addView(remove)
         }
