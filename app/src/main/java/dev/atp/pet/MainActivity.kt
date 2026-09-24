@@ -724,6 +724,7 @@ class MainActivity : AppCompatActivity() {
                 }
             Pane.LIQUIDS -> statusLine.text = getString(R.string.liquid_subtitle)
             Pane.PARTICLES -> statusLine.text = getString(R.string.particle_subtitle)
+            Pane.ANIMS -> statusLine.text = getString(R.string.anim_page_hint)
             Pane.SETTINGS -> statusLine.text = getString(R.string.settings_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
         }

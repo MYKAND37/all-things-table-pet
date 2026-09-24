@@ -366,6 +366,97 @@ def check_local_function_scope():
            not bad, "; ".join(bad[:4]))
 
 
+def strip_code(text):
+    """把字符串字面量和注释去掉（花括号计数必须只看**代码**）。
+
+    第一版没做这件事，于是 `Pane.PET_LOGIC -> if (…) … else …` 那种 arm 让计数走偏、正文提前
+    截断 —— 检查于是**在正确的代码上报错**。这比不检查更糟，所以先把这一层补上。
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+        elif c == '"':
+            if text.startswith('"""', i):
+                j = text.find('"""', i + 3)
+                i = n if j < 0 else j + 3
+            else:
+                i += 1
+                while i < n and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+                i += 1
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def check_enum_when_exhaustive():
+    """
+    A `when` over an enum has to name every entry — and adding an enum value is what breaks it.
+
+    The sixth of the same family (private companion member, folder constant, cross-package
+    object, misspelled constant, local-function scope). It cost a build in 1.21.0: adding ANIMS
+    to `Pane` left `when (pane)` non-exhaustive, which is
+    `error: 'when' expression must be exhaustive` — a message that names the missing branch.
+
+    Two earlier versions of THIS check were wrong, and both are worth remembering:
+
+      * judging by "the body mentions some of the enum's entries" flagged `when (item.id)`,
+        whose arms call `show(Pane.LIQUIDS)` — a when over menu ids has nothing to do with Pane;
+      * counting braces without stripping strings and comments truncated the body early, so it
+        reported a missing branch in code that had it.
+
+    What it does now: only a `when (x)` where **x is declared with an enum type** is judged
+    (`pane: Pane`, `val kind: ActionKind`…). That is the one case where the compiler's rule
+    applies, and it cannot be confused by a `when` that merely mentions enum values.
+    """
+    bad = []
+    for path in kotlin_files():
+        text = strip_code(open(path, encoding="utf-8").read())
+        enums = {}
+        for m in re.finditer(r"enum class (\w+)[^{]*\{([^}]*)\}", text, re.S):
+            entries = re.findall(r"([A-Z][A-Z0-9_]*)\s*[,()\n]", m.group(2))
+            if len(entries) >= 2:
+                enums[m.group(1)] = entries
+        if not enums:
+            continue
+        # 变量 -> 它的枚举类型：参数、属性、`val x: Enum`，以及 `val x = Enum.ENTRY`。
+        typed = {}
+        for m in re.finditer(r"\b(\w+)\s*:\s*(\w+)\b", text):
+            if m.group(2) in enums:
+                typed[m.group(1)] = m.group(2)
+        for m in re.finditer(r"\b(?:val|var)\s+(\w+)\s*=\s*(\w+)\.", text):
+            if m.group(2) in enums:
+                typed[m.group(1)] = m.group(2)
+        lines = text.split("\n")
+        for i, line in enumerate(lines, 1):
+            m = re.match(r"^(\s*)when\s*\(\s*(\w+)\s*\)\s*\{?\s*$", line)
+            if not m or m.group(2) not in typed:
+                continue
+            entries = enums[typed[m.group(2)]]
+            depth, body = 0, []
+            for l in lines[i - 1:]:
+                body.append(l)
+                depth += l.count("{") - l.count("}")
+                if depth <= 0 and l.strip().endswith("}"):
+                    break
+            blob = "\n".join(body)
+            if re.search(r"^\s*else\s*(->|:)", blob, re.M):
+                continue
+            named = [e for e in entries if re.search(r"\b" + e + r"\b", blob)]
+            if len(named) != len(entries):
+                bad.append("%s: when (%s: %s) 少写了 %s，而且没有 else"
+                           % (os.path.basename(path), m.group(2), typed[m.group(2)],
+                              ", ".join(e for e in entries if e not in named)))
+    report("枚举的 when 是穷尽的（加了新枚举值就该有人提醒）", not bad, "; ".join(bad[:4]))
+
+
 def report_hardcoded_text():
     """
     界面里还硬写着的中文：**报数，不判红**。
@@ -682,6 +773,7 @@ def main():
     check_object_imports()
     check_upper_case_names()
     check_local_function_scope()
+    check_enum_when_exhaustive()
     report_hardcoded_text()
     check_chip_lists()
     check_view_resources()

@@ -195,15 +195,6 @@ class CharacterSpec(
     fun colliderRadiusOf(bone: BoneSpec): Float =
         if (bone.colliderRadius > 0f) bone.colliderRadius else headHeight * AUTO_COLLIDER_RATIO
 
-    companion object {
-        /**
-         * 没写半径时，碰撞半径和身高成这个比例。
-         *
-         * 0.18 是量出来的老数（Ragdoll 从第一版就用它）：比一根前臂细、比一根手指粗，
-         * 让"人形"在道具面前既不漏也不糊。
-         */
-        const val AUTO_COLLIDER_RATIO = 0.18f
-    }
 
     /**
      * Bake authored head/tail pairs into parent-relative rest transforms.
@@ -289,6 +280,14 @@ class CharacterSpec(
 
         /** A room never gets less air than this, however small the figure is. */
         const val MIN_AIR = 720f
+
+        /**
+         * 没写半径时，碰撞半径和身高成这个比例。
+         *
+         * 0.18 是量出来的老数（Ragdoll 从第一版就用它）：比一根前臂细、比一根手指粗，
+         * 让「人形」在道具面前既不漏也不糊。求解器和骨骼编辑器共用 [colliderRadiusOf]。
+         */
+        const val AUTO_COLLIDER_RATIO = 0.18f
 
         /** What a head is, as a fraction of the figure, when a file does not say. */
         const val HEAD_OF_FIGURE = 0.163f
