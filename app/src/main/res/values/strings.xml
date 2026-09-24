@@ -322,6 +322,9 @@
 
     <!-- 测试场：动作列表 -->
     <string name="sandbox_actions">动作</string>
+    <string name="sandbox_actions_with_anims">%1$s · 动画 %2$d</string>
+    <string name="sandbox_actions_need_pet">先把一只桌宠放到测试场上（顶上那一排的第一个方块），动作和动画都挂在它身上</string>
+    <string name="action_list_title_with_anims">动作 %1$d · 动画 %2$d</string>
     <string name="action_list_title">动作列表</string>
     <string name="anim_title">动画</string>
     <string name="anim_delete">删掉「%1$s」这段动画？帧是抓出来的，删了就没了。</string>

@@ -902,9 +902,17 @@ class MainActivity : AppCompatActivity() {
         // Actions live behind one button rather than a row of chips: a character can have
         // any number of them, and the list needs room to show what each one looks like.
         val poses = summoned?.let { store.loadPoses(it) } ?: emptyList()
+        // 动画也算进来。这一句是"找不到入口"的直接原因：按钮原来只数动作，一个只做了动画的
+        // 桌宠上面写着「动作 (0)」—— 从外面看，那和"没有动画这个功能"一模一样。
+        val animCount = summoned?.let { store.loadAnimations(it).size } ?: 0
+        val base = if (activePose == null) {
+            getString(R.string.sandbox_actions) + " (" + poses.size + ")"
+        } else {
+            getString(R.string.sandbox_actions) + " · " + activePose
+        }
         val action = label(
-            if (activePose == null) getString(R.string.sandbox_actions) + " (" + poses.size + ")"
-            else getString(R.string.sandbox_actions) + " · " + activePose,
+            if (animCount > 0) getString(R.string.sandbox_actions_with_anims, base, animCount)
+            else base,
             12f, INK,
         )
         action.background = getDrawable(R.drawable.menu_item_selected)
@@ -973,7 +981,11 @@ class MainActivity : AppCompatActivity() {
      * anything, three weeks after it was saved.
      */
     private fun showActionList() {
-        val folder = summoned ?: return
+        // 没有宠物在场上就什么都不弹，看起来像"这个按钮坏了"。说一句。
+        val folder = summoned ?: run {
+            Toast.makeText(this, R.string.sandbox_actions_need_pet, Toast.LENGTH_SHORT).show()
+            return
+        }
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val dialog = AlertDialog.Builder(this)
             .setTitle(getString(R.string.action_list_title))
@@ -992,7 +1004,12 @@ class MainActivity : AppCompatActivity() {
         // The preview is drawn from the skeleton alone; a spec that will not parse just
         // means the list comes up without pictures.
         val spec = CharacterSpec.parseOrNull(folder.specText())
-        actionDialog?.setTitle(getString(R.string.action_list_title) + " (" + poses.size + ")")
+        actionDialog?.setTitle(
+            getString(
+                R.string.action_list_title_with_anims,
+                poses.size, store.loadAnimations(folder).size,
+            )
+        )
 
         box.addView(
             actionRow(

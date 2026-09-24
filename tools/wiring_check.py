@@ -574,6 +574,15 @@ def main():
     # 入口：测试场那张动作列表里的动画段 + 长按菜单 + 规则里的「播放动画」。
     report("动作列表里有动画段（播放 / 停止 / 新建 / 编辑）",
            "private fun fillAnimationList(" in activity and "private fun askAnimation(" in activity)
+    # 「动画的入口在哪」——问这句话本身就是一条 bug 报告：按钮原来只数动作，一个只做了动画的
+    # 桌宠上面写着「动作 (0)」，而入口在它里面。所以两处都要说：按钮和标题都得数上动画，
+    # 而没有宠物在场上时也不能一声不响（那看起来就是"这个按钮坏了"）。
+    report("入口按钮和标题都把动画算进去（不然入口等于藏起来了）",
+           "val animCount = summoned?.let { store.loadAnimations(it).size }" in activity
+           and "sandbox_actions_with_anims" in activity
+           and "action_list_title_with_anims" in activity)
+    report("没有桌宠在场上时说一句，而不是什么都不弹",
+           "sandbox_actions_need_pet" in activity)
     report("抓帧抓的是测试场现在这一只的姿势",
            "sandboxView.currentAngles()" in activity and "fun currentAngles()" in bench)
     report("规则里能播放动画（动作种类 + 选它的地方 + 有人执行）",
