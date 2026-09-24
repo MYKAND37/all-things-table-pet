@@ -8,8 +8,9 @@
 
 ## 免责声明（摘要）
 
-1. **这个仓库全部由 DeepSeek 开发** —— 代码、测试、文档都是编码智能体（`deepseek-v4-flash`）
-   按仓库所有者的要求写的，**测试也是它自己写的**。按现状提供，不提供任何担保。
+1. **这个仓库 99.9% 的内容由三个接入 DeepSeek 的编码智能体完成**（`DeepSeek V4 Flash EXP`
+   一代、`DeepSeek v4.1 Flash` 两代，时期与分工见文末「致谢」）—— 代码、测试、文档都是它们
+   按仓库所有者的要求写的，**测试也是它们自己写的**。按现状提供，不提供任何担保。
 2. **`.atppet` 是用户自己做的内容包**：制作与分发必须遵守你所在地的法律法规（著作权、肖像权、
    商标、内容分级……）；用户制作的包与开发者无关，**责任完全由制作者承担**。
 3. **不要在 Issues / PR 里分享 `.atppet` 文件**（也不要贴里面的美术素材）—— 维护者无法核实
@@ -18,7 +19,8 @@
 👉 **全文（含隐私、许可状态、内容红线、举报方式）：[`docs/DISCLAIMER.md`](docs/DISCLAIMER.md)** ——
 这一篇值得在下载之前读一遍。
 
-*This repository is developed entirely by DeepSeek (an AI coding agent). `.atppet` files are
+*This repository is developed entirely by three DeepSeek coding agents (`V4 Flash EXP`, then
+`v4.1 Flash` twice) at different times. `.atppet` files are
 user-made content and their makers are solely responsible for them; do not share them in issues.
 See [the full disclaimer](docs/DISCLAIMER.md).*
 
@@ -166,15 +168,19 @@ python3 tools/check_all.py         # 21 个检查，约 80 秒
 这个应用的 **99.9% 的内容** —— 代码、测试、文档，以及大部分设计取舍 —— 由**三个接入 DeepSeek
 的编码智能体**在不同时期分别完成。提交历史里数得出来：
 
-| 时期 | 提交身份 | 提交 | 干了什么 |
-|---|---|---|---|
-| 09-13 | `DSH <dsh@localhost>` | 10 | 地基：应用外壳、骨架（FK + 两段 IK）、部位装配、骨骼编辑与动作、部位深度、布娃娃物理与碰撞、导入对位、签名发布 |
-| 09-14 … 09-22 | `atp <atp@users.noreply.github.com>` | 141 | 从「一根骨头可以有多张图」一路做到 1.14.1：状态与变体、自己搭骨架、六类道具、液体、粒子、节点与绳子、变身、多套骨骼、桌宠包、悬浮桌宠、参考图…… |
-| 09-22 … 09-24 | `ATP <atp@local>` | 12 | 1.15.0 … 1.19.0：液滴大小与透明度、节点当主语、部件测全局状态、桌面动作、计时器、动画、英文，以及现在这些文档 |
+| 时期 | 提交身份 | 模型 | 提交 | 干了什么 |
+|---|---|---|---|---|
+| 09-13 | `DSH <dsh@localhost>` | **DeepSeek V4 Flash EXP**（**有视觉**） | 10 | 地基：应用外壳、骨架（FK + 两段 IK）、部位装配、骨骼编辑与动作、部位深度、布娃娃物理与碰撞、导入对位、签名发布 |
+| 09-14 … 09-22 | `atp <atp@users.noreply.github.com>` | **DeepSeek v4.1 Flash** | 141 | 从「一根骨头可以有多张图」一路做到 1.14.1：状态与变体、自己搭骨架、六类道具、液体、粒子、节点与绳子、变身、多套骨骼、桌宠包、悬浮桌宠、参考图…… |
+| 09-22 … 09-24 | `ATP <atp@local>` | **DeepSeek v4.1 Flash** | 12 | 1.15.0 … 1.19.0：液滴大小与透明度、节点当主语、部件测全局状态、桌面动作、计时器、动画、英文，以及现在这些文档 |
 
-（第 1 条提交是仓库主人的 `Initial commit`，其余 163 条全部来自这三个 Agent。三个 Agent 都
-接入 DeepSeek；第三代这一份跑在 `deepseek-v4-flash` 上，前两代的型号已无从考证 —— 它们的
-痕迹只有提交身份、提交信息和这满仓库的注释。）
+（第 1 条提交是仓库主人的 `Initial commit`，其余 163 条全部来自这三个 Agent。）
+
+**第一代能看图，后面两代不能** —— 这件事比它听起来重要：第一任有一条提交叫
+「Fit the skeleton to the supplied base-body reference」，那是它**看着参考图**把骨架贴上去的。
+从第二任起（包括我）看不到任何图片，于是这个仓库长出了一套很硬的习惯：**把看到的东西变成
+数字** —— 每一个"更快/更准/更大"后面都要有一个量出来的数，每一条断言都要能被机器复跑。
+你在这份文档里读到的所有"为什么"，都是这种条件下的产物。
 
 **而人是下命令的那一个**：每个功能都是他说要什么、他验收、他再指出下一个问题。
 「做出来但点不到」那四次，全是他找不到入口才暴露的；「保存骨骼会让图层平方」那条线索也是
