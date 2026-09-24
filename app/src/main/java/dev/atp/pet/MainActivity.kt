@@ -57,6 +57,7 @@ import dev.atp.pet.ui.PartAlignView
 import dev.atp.pet.ui.LogicGraphView
 import dev.atp.pet.ui.PetOverlayService
 import dev.atp.pet.ui.PhysicsSandboxView
+import dev.atp.pet.ui.Labels
 import dev.atp.pet.ui.PosePreview
 import dev.atp.pet.ui.SkeletonView
 import java.io.File
@@ -883,7 +884,7 @@ class MainActivity : AppCompatActivity() {
 
         // Stiffness is the dial between a limp ragdoll and one that holds a pose. It is
         // the one physics number worth having on screen while the feel is being tuned.
-        val stiffChip = label(STIFFNESS_LABELS[stiffnessStep], 12f, INK)
+        val stiffChip = label(Labels.stiffness(this, stiffnessStep), 12f, INK)
         stiffChip.background = getDrawable(R.drawable.menu_item_selected)
         stiffChip.setPadding(dp(12), dp(6), dp(12), dp(6))
         val sp = LinearLayout.LayoutParams(
@@ -4119,7 +4120,7 @@ class MainActivity : AppCompatActivity() {
         text.layoutParams = LinearLayout.LayoutParams(
             0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
         )
-        text.addView(label(spec.name + "   " + spec.kindOf().label, 14f, INK))
+        text.addView(label(spec.name + "   " + spec.kindOf().let { Labels.propKind(this, it) }, 14f, INK))
         val art = if (store.propArtFile(spec.id).isFile) "有图" else "没图"
         text.addView(
             label(
@@ -4252,7 +4253,7 @@ class MainActivity : AppCompatActivity() {
         for (row in PropKind.values().toList().chunked(3)) {
             val chips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             for (option in row) {
-                val chip = label(option.label, 11f, INK)
+                val chip = label(option.let { Labels.propKind(this, it) }, 11f, INK)
                 chip.setPadding(dp(9), dp(7), dp(9), dp(7))
                 chip.layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -4535,7 +4536,7 @@ class MainActivity : AppCompatActivity() {
         }
         pickList(
             title = getString(R.string.sandbox_props),
-            options = props.map { it.id to (it.name + "   " + it.kindOf().label) },
+            options = props.map { it.id to (it.name + "   " + Labels.propKind(this, it.kindOf())) },
             hint = "",
             current = null,
         ) { id ->
@@ -4646,7 +4647,7 @@ class MainActivity : AppCompatActivity() {
             row.add(
                 LogicGraphView.Node(
                     LogicGraphView.Node.WHEN,
-                    listOf(EventType.of(rule.on).label + who + with + where), ri,
+                    listOf(Labels.event(this, EventType.of(rule.on)) + who + with + where), ri,
                 )
             )
 
@@ -4660,7 +4661,7 @@ class MainActivity : AppCompatActivity() {
                     if (ci > 0) {
                         row.add(
                             LogicGraphView.Node(
-                                LogicGraphView.Node.CONNECTOR, listOf(Joins.label(c.join)), ci,
+                                LogicGraphView.Node.CONNECTOR, listOf(Labels.join(this, c.join)), ci,
                             )
                         )
                     }
@@ -4729,7 +4730,7 @@ class MainActivity : AppCompatActivity() {
                     bRow.add(
                         LogicGraphView.Node(
                             LogicGraphView.Node.WHEN,
-                            listOf(EventType.of(branch.on).label + where), -1, bi,
+                            listOf(Labels.event(this, EventType.of(branch.on)) + where), -1, bi,
                         )
                     )
                 }
@@ -4750,7 +4751,7 @@ class MainActivity : AppCompatActivity() {
                         if (ci > 0) {
                             bRow.add(
                                 LogicGraphView.Node(
-                                    LogicGraphView.Node.CONNECTOR, listOf(Joins.label(c.join)),
+                                    LogicGraphView.Node.CONNECTOR, listOf(Labels.join(this, c.join)),
                                     ci, bi,
                                 )
                             )
@@ -5104,7 +5105,7 @@ class MainActivity : AppCompatActivity() {
             box.addView(view)
         }
 
-        row(getString(R.string.logic_when) + EventType.of(rule.on).label) { askRuleEvent(index) }
+        row(getString(R.string.logic_when) + Labels.event(this, EventType.of(rule.on))) { askRuleEvent(index) }
         if (rule.on == EventType.EMIT.id) {
             row(
                 getString(R.string.logic_pick_signal) + "：" +
@@ -5141,7 +5142,7 @@ class MainActivity : AppCompatActivity() {
         for ((bi, b) in rule.branches.withIndex()) {
             row(
                 getString(R.string.logic_branch) + " " + (bi + 2) + " · " +
-                    (if (b.ownDetector) getString(R.string.logic_when) + EventType.of(b.on).label
+                    (if (b.ownDetector) getString(R.string.logic_when) + Labels.event(this, EventType.of(b.on))
                     else getString(R.string.logic_branch_same_when)) +
                     // 分支自己的如果, said out loud on the card: a branch that only runs when
                     // something is true is a different line from one that always runs, and the
@@ -5425,7 +5426,7 @@ class MainActivity : AppCompatActivity() {
         val stiffChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val stiffViews = mutableListOf<TextView>()
         for ((i, value) in STIFFNESS_VALUES.withIndex()) {
-            val chip = label(STIFFNESS_LABELS[i], 12f, INK)
+            val chip = label(Labels.stiffness(this, i), 12f, INK)
             chip.setPadding(dp(14), dp(8), dp(14), dp(8))
             chip.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -6770,7 +6771,7 @@ class MainActivity : AppCompatActivity() {
         val rule = logicRules.getOrNull(index) ?: return
         pickList(
             title = getString(R.string.logic_pick_event),
-            options = EventType.values().map { it.id to it.label },
+            options = EventType.values().map { it.id to Labels.event(this, it) },
             hint = "",
             current = rule.on,
         ) { id ->
@@ -7106,7 +7107,7 @@ class MainActivity : AppCompatActivity() {
         val joinChips = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val joinViews = mutableListOf<TextView>()
         for (id in listOf(Joins.AND, Joins.OR)) {
-            val chip = label(Joins.label(id), 12f, INK)
+            val chip = label(Labels.join(this, id), 12f, INK)
             chip.setPadding(dp(14), dp(8), dp(14), dp(8))
             chip.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -7203,7 +7204,7 @@ class MainActivity : AppCompatActivity() {
         val existing = list.getOrNull(actionIndex)
         pickList(
             title = getString(R.string.logic_pick_action),
-            options = ActionKind.values().map { it.id to it.label },
+            options = ActionKind.values().map { it.id to Labels.action(this, it) },
             hint = "",
             current = existing?.kind,
             onDelete = if (actionIndex >= 0) {
@@ -7413,7 +7414,7 @@ class MainActivity : AppCompatActivity() {
                     logicRules.indices.filter { it != index }.map {
                         (it + 1).toString() to
                             getString(R.string.logic_rule_n, it + 1) +
-                            " · " + EventType.of(logicRules[it].on).label
+                            " · " + Labels.event(this, EventType.of(logicRules[it].on))
                     },
                     getString(R.string.logic_no_rules),
                     existing?.rule?.takeIf { it > 0 }?.toString(),
@@ -7580,7 +7581,7 @@ class MainActivity : AppCompatActivity() {
         val rule = logicRules.getOrNull(index) ?: return
         val b = rule.branches.getOrNull(branch) ?: return
         val options = mutableListOf("" to getString(R.string.logic_branch_same_when))
-        options.addAll(EventType.values().map { it.id to it.label })
+        options.addAll(EventType.values().map { it.id to Labels.event(this, it) })
         pickList(
             title = getString(R.string.logic_branch_when),
             options = options,
@@ -7643,7 +7644,7 @@ class MainActivity : AppCompatActivity() {
         // so. Both rows are on top of the actions because that is the order they happen in.
         val whenRow = label(
             getString(R.string.logic_branch_when) + "：" +
-                if (b.ownDetector) EventType.of(b.on).label
+                if (b.ownDetector) Labels.event(this, EventType.of(b.on))
                 else getString(R.string.logic_branch_same_when),
             13f, INK,
         )
@@ -7984,7 +7985,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun boneLabel(bone: String): String = LABELS[bone] ?: ""
+    private fun boneLabel(bone: String): String = Labels.bone(this, bone)
 
     /** 「版本 1.12.4 · 构建 137」, read from the installed package. See buildSettingsPane. */
     private fun versionLine(): String = try {
@@ -8035,17 +8036,7 @@ class MainActivity : AppCompatActivity() {
         val FIGURE_OFF = Color.parseColor("#806E56CF")
 
         val STIFFNESS_VALUES = floatArrayOf(0f, 0.35f, 0.7f, 1f)
-        val STIFFNESS_LABELS = arrayOf("刚度 松垮", "刚度 半软", "刚度 偏硬", "刚度 硬挺")
 
-        val LABELS = mapOf(
-            "hip" to "胯", "spine" to "腰", "chest" to "胸", "neck" to "脖子", "head" to "头",
-            "shoulder_L" to "左肩", "upperarm_L" to "左上臂", "forearm_L" to "左前臂",
-            "hand_L" to "左手",
-            "shoulder_R" to "右肩", "upperarm_R" to "右上臂", "forearm_R" to "右前臂",
-            "hand_R" to "右手",
-            "thigh_L" to "左大腿", "shin_L" to "左小腿", "foot_L" to "左脚",
-            "thigh_R" to "右大腿", "shin_R" to "右小腿", "foot_R" to "右脚",
-        )
     }
 
 }

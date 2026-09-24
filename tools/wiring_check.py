@@ -340,8 +340,10 @@ def main():
            "val keep" in reload and "keep ?:" in reload)
     report("挑一只上场只有一个入口（summon）",
            activity.count("private fun summon(") == 1 and "summon(folder)" in activity)
+    # 刚度那一档现在从资源里取（Labels.stiffness），所以这里盯的是它的**取用点**，
+    # 而不是那张中文字表 —— 表已经搬进 strings.xml 了（1.19.0）。
     report("顶部先给的是「哪一只」，不是松垮/僵硬", activity.find("for (folder in characters)") <
-           activity.find("STIFFNESS_LABELS[stiffnessStep]"))
+           activity.find("Labels.stiffness(this, stiffnessStep)"))
 
     print("== 重置骨骼：只回骨架，不是把这一套删了重来 ==")
     # 「重置骨骼」要是把部位图一起删了，那它和"删掉这套骨骼重画"没有区别 —— 而后者用户

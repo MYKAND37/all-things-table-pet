@@ -224,6 +224,84 @@ def check_folder_constants_qualified():
            % (len(names), ", ".join(names[:6])))
 
 
+def report_hardcoded_text():
+    """
+    界面里还硬写着的中文：**报数，不判红**。
+
+    1.19.0 把应用自己的功能词搬进了资源并给了英文（控件、段落名、引擎词汇、骨头名），但界面
+    里还有一批**拼在行里的短句**（「未导入」「 · 播放中」「低于」）是硬写的 —— 它们要能被翻译，
+    得先一条一条搬进资源，那是下一批的活。
+
+    所以这里只报数字和文件，不失败：一份"还剩多少"的清单，比一句"基本都翻了"有用。
+    引擎那边（日志与 GameEvent.describe）也列出来，但那是**有意的**：调试读数保持中文。
+    """
+    cjk = re.compile(r'"[^"]*[\u4e00-\u9fff][^"]*"')
+    per_file = []
+    for base, _, names in os.walk(SRC):
+        for n in sorted(names):
+            if not n.endswith(".kt"):
+                continue
+            path = os.path.join(base, n)
+            count = 0
+            for line in open(path, encoding="utf-8").read().split("\n"):
+                stripped = line.strip()
+                if stripped.startswith(("//", "*", "/*")):
+                    continue
+                count += len(cjk.findall(line))
+            if count:
+                per_file.append((count, os.path.relpath(path, SRC)))
+    ui = [(c, f) for c, f in per_file if f.startswith("dev/atp/pet/ui/") or f.endswith("MainActivity.kt")]
+    engine = [(c, f) for c, f in per_file if (c, f) not in ui]
+    print("   ·   界面里还硬写着的中文 %d 处（下一批要搬进资源）："
+          % sum(c for c, _ in ui))
+    for c, f in sorted(ui, reverse=True):
+        print("        %4d  %s" % (c, f))
+    print("   ·   引擎里（日志 / describe，有意保持中文）%d 处" % sum(c for c, _ in engine))
+
+
+def check_object_imports():
+    """
+    Using `Something.member` from another PACKAGE without importing `Something` does not compile.
+
+    The third member of the same family as the two checks above (a private companion, a folder
+    constant): mechanical, invisible locally -- only CI compiles -- and it has already cost a
+    build once (`Labels` was written in `ui/`, used from `MainActivity` in `dev.atp.pet`, and
+    nothing local noticed).
+
+    Deliberately narrow: only top-level `object`s declared in this source tree, only a bare
+    `Name.` that is not preceded by a dot (so `Foo.Bar.baz` is not mistaken for `Bar.baz`), and
+    only when the file has no `import` line ending in that name. It is not a type checker.
+    """
+    owners = {}
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        pkg = re.search(r"^package\s+([\w.]+)", text, re.M)
+        for name in re.findall(r"^object\s+(\w+)", text, re.M):
+            owners[name] = (pkg.group(1) if pkg else "", os.path.basename(path))
+
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        pkg_m = re.search(r"^package\s+([\w.]+)", text, re.M)
+        pkg = pkg_m.group(1) if pkg_m else ""
+        imported = set(re.findall(r"^import\s+[\w.]*\b(\w+)\s*$", text, re.M))
+        imported |= set(re.findall(r"^import\s+[\w.]*\b(\w+)", text, re.M))
+        for name, (home, where) in owners.items():
+            if home == pkg or name in imported:
+                continue
+            for i, line in enumerate(text.split("\n"), 1):
+                code = line.split("//")[0]
+                # KDoc/块注释里的 `Mirrors Liquids.of` 不是代码（ParticleSpec 就有一句）。
+                if code.lstrip().startswith(("*", "/*")):
+                    continue
+                if re.search(r"(?<![\w.])" + name + r"\s*\.", code) and \
+                        not re.match(r"\s*(object|val|var|fun|class)\s+" + name, code):
+                    bad.append("%s:%d 用了 %s.%s 但没有 import %s"
+                               % (os.path.basename(path), i, name, "", name))
+                    break
+    report("跨包用到的 object 都 import 了", not bad, "; ".join(bad[:4]))
+
+
 def check_chip_lists():
     """
     paintChips takes strings, paintSwatches takes colours, and both take a list.
@@ -459,6 +537,8 @@ def main():
     check_strict_parse()
     check_private_companions()
     check_folder_constants_qualified()
+    check_object_imports()
+    report_hardcoded_text()
     check_chip_lists()
     check_view_resources()
     check_one_home_for_a_file_name()
