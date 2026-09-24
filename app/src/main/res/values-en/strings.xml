@@ -537,4 +537,23 @@
     <string name="settings_theme_dim_3">Strong</string>
     <string name="settings_theme_set">Background set</string>
     <string name="settings_theme_failed">That picture cannot be read</string>
+    <string name="disclaimer_title">Disclaimer</string>
+    <string name="disclaimer_body">**99.9% of this app was written by three DeepSeek coding agents** (code, tests and docs alike). It is provided as-is, with no warranty of any kind.
+
+**The `.atppet` packages you make are your responsibility.** Creating and distributing them must comply with the laws where you are — copyright, personality rights, trademarks, content rating, and the licence of whatever assets you use. User-made packages are not the developer\'s doing; the maker bears the consequences.
+
+**Hard limits**: sexual content involving minors, terrorist or hateful propaganda, instructions for crimes — crimes in nearly every jurisdiction. This app does not scan what you import; do not bring such content into this repository (issues, PRs, releases).
+
+**Do not share `.atppet` files in issues** (or the artwork inside them): the maintainer cannot verify where that content came from.
+
+**Privacy**: this app has no network permission, does not read your screen and collects nothing. Your things stay on this phone.
+
+The full text (licence status, how to report, applicable law) is in the repository at docs/DISCLAIMER.md:</string>
+    <string name="disclaimer_agree">I have read and agree</string>
+    <string name="disclaimer_decline">Decline and quit</string>
+    <string name="disclaimer_declined">Not accepted — the app has quit</string>
+    <string name="disclaimer_more">Read the disclaimer again</string>
+    <string name="disclaimer_accepted_at">Accepted version %1$d</string>
+    <string name="settings_disclaimer_hint">Which version of the disclaimer you accepted, and how to read it again (it re-asks when the text changes).</string>
+    <string name="settings_disclaimer">Disclaimer</string>
 </resources>

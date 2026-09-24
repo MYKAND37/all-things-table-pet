@@ -56,7 +56,11 @@ DEFAULTS = {
     "followPet": True,
     "background": "",
     "backgroundDim": 0.35,
+    "disclaimerAccepted": 0,
 }
+
+#: 免责声明那一版的号。改了文案就加一 —— 启动时那道门比的是 `accepted < 这个数`。
+DISCLAIMER_VERSION = 1
 
 
 def clamp(v, lo, hi):
@@ -89,6 +93,8 @@ def parse(text):
             out[key] = bool(o[key])
     out["background"] = safe_background_name(str(o.get("background", "")))
     out["backgroundDim"] = clamp(num("backgroundDim", 0.35), MIN_DIM, MAX_DIM)
+    # 手改出来的负数没有意义；999 也不该等于"同意了未来的某一版"，所以夹在 0..当前版本。
+    out["disclaimerAccepted"] = max(0, min(DISCLAIMER_VERSION, int(num("disclaimerAccepted", 0))))
     return out
 
 
@@ -181,6 +187,20 @@ def main():
     report("来回一趟不丢这个键",
            json.loads(to_json(parse('{"background": "bg-1.png", "backgroundDim": 0.5}')))
            ["background"] == "bg-1.png")
+
+    print("\n免责声明那道门")
+    # 门比的是**版本号**，不是一个 true/false：改了文案就该再问一次。
+    report("缺键 = 还没同意过（第一次打开会弹）", parse("{}")["disclaimerAccepted"] == 0)
+    report("同意过当前这一版就不再问",
+           parse('{"disclaimerAccepted": %d}' % DISCLAIMER_VERSION)["disclaimerAccepted"]
+           >= DISCLAIMER_VERSION)
+    report("签过旧版不算同意这一版",
+           parse('{"disclaimerAccepted": 0}')["disclaimerAccepted"] < DISCLAIMER_VERSION)
+    report("手改成 999 不等于同意了未来的版本",
+           parse('{"disclaimerAccepted": 999}')["disclaimerAccepted"] == DISCLAIMER_VERSION)
+    report("负数被夹回 0（没同意过）", parse('{"disclaimerAccepted": -5}')["disclaimerAccepted"] == 0)
+    report("来回一趟不丢这个键",
+           json.loads(to_json(parse('{"disclaimerAccepted": 1}')))["disclaimerAccepted"] == 1)
 
     print("")
     if FAILURES:

@@ -473,9 +473,27 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<View>(R.id.railHeader).setOnClickListener { setRail(!railCollapsed) }
 
-        store.ensureSeeded()
+        // 先读设置（门要知道有没有同意过），再决定要不要往下走 —— 连"把出厂角色铺到硬盘上"
+        // 都排在门后面：同意之前什么都不做。
         settingsStore = SettingsStore(this)
         settings = settingsStore.load()
+        // 免责声明这道门：同意之前什么都不做（不读角色、不召唤宠物），不同意就退出。
+        if (settings.disclaimerAccepted < Settings.DISCLAIMER_VERSION) {
+            askDisclaimer { accepted ->
+                if (accepted) {
+                    settingsStore.save(
+                        settings.copy(disclaimerAccepted = Settings.DISCLAIMER_VERSION)
+                    )
+                    // 从头走一遍：这一次门是开的，后面的启动动作照常。
+                    recreate()
+                } else {
+                    Toast.makeText(this, R.string.disclaimer_declined, Toast.LENGTH_SHORT).show()
+                    finishAffinity()
+                }
+            }
+            return
+        }
+        store.ensureSeeded()
         sandboxView.applySettings(settings)
         // 主题在启动时铺一次 —— 必须在这一行之后：在那之前 settings 还是默认值，
         // 有背景图的人会先看到一眼自带背景。
@@ -5357,6 +5375,52 @@ class MainActivity : AppCompatActivity() {
      * question.
      */
     /**
+     * 启动那道门：免责声明，确认了才继续（1.20.1）。
+     *
+     * 三个刻意的选择：
+     *
+     *  * **不确认就退出**（`finishAffinity`），不是"留在空白页"—— 一个可以一直点"稍后"的门
+     *    等于没有门；
+     *  * **`setCancelable(false)`**：返回键和点外面都关不掉它。要同意就同意，要不同意就退出，
+     *    没有第三种状态；
+     *  * **同意之前什么都不做**：调用方在拿到同意之前直接 `return` —— 没有宠物被召唤、
+     *    没有文件被读。这不是洁癖，是"同意"这两个字的意思。
+     *
+     * 记住的是**版本号**（[Settings.DISCLAIMER_VERSION]）：文案改了就把那个数加一，应用会
+     * 再问一次。签过一次的同意书，在内容变了之后就不是同意书了。
+     */
+    private fun askDisclaimer(onDone: (Boolean) -> Unit) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val text = label(getString(R.string.disclaimer_body), 12f, INK)
+        box.addView(text)
+        // 全文在哪：这一句也给一个能点的地址，"详情见仓库"应该真的能点进去。
+        val link = label(REPO_URL + "/blob/main/docs/DISCLAIMER.md", 11f, MUTED, top = 10)
+        link.setOnClickListener {
+            runCatching { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
+        }
+        box.addView(link)
+
+        var answered = false
+        AlertDialog.Builder(this)
+            .setTitle(R.string.disclaimer_title)
+            .setView(scrolling(box))
+            .setCancelable(false)
+            .setPositiveButton(R.string.disclaimer_agree) { _, _ ->
+                answered = true
+                onDone(true)
+            }
+            .setNegativeButton(R.string.disclaimer_decline) { _, _ ->
+                answered = true
+                onDone(false)
+            }
+            .setOnDismissListener {
+                // 对话框被系统收走（内存紧张、进程被切走）而人还没选：当作没同意。
+                if (!answered) onDone(false)
+            }
+            .show()
+    }
+
+    /**
      * 存一份设置，并让它立刻生效。
      *
      * 设置页里那个 `put()` 是**局部**函数（它顺手把那一页重画一遍），而改动还会从别处来
@@ -5574,6 +5638,18 @@ class MainActivity : AppCompatActivity() {
         settingsList.addView(stiffChips)
 
         theme()
+        section(R.string.settings_disclaimer, R.string.settings_disclaimer_hint)
+        val read = label(getString(R.string.disclaimer_more), 12f, INK)
+        read.setPadding(dp(14), dp(10), dp(14), dp(10))
+        read.background = getDrawable(R.drawable.menu_item_idle)
+        read.setOnClickListener { askDisclaimer { _ -> } }
+        settingsList.addView(read)
+        settingsList.addView(
+            label(
+                getString(R.string.disclaimer_accepted_at, settings.disclaimerAccepted),
+                10f, MUTED, top = 6,
+            )
+        )
         section(R.string.settings_view, R.string.settings_view_hint)
         toggle(R.string.settings_show_grid, settings.showGrid) { put(settings.copy(showGrid = it)) }
         toggle(R.string.settings_show_ground, settings.showGround) { put(settings.copy(showGround = it)) }

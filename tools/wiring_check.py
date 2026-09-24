@@ -222,6 +222,8 @@ def main():
         ("部件测全局的状态", "logic_pick_state"),
         # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
         ("桌面上的摆动作", "pet_summon_pose"),
+        # 免责声明那道门：入口就是启动时的弹窗（设置里也留了一处"重新阅读"）。
+        ("免责声明确认", "disclaimer_agree"),
         # 应用背景图（主题）：入口在全局设置里那一段。
         ("应用背景图（主题）", "settings_theme_pick"),
         # 「每个部位能有自己的状态」：入口就是那个状态弹窗（它现在会说自己在看哪一份）。
@@ -543,6 +545,34 @@ def main():
     report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
+
+    print("== 免责声明那道门：同意之前什么都不做，不同意就退出 ==")
+    # 「将免责声明添加到用户打开的弹窗，确认后才能继续使用，不确认自己退出」（1.20.1）。
+    # 一条门要成立，四件事都要在：不确认走不了、不同意真的退出、同意之前没有副作用、
+    # 而且它记的是**版本号**（改了文案会再问一次）。
+    gate = activity[activity.find("private fun askDisclaimer("):]
+    gate = gate[:gate.find("\n    /**")]
+    report("弹窗关了取消键与外点（返回键也关不掉）",
+           "setCancelable(false)" in gate and "setNegativeButton(R.string.disclaimer_decline" in gate)
+    report("不同意真的退出（不是留在空白页）",
+           "finishAffinity()" in gate or "finishAffinity()" in activity)
+    report("对话框被系统收走而人还没选，也算没同意",
+           "setOnDismissListener" in gate and "if (!answered) onDone(false)" in gate)
+    report("正文能滚（不然一段法律文本会把按钮顶出屏幕）",
+           "scrolling(box)" in gate and "R.string.disclaimer_body" in gate)
+    report("正文里三条都在：AI 开发 / 包的责任 / 不要分享包",
+           all(k in activity for k in ("disclaimer_body", "disclaimer_agree", "disclaimer_decline")))
+    # 门开在**别的启动动作之前**：同意之前不读角色、不召唤宠物。
+    store_pos = activity.find("store.ensureSeeded()")
+    gate_pos = activity.find("if (settings.disclaimerAccepted < Settings.DISCLAIMER_VERSION)")
+    report("门开在启动动作之前（同意之前什么都不做）",
+           0 < gate_pos < store_pos, "门在 %d，第一个启动动作在 %d" % (gate_pos, store_pos))
+    report("同意过就跳过，而且记住的是版本号（不是 true/false）",
+           "const val DISCLAIMER_VERSION = 1" in
+           next((t for p2, t in files.items() if p2.endswith("data/Settings.kt")), "")
+           and "settings.disclaimerAccepted < Settings.DISCLAIMER_VERSION" in activity)
+    report("设置里能重新读一遍，并显示同意过第几版",
+           "disclaimer_more" in activity and "disclaimer_accepted_at" in activity)
 
     print("== 应用背景图（主题）：挑图 → 缩小存起来 → 铺在面板下面 ==")
     # 「1.20.0 大版本新增用户上传应用的背景，也就是应用主题的功能」。四件事缺一不可：

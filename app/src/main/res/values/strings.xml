@@ -60,6 +60,25 @@
     <string name="settings_about">关于这一版</string>
     <string name="settings_about_hint">报一个问题的时候，这两行是最先被问到的</string>
     <string name="settings_version">版本 %1$s · 构建 %2$d</string>
+    <string name="disclaimer_title">免责声明</string>
+    <string name="disclaimer_body">**这个应用 99.9% 的内容由三个接入 DeepSeek 的编码智能体完成**（代码、测试、文档都是），按现状提供，不提供任何担保。
+
+**你自己做的 .atppet 内容包，责任在你。** 制作与分发必须遵守你所在地的法律法规 —— 著作权、肖像权与人格权、商标、内容分级，以及你所用素材各自的授权。用户制作的包与开发者无关，由此产生的一切责任由制作者承担。
+
+**内容红线**：涉及未成年人的性内容、宣扬恐怖主义或仇恨、传授犯罪方法等，在几乎所有地方都是犯罪。本应用不审查你导入的任何内容；请不要把这类内容带进本仓库（Issue / PR / Release），带进来会被删除，适用法律允许或要求时维护者会配合有权机关。
+
+**不要在 Issues 里分享 .atppet 文件**（也不要贴里面的美术素材）—— 维护者无法核实来源与授权。
+
+**隐私**：这个应用没有网络权限，不读屏幕、不收集统计；你的东西不会离开这台手机。
+
+完整全文（含许可状态、举报方式、适用法律）在仓库的 docs/DISCLAIMER.md：</string>
+    <string name="disclaimer_agree">我已阅读并同意</string>
+    <string name="disclaimer_decline">不同意，退出</string>
+    <string name="disclaimer_declined">没有同意，应用已退出</string>
+    <string name="disclaimer_more">重新阅读免责声明</string>
+    <string name="disclaimer_accepted_at">已同意第 %1$d 版</string>
+    <string name="settings_disclaimer_hint">免责声明那一版你同意了哪一版、以及怎么再读一遍（改过文案就会再问一次）。</string>
+    <string name="settings_disclaimer">免责声明</string>
     <string name="settings_theme">背景图</string>
     <string name="settings_theme_hint">从手机里选一张图当应用背景（只存在本机，不上传任何地方）。面板是半透明的，图会透过来 —— 亮照片记得把下面那个「浓淡」调高一点，字才清楚。</string>
     <string name="settings_theme_pick">选一张图…</string>

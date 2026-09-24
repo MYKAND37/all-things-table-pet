@@ -54,6 +54,15 @@ data class Settings(
      * 压暗（0.35），而调它的入口和"浓淡"这个说法，和参考图那边是同一套。
      */
     val backgroundDim: Float = 0.35f,
+    /**
+     * 用户同意过第几版免责声明（0 = 还没同意过）。
+     *
+     * 存**版本号**而不是一个 true/false：免责声明是会改的（加了新的法律风险、改了范围），
+     * 而"我同意过 1.19 那一版"和"我同意过这一版"不是同一件事。改了文案就把
+     * [DISCLAIMER_VERSION] 加一，应用会再问一次 —— 一个只在安装时问过一次的同意书，
+     * 在内容变了之后就不再是同意书了。
+     */
+    val disclaimerAccepted: Int = 0,
 ) {
     companion object {
         /** What the file is called, and what it is called inside it. */
@@ -63,6 +72,12 @@ data class Settings(
         /** Below this a thrown pet hangs; above it, it drops like a stone. */
         const val MIN_GRAVITY = 0.2f
         const val MAX_GRAVITY = 3f
+
+        /**
+         * 免责声明的版本。**改了 `disclaimer_gate_text` 就把它加一**：启动时那道门比的是
+         * `disclaimerAccepted < 这个数`，所以加一就等于"请重新读一遍并再同意一次"。
+         */
+        const val DISCLAIMER_VERSION = 1
 
         /** 背景图住在这个子目录里（在应用自己的 filesDir 下，和别的东西一样）。 */
         const val THEME_DIR = "theme"
@@ -116,6 +131,10 @@ data class Settings(
             // 名字过一遍安检：settings.json 是能手改的，而这个名字会被拼成一条路径。
             background = safeBackgroundName(o.optString("background", "")),
             backgroundDim = clamp(num(o, "backgroundDim", 0.35f), MIN_DIM, MAX_DIM),
+            // 负数没有意义（比"没同意过"还低），手改成 999 也不该等于同意了未来的某一版：
+            // 夹在 0..当前版本之间。
+            disclaimerAccepted = num(o, "disclaimerAccepted", 0f).toInt()
+                .coerceIn(0, DISCLAIMER_VERSION),
         )
 
         private fun num(o: JSONObject, key: String, fallback: Float): Float = try {
@@ -145,6 +164,7 @@ data class Settings(
             // 而"写进去的必须是安全的"这条规矩不该只在读的那一头。
             .put("background", safeBackgroundName(s.background))
             .put("backgroundDim", s.backgroundDim.toDouble())
+            .put("disclaimerAccepted", s.disclaimerAccepted)
             .toString(2)
 
         private fun clamp(v: Float, lo: Float, hi: Float): Float =
