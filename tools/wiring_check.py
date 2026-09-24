@@ -222,6 +222,8 @@ def main():
         ("部件测全局的状态", "logic_pick_state"),
         # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
         ("桌面上的摆动作", "pet_summon_pose"),
+        # 「每个部位能有自己的状态」：入口就是那个状态弹窗（它现在会说自己在看哪一份）。
+        ("部件的局部状态", "logic_states_scope_part"),
         # 动画：三个入口各一条 —— 测试场那张动作列表、规则里的动作、桌面上的长按菜单。
         ("动画（测试场）", "anim_title"),
         ("规则里播放动画", "logic_pick_anim"),
@@ -537,6 +539,32 @@ def main():
     report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
+
+    print("== 两级状态：看得见自己在看哪一份，也走得过去 ==")
+    # 「希望每个部位能处于不同状态，就是加入全局状态和局部状态」—— 这一版**没有加机制**：
+    # 两级状态从 1.11 就在，机制完整（部件的状态住在它自己的文件里、按 `骨头:状态` 标记画图、
+    # 引擎各管各的）。缺的只是"你现在看的这一份是谁的"：弹窗原来只写「状态」两个字，于是
+    # "每个部位有自己的状态"这件事从外面看不存在。所以盯的是那三样**说得出来**的东西。
+    report("状态弹窗的标题写清是**谁的**状态（角色 / 这一节）",
+           "logic_states_scope_global" in activity and "logic_states_scope_part" in activity)
+    report("说明分两句：全局那份、这一节那份（同名也不会画错）",
+           "logic_states_hint_global" in activity and "logic_states_hint_part" in activity)
+    report("有一行直接跳到另一层（角色 → 挑一节 / 这一节 → 回角色），不用去 chip 里找",
+           "private fun showStatesDialog(" in activity
+           and "logic_states_to_part" in activity and "logic_states_to_global" in activity)
+    report("跳过去之后主体真的换了（openLogic + 段落跟着走）",
+           "logicSection = LogicSection.PARTS" in activity
+           and "logicSection = LogicSection.CHARACTER" in activity)
+    report("部件那排 chip 就写着它自己有几个状态（不用点进去才知道）",
+           "fun withStates(name: String, text: String)" in activity
+           and "logic_states_count" in activity)
+    # 而机制本身还在那三处 —— 这一版没动它们，但它们是"两级状态"的地基，掉了就等于没这个功能。
+    report("机制仍在：部件的状态住在它自己的文件里，不是角色的那份",
+           "store.saveObjectLogic(" in activity and "logicStates = spec.states.toMutableList()" in activity)
+    report("机制仍在：一层一个引擎，标签 `骨头:状态` 是画图那把钥匙",
+           "out[Subjects.stateTag(bone, id)] = on" in bench
+           and "fun stateTag(bone: String, state: String)" in next(
+               (t for p, t in files.items() if p.endswith("engine/logic/LogicSpec.kt")), ""))
 
     print("== 动画：帧、速度、两个实例都拿得到 ==")
     # 「加入动画功能，一个是纯演算动画（摆 A、摆 B，中间自己走），另一个是绘制动画（画不同的

@@ -4969,13 +4969,22 @@ class MainActivity : AppCompatActivity() {
             LogicSection.CHARACTER -> listOf(
                 "" to listOf(Subjects.PET to getString(R.string.logic_subject_pet)),
             )
-            LogicSection.PARTS -> listOf(
-                "" to boneNames(pet).map {
-                    Subjects.part(it) to getString(R.string.logic_subject_part, boneLabel(it))
-                } + nodeNames(pet).map {
-                    Subjects.part(it) to getString(R.string.logic_subject_part, it)
-                },
-            )
+            LogicSection.PARTS -> {
+                // 每一节后面带上"它自己有几个状态"：两级状态的分工因此在这一排 chip 上就看得见，
+                // 而不是要先点进去才知道（这一版就是把这件事从"要记住"变成"看得见"）。
+                val declared = store.loadObjectLogic(pet)
+                fun withStates(name: String, text: String): String {
+                    val n = declared[Subjects.part(name)]?.states?.size ?: 0
+                    return text + if (n > 0) getString(R.string.logic_states_count, n) else ""
+                }
+                listOf(
+                    "" to boneNames(pet).map {
+                        Subjects.part(it) to withStates(it, getString(R.string.logic_subject_part, boneLabel(it)))
+                    } + nodeNames(pet).map {
+                        Subjects.part(it) to withStates(it, getString(R.string.logic_subject_part, it))
+                    },
+                )
+            }
             LogicSection.PARTICLES -> listOf(
                 "" to declared.particles.map {
                     Subjects.particle(it.id) to getString(R.string.logic_subject_particle, it.name)
@@ -5202,16 +5211,42 @@ class MainActivity : AppCompatActivity() {
         dialog.show()
     }
 
+    /**
+     * 状态：**这个主体自己的**那些，以及怎么走到另一层去。
+     *
+     * 两级状态（全局 / 局部）从 1.11 就在，机制一直是完整的 —— 缺的是"你现在看的这一份是谁的"。
+     * 这个弹窗原来只写「状态」两个字、加一句笼统的说明，于是"每个部位能有自己的状态"这件事
+     * 从外面看**不存在**：用户报的是「希望每个部位能处于不同状态」，而它能做的事只是把主体切成
+     * 「部件 · 手」—— 一个没人告诉他的动作。所以这里三样都要说：
+     *
+     *  1. 标题里写清是**谁的**状态（角色 / 这一节）；
+     *  2. 说明分两句：全局那份和这一节那份各是什么、同名也不会画错；
+     *  3. 一行**直接跳过去**（角色 → 挑一节 / 这一节 → 回角色），不用去上面那排 chip 里找。
+     */
     private fun showStatesDialog() {
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val part = if (Subjects.isPart(logicSubject)) Subjects.partId(logicSubject) else ""
+        val title = if (part.isEmpty()) {
+            getString(R.string.logic_states_scope_global, getString(R.string.logic_subject_pet))
+        } else {
+            getString(R.string.logic_states_scope_part, partText(part))
+        }
         val dialog = AlertDialog.Builder(this)
-            .setTitle(R.string.logic_states)
+            .setTitle(title)
             .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
         fun fill() {
             box.removeAllViews()
-            box.addView(label(getString(R.string.logic_states_hint), 10f, MUTED, bottom = 8))
+            box.addView(
+                label(
+                    getString(
+                        if (part.isEmpty()) R.string.logic_states_hint_global
+                        else R.string.logic_states_hint_part,
+                    ),
+                    10f, MUTED, bottom = 8,
+                )
+            )
             for (state in logicStates.toList()) {
                 box.addView(stateRow(state) { dialog.dismiss(); showStatesDialog() })
             }
@@ -5223,6 +5258,47 @@ class MainActivity : AppCompatActivity() {
                 askEditState(null) { showStatesDialog() }
             }
             box.addView(add)
+
+            // 跳到另一层：一个动作，一句话。挑一节之后主体就切过去，弹窗在那边重开 ——
+            // "每个部位自己的状态"因此是一个点得出来的东西，而不是一句要记住的规矩。
+            val jump = label(
+                getString(
+                    if (part.isEmpty()) R.string.logic_states_to_part
+                    else R.string.logic_states_to_global,
+                ),
+                12f, INK, top = 12,
+            )
+            jump.setPadding(dp(12), dp(9), dp(12), dp(9))
+            jump.background = getDrawable(R.drawable.menu_item_idle)
+            jump.setOnClickListener {
+                dialog.dismiss()
+                if (part.isEmpty()) {
+                    val folder = logicPet() ?: return@setOnClickListener
+                    val declared = store.loadObjectLogic(folder)
+                    pickList(
+                        getString(R.string.logic_states_to_part),
+                        boneNames(folder).map { bone ->
+                            val n = declared[Subjects.part(bone)]?.states?.size ?: 0
+                            Subjects.part(bone) to (
+                                partText(bone) +
+                                    if (n > 0) getString(R.string.logic_states_count, n) else ""
+                                )
+                        },
+                        getString(R.string.logic_no_parts),
+                        logicSubject,
+                    ) { subject ->
+                        logicSection = LogicSection.PARTS
+                        openLogic(subject)
+                        showStatesDialog()
+                        true
+                    }
+                } else {
+                    logicSection = LogicSection.CHARACTER
+                    openLogic(Subjects.PET)
+                    showStatesDialog()
+                }
+            }
+            box.addView(jump)
         }
         fill()
         dialog.show()

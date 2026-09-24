@@ -419,7 +419,14 @@
     <string name="logic_stats">数值</string>
     <string name="logic_stats_hint">角色身上的数字。H 归零会死、P 太高会休克——不过那是你自己写规则说了算。</string>
     <string name="logic_states">状态</string>
-    <string name="logic_states_hint">状态是开关。一个部位可以只在某个状态打开时才画出来（比如「穿着」），规则既能读它，也能翻它。</string>
+    <string name="logic_states_scope_global">状态 · %1$s（全局）</string>
+    <string name="logic_states_scope_part">状态 · %1$s（这一节自己的）</string>
+    <string name="logic_states_hint_global">这些是**角色自己的**状态（全局）：整只桌宠一个开关，任何一节的规则都能读它、翻它，图层写状态名就是它。想让**某一节**有它自己的状态（比如只有手在出汗），点下面那一行。</string>
+    <string name="logic_states_hint_part">这些是**这一节自己的**状态（局部）：只有它有，别的部分和角色都不受影响；角色的全局状态是另一份，两边同名也不会画错（图层的标记写成「骨头:状态」）。</string>
+    <string name="logic_states_to_part">给某一节加它自己的状态…</string>
+    <string name="logic_states_to_global">回到角色自己的状态（全局）…</string>
+    <string name="logic_states_count"> ·%1$d</string>
+    <string name="logic_no_parts">这只桌宠还没有部件</string>
     <string name="logic_add_state">＋ 加状态</string>
     <string name="logic_state_id">代号（英文，规则和部位都用它）</string>
     <string name="logic_state_name">显示名</string>
