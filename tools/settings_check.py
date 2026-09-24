@@ -25,6 +25,25 @@ def report(label, ok, detail=""):
 MIN_GRAVITY = 0.2
 MAX_GRAVITY = 3.0
 
+#: 背景图那两档的边界。0.85 之上等于把图藏起来了，不如直接去掉它。
+MIN_DIM = 0.0
+MAX_DIM = 0.85
+
+
+def safe_background_name(raw):
+    """Mirror of Settings.safeBackgroundName —— 只收一个纯文件名。
+
+    这是这一版唯一一条**安全**规矩：settings.json 是能手改的，而这个名字会被拼成一条路径。
+    一个手改出来的 "../../../databases/xxx" 会让"背景图"变成"删掉你手机里任意一个文件"。
+    读的时候和写的时候走的是同一个函数（Kotlin 那边也是），所以这里测的就是那条规矩本身。
+    """
+    name = (raw or "").strip()
+    if not name or len(name) > 96:
+        return ""
+    if "/" in name or "\\" in name or ".." in name:
+        return ""
+    return name
+
 DEFAULTS = {
     "gravityScale": 1.0,
     "defaultStiffness": 0.0,
@@ -35,6 +54,8 @@ DEFAULTS = {
     "particles": True,
     "liquid": True,
     "followPet": True,
+    "background": "",
+    "backgroundDim": 0.35,
 }
 
 
@@ -66,11 +87,17 @@ def parse(text):
                 "followPet"):
         if key in o:
             out[key] = bool(o[key])
+    out["background"] = safe_background_name(str(o.get("background", "")))
+    out["backgroundDim"] = clamp(num("backgroundDim", 0.35), MIN_DIM, MAX_DIM)
     return out
 
 
 def to_json(s):
-    return json.dumps(s, indent=2)
+    # 写出去的时候名字也过一遍安检：内存里那份可能是从别处来的（导入、旧版本），
+    # 而"写进去的必须是安全的"不该只在读的那一头。
+    out = dict(s)
+    out["background"] = safe_background_name(str(s.get("background", "")))
+    return json.dumps(out, indent=2)
 
 
 def main():
@@ -127,6 +154,33 @@ def main():
         off = parse(json.dumps({key: False}))[key]
         report("%-13s true/false both survive" % key, on is True and off is False,
                "%s / %s" % (on, off))
+
+    print("\n应用背景图（主题）")
+    # 名字是这一版唯一一条安全规矩：它会被拼成一条路径，而 settings.json 能手改。
+    report("正常文件名收下", safe_background_name("bg-1699999999999.png") == "bg-1699999999999.png")
+    report("带路径的名字一律拒掉（这是那条安全规矩）",
+           safe_background_name("../../databases/app.db") == ""
+           and safe_background_name("theme/bg.png") == ""
+           and safe_background_name("..\\..\\windows.png") == "",
+           "斜杠、反斜杠、上级目录都不收")
+    report("空名字就是空（没有背景图）", safe_background_name("") == "" and safe_background_name("   ") == "")
+    report("太长的名字也拒掉（不到 96 个字符以内）", safe_background_name("x" * 200) == "")
+    report("缺键 → 没有背景图、默认压暗 0.35",
+           parse("{}")["background"] == "" and abs(parse("{}")["backgroundDim"] - 0.35) < 1e-9)
+    report("压暗越界被夹住",
+           parse('{"backgroundDim": 9}')["backgroundDim"] == MAX_DIM
+           and parse('{"backgroundDim": -4}')["backgroundDim"] == MIN_DIM)
+    report("压暗是 NaN 也不崩（按最低算）",
+           parse('{"backgroundDim": "heavy"}')["backgroundDim"] == 0.35
+           or parse('{"backgroundDim": "heavy"}')["backgroundDim"] == MIN_DIM)
+    # 手改出来的危险名字：读进来就是空，而不是被当成路径。
+    report("文件里手改出来的危险名字读成「没有背景图」",
+           parse('{"background": "../../../databases/x"}')["background"] == "")
+    report("写出去的时候也过安检（内存里那份可能是别处来的）",
+           json.loads(to_json({"background": "/etc/passwd"}))["background"] == "")
+    report("来回一趟不丢这个键",
+           json.loads(to_json(parse('{"background": "bg-1.png", "backgroundDim": 0.5}')))
+           ["background"] == "bg-1.png")
 
     print("")
     if FAILURES:

@@ -170,6 +170,9 @@ class MainActivity : AppCompatActivity() {
 
     /** The next image picked is the rig's reference picture, not a part. See onImagePicked. */
     private var pickingReference = false
+
+    /** 正在挑应用背景图（1.20.0）：和参考图一样是一次性的模式，不是"当前在编辑谁"。 */
+    private var pickingBackground = false
     private var railCollapsed = false
     private var stiffnessStep = 0
 
@@ -216,6 +219,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sandboxPane: View
     private lateinit var sandboxView: PhysicsSandboxView
     private lateinit var petChooser: LinearLayout
+    private lateinit var themeBackground: android.widget.ImageView
+    private lateinit var themeScrim: View
     private lateinit var petListScroll: View
     private lateinit var petList: LinearLayout
     private lateinit var partListScroll: View
@@ -318,6 +323,8 @@ class MainActivity : AppCompatActivity() {
         particleList = findViewById(R.id.particleList)
         settingsScroll = findViewById(R.id.settingsScroll)
         settingsList = findViewById(R.id.settingsList)
+        themeBackground = findViewById(R.id.themeBackground)
+        themeScrim = findViewById(R.id.themeScrim)
         liquidBar = findViewById(R.id.liquidBar)
         partFilesScroll = findViewById(R.id.partFilesScroll)
         partFilesList = findViewById(R.id.partFilesList)
@@ -470,6 +477,9 @@ class MainActivity : AppCompatActivity() {
         settingsStore = SettingsStore(this)
         settings = settingsStore.load()
         sandboxView.applySettings(settings)
+        // 主题在启动时铺一次 —— 必须在这一行之后：在那之前 settings 还是默认值，
+        // 有背景图的人会先看到一眼自带背景。
+        applyTheme()
         props = store.loadProps().toMutableList()
         reloadCharacters()
 
@@ -2313,6 +2323,22 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onImagePicked(uri: Uri?) {
+        // 应用背景图（1.20.0）：和别的图都不一样 —— 它不属于任何角色，存进应用自己的
+        // theme/ 目录，然后进设置。所以它排在最前面，也不进对位那一步。
+        if (pickingBackground) {
+            pickingBackground = false
+            if (uri == null) return
+            val name = settingsStore.importBackground { contentResolver.openInputStream(uri) }
+            if (name == null) {
+                Toast.makeText(this, R.string.settings_theme_failed, Toast.LENGTH_SHORT).show()
+                return
+            }
+            // 换背景不该在手机上攒出一堆照片：留下新的，别的收掉。
+            settingsStore.pruneBackgrounds(name)
+            put(settings.copy(background = name))
+            Toast.makeText(this, R.string.settings_theme_set, Toast.LENGTH_SHORT).show()
+            return
+        }
         // A reference picture is not artwork for a bone either, and it does not go through the
         // alignment screen: it is put UNDER the rig to be traced, fitted to the canvas.
         if (pickingReference) {
@@ -5329,6 +5355,62 @@ class MainActivity : AppCompatActivity() {
      * already has a home of its own, and a second home for it here would be two answers to one
      * question.
      */
+    /**
+     * 把用户自己的背景图铺上去（1.20.0）。
+     *
+     * 三件事：
+     *
+     *  * **没有图就 GONE**：自带的那层极光是根布局的 `background`，这一层撤下去它就露出来，
+     *    所以"恢复默认"不需要第二套配色；
+     *  * **压暗那一层是真的需要的**：面板是半透明白，一张亮照片铺在下面，字会糊在上面。
+     *    alpha 来自设置的「浓淡」，0 就是完全不加；
+     *  * **解码失败就当没有**：文件被删了、图坏了 —— 一个坏背景不该让应用起不来，
+     *    和 settings.json 那边是同一条规矩（坏文件降级，不传染）。
+     */
+    private fun applyTheme() {
+        val file = settingsStore.backgroundFile(settings.background)
+        val bitmap = file?.let {
+            runCatching { android.graphics.BitmapFactory.decodeFile(it.absolutePath) }.getOrNull()
+        }
+        if (bitmap == null) {
+            themeBackground.visibility = View.GONE
+            themeBackground.setImageDrawable(null)
+            themeScrim.setBackgroundColor(android.graphics.Color.TRANSPARENT)
+            return
+        }
+        themeBackground.setImageBitmap(bitmap)
+        themeBackground.visibility = View.VISIBLE
+        // 换一张图的时候淡进来：一闪而过的整屏图片比没有动画更像"卡了一下"。
+        themeBackground.alpha = 0f
+        themeBackground.animate().alpha(1f).setDuration(220).start()
+        themeScrim.setBackgroundColor(
+            android.graphics.Color.argb(
+                (settings.backgroundDim.coerceIn(Settings.MIN_DIM, Settings.MAX_DIM) * 255).toInt(),
+                10, 8, 22,
+            )
+        )
+    }
+
+    /** 「浓淡」四档。和参考图那边同一个说法，因为它们是同一件事。 */
+    private fun askThemeDim() {
+        val levels = listOf(0f, 0.25f, 0.5f, 0.75f)
+        val labels = listOf(
+            R.string.settings_theme_dim_0, R.string.settings_theme_dim_1,
+            R.string.settings_theme_dim_2, R.string.settings_theme_dim_3,
+        )
+        pickList(
+            getString(R.string.settings_theme_dim),
+            levels.indices.map { i -> i.toString() to getString(labels[i]) },
+            hint = "",
+            current = levels.indexOfFirst { kotlin.math.abs(it - settings.backgroundDim) < 0.13f }
+                .takeIf { it >= 0 }?.toString(),
+        ) { picked ->
+            val level = picked.toIntOrNull() ?: return@pickList false
+            put(settings.copy(backgroundDim = levels[level.coerceIn(0, 3)]))
+            true
+        }
+    }
+
     private fun buildSettingsPane() {
         settingsList.removeAllViews()
         settingsList.addView(label(getString(R.string.menu_settings), 17f, INK, bottom = 4))
@@ -5337,6 +5419,8 @@ class MainActivity : AppCompatActivity() {
         fun put(next: Settings) {
             settings = next
             settingsStore.save(next)
+            // 背景图是这台手机上的东西，改完立刻铺上（不用重启）。
+            applyTheme()
             sandboxView.applySettings(next)
             // 全局设置本来就该是全局的：桌面上那只也得跟着换，不然"设置里选了半软、
             // 桌面上还是垮的"会让人以为是同一个 bug 没修好。
@@ -5359,6 +5443,43 @@ class MainActivity : AppCompatActivity() {
          * that is wrong once. The build number is the CI run (see app/build.gradle.kts), which
          * is the only way to tell two builds of the same 1.12.x apart.
          */
+        /**
+         * 主题：背景图。放在最前面，因为它是"这台手机长什么样" —— 进来第一眼就该看见。
+         */
+        fun theme() {
+            section(R.string.settings_theme, R.string.settings_theme_hint)
+            val current = settings.background.takeIf { it.isNotEmpty() }
+            val pick = label(getString(R.string.settings_theme_pick), 13f, INK)
+            pick.setPadding(dp(14), dp(11), dp(14), dp(11))
+            pick.background = getDrawable(R.drawable.menu_item_selected)
+            pick.setOnClickListener {
+                pickingBackground = true
+                pickImage.launch(arrayOf("image/*"))
+            }
+            settingsList.addView(pick)
+            settingsList.addView(
+                label(
+                    if (current == null) getString(R.string.settings_theme_none)
+                    else getString(R.string.settings_theme_has, current),
+                    10f, MUTED, top = 6,
+                )
+            )
+            if (current == null) return
+            val dim = label(getString(R.string.settings_theme_dim), 12f, INK, top = 10)
+            dim.setPadding(dp(14), dp(10), dp(14), dp(10))
+            dim.background = getDrawable(R.drawable.menu_item_idle)
+            dim.setOnClickListener { askThemeDim() }
+            settingsList.addView(dim)
+            val remove = label(getString(R.string.settings_theme_remove), 12f, MUTED, top = 6)
+            remove.setPadding(dp(14), dp(10), dp(14), dp(10))
+            remove.background = getDrawable(R.drawable.menu_item_idle)
+            remove.setOnClickListener {
+                settingsStore.clearBackground(settings.background)
+                put(settings.copy(background = ""))
+            }
+            settingsList.addView(remove)
+        }
+
         fun about() {
             settingsList.addView(label(getString(R.string.settings_about), 13f, INK, top = 18, bottom = 4))
             settingsList.addView(label(getString(R.string.settings_about_hint), 10f, MUTED, bottom = 6))
@@ -5438,6 +5559,7 @@ class MainActivity : AppCompatActivity() {
         }
         settingsList.addView(stiffChips)
 
+        theme()
         section(R.string.settings_view, R.string.settings_view_hint)
         toggle(R.string.settings_show_grid, settings.showGrid) { put(settings.copy(showGrid = it)) }
         toggle(R.string.settings_show_ground, settings.showGround) { put(settings.copy(showGround = it)) }

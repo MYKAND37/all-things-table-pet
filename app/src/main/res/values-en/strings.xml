@@ -524,4 +524,17 @@
     <string name="vocab_propkind_rope">Rope</string>
     <string name="vocab_propkind_shot">Shot</string>
     <string name="vocab_propkind_throw">Throwable</string>
+    <string name="settings_theme">Background</string>
+    <string name="settings_theme_hint">Pick a picture from the phone as the app background (it stays on this device; nothing is uploaded). The panels are translucent, so it shows through — on a bright photo, raise 「Dim」 below so the text stays readable.</string>
+    <string name="settings_theme_pick">Pick a picture…</string>
+    <string name="settings_theme_none">Using the built-in background</string>
+    <string name="settings_theme_has">Current: %1$s</string>
+    <string name="settings_theme_remove">Remove the background</string>
+    <string name="settings_theme_dim">Dim (darken the background)</string>
+    <string name="settings_theme_dim_0">None</string>
+    <string name="settings_theme_dim_1">Light</string>
+    <string name="settings_theme_dim_2">Medium</string>
+    <string name="settings_theme_dim_3">Strong</string>
+    <string name="settings_theme_set">Background set</string>
+    <string name="settings_theme_failed">That picture cannot be read</string>
 </resources>

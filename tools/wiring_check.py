@@ -222,6 +222,8 @@ def main():
         ("部件测全局的状态", "logic_pick_state"),
         # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
         ("桌面上的摆动作", "pet_summon_pose"),
+        # 应用背景图（主题）：入口在全局设置里那一段。
+        ("应用背景图（主题）", "settings_theme_pick"),
         # 「每个部位能有自己的状态」：入口就是那个状态弹窗（它现在会说自己在看哪一份）。
         ("部件的局部状态", "logic_states_scope_part"),
         # 动画：三个入口各一条 —— 测试场那张动作列表、规则里的动作、桌面上的长按菜单。
@@ -541,6 +543,51 @@ def main():
     report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
+
+    print("== 应用背景图（主题）：挑图 → 缩小存起来 → 铺在面板下面 ==")
+    # 「1.20.0 大版本新增用户上传应用的背景，也就是应用主题的功能」。四件事缺一不可：
+    # 布局里有那一层、挑图那条路接得上、图存进应用自己的目录（要缩小）、以及"没有图就回到
+    # 自带背景"（不自带第二套配色）。外加一条**安全**规矩：settings.json 能手改，而那个
+    # 名字会被拼成路径。
+    store_kt = next((t for p2, t in files.items() if p2.endswith("data/Settings.kt")), "")
+    layout = open(os.path.join(REPO, "app/src/main/res/layout/activity_main.xml"),
+                  encoding="utf-8").read()
+    report("根布局里有背景图那一层（盖在自带极光之上、面板之下）",
+           "R.id.themeBackground" in activity and "@+id/themeBackground" in layout
+           and "scaleType=\"centerCrop\"" in layout and "@+id/themeScrim" in layout)
+    report("挑图那条路接得上（模式 → 系统选择器 → 存起来）",
+           "private var pickingBackground = false" in activity
+           and "pickingBackground = true" in activity and "pickImage.launch(" in activity)
+    report("背景图这条排在别的图前面（它不属于任何角色）",
+           activity.find("if (pickingBackground)") < activity.find("if (pickingReference)"))
+    report("图存在应用自己的目录里，不碰外部存储",
+           'const val THEME_DIR = "theme"' in store_kt and "File(context.filesDir, Settings.THEME_DIR)" in store_kt)
+    # 一张 4000×3000 的照片原样解码是几十 MB，而这个应用大部分时间在跑物理。
+    report("存之前先缩小（长边有上限，而且是先读尺寸再决定采样率）",
+           "const val MAX_BACKGROUND_PX = 1600" in store_kt
+           and "inJustDecodeBounds" in store_kt and "inSampleSize = sample" in store_kt)
+    report("写的是 .part 再改名（中途没电不留半张图）",
+           'File(themeDir, name + ".part")' in store_kt and "temp.renameTo(target)" in store_kt)
+    report("换背景不留旧图（不在手机上攒一堆照片）",
+           "fun pruneBackgrounds(" in store_kt and "pruneBackgrounds(name)" in activity)
+    report("没有图就回到自带背景（不自带第二套配色）",
+           "themeBackground.visibility = View.GONE" in activity
+           and "backgroundFile(settings.background)" in activity)
+    # 安全那条：名字只收一个纯文件名，读和写走同一个函数。
+    report("文件名是**一处**判断：只收纯文件名，读写都过它",
+           "fun safeBackgroundName(raw: String): String" in store_kt
+           and "safeBackgroundName(o.optString(\"background\", \"\"))" in store_kt
+           and "safeBackgroundName(s.background)" in store_kt
+           and "Settings.safeBackgroundName(name)" in store_kt)
+    report("坏图坏文件降级（解码失败当没有，不让应用起不来）",
+           "BitmapFactory.decodeFile(it.absolutePath)" in activity and "?.let {" in activity)
+    report("设置里那一段有入口（挑图 / 浓淡 / 去掉）",
+           # theme() 是 buildSettingsPane 里的**局部**函数（设置页那一套都是这个写法）。
+           "\n        fun theme() {" in activity and "private fun askThemeDim()" in activity
+           and "settings_theme_pick" in activity and "settings_theme_remove" in activity
+           and "\n        theme()\n" in activity)
+    report("改完立刻生效，不用重启",
+           "applyTheme()" in activity and activity.count("applyTheme()") >= 3)
 
     print("== 两级状态：看得见自己在看哪一份，也走得过去 ==")
     # 「希望每个部位能处于不同状态，就是加入全局状态和局部状态」—— 这一版**没有加机制**：

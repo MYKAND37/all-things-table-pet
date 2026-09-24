@@ -14,6 +14,26 @@
     android:background="@drawable/bg_aurora"
     android:fitsSystemWindows="true">
 
+    <!--
+        用户自己的背景图（1.20.0）。铺在自带极光**之上**、所有面板**之下** —— 面板是半透明
+        白的，所以图会透过来一点，这就是"主题"的全部实现：没有第二套配色，只是底下换了张画。
+        没有设背景图时这一层是 GONE，自带极光就从根布局的 background 里露出来。
+    -->
+    <ImageView
+        android:id="@+id/themeBackground"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:contentDescription="@null"
+        android:scaleType="centerCrop"
+        android:visibility="gone" />
+
+    <!-- 压暗那一层：亮照片上白字会糊，alpha 由「浓淡」定。0 的时候它等于不存在。 -->
+    <View
+        android:id="@+id/themeScrim"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#00000000" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="match_parent"
