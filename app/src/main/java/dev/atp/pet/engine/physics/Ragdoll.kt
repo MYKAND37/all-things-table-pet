@@ -77,7 +77,8 @@ class Ragdoll(
     private val mass = HashMap<String, Float>()
     private val target = HashMap<String, Float>()
 
-    private val defaultRadius = spec.headHeight * 0.18f
+    // 和编辑器共用同一个数：CharacterSpec.colliderRadiusOf 是那一处判断。
+    private val defaultRadius = spec.headHeight * CharacterSpec.AUTO_COLLIDER_RATIO
     private val random = Random(20260913)
 
     private val rootHome: Vec2
@@ -186,7 +187,7 @@ class Ragdoll(
         for (s in spec.bones) {
             if (!byName.containsKey(s.name)) continue
             colliderType[s.name] = s.colliderType
-            colliderRadius[s.name] = if (s.colliderRadius > 0f) s.colliderRadius else defaultRadius
+            colliderRadius[s.name] = spec.colliderRadiusOf(s)
             solid[s.name] = s.collides
             grabbable[s.name] = s.grabbable
         }

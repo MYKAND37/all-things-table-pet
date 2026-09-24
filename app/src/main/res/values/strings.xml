@@ -26,6 +26,10 @@
     <string name="particle_cleared">场上粒子已清空</string>
     <string name="particle_sprayed">喷了 %1$s · 回测试场看</string>
     <string name="particle_add">＋ 加一种粒子</string>
+    <string name="menu_anims">动画管理</string>
+    <string name="anim_page_hint">一只桌宠的动画都在这儿：一串帧按顺序演一遍。每一帧可以带姿势（关键帧之间自己走）、带一套图，或者两样都带。播放仍然在测试场看得见 —— 动画是演给眼睛看的。</string>
+    <string name="anim_need_pet">动画属于一只桌宠（和它的某套骨骼）：先去测试场上面选一只。</string>
+    <string name="anim_playing">播放中</string>
     <string name="menu_liquids">液体管理</string>
     <string name="menu_settings">全局设置</string>
 
@@ -154,6 +158,13 @@
     <string name="pet_edit_rig">看骨架 / 摆姿势</string>
     <string name="part_variant">状态版本</string>
     <string name="part_variant_hint">给这根骨骼多一张图，只在那个状态打开时才画。原来那张会自动变成"没有那个状态"时画。</string>
+    <string name="part_variant_mode">这张图和原来的图什么关系</string>
+    <string name="part_variant_overlay">叠加在上面（保留原来的图）</string>
+    <string name="part_variant_replace">替换原来的图（换一套画）</string>
+    <string name="part_variant_mode_hint">叠加：绷带、伤口、汗、配件 —— 两张都画，上面那张透明的地方透出下面那张。替换：机械臂、另一套衣服 —— 同一根骨头的另一张画，状态开着时原来那张不画。</string>
+    <string name="part_variant_to_overlay">改成叠加</string>
+    <string name="part_variant_to_replace">改成替换</string>
+    <string name="part_variant_switched">改好了</string>
     <string name="part_no_states">先去「逻辑管理」加一个状态。</string>
     <string name="part_hint">点部位名即可从设备里选图。图片按整张画布导出即可，命名由 App 决定。</string>
     <string name="import_failed">导入失败，可能不是图片</string>
@@ -558,6 +569,10 @@
     <string name="rig_limit_to">最大角度（度）</string>
     <string name="rig_stiffness">刚度 ×</string>
     <string name="rig_stiffness_hint">这个关节自己的弹簧，乘在全局刚度上。0 = 完全松垮（不管测试场那个滑杆），1 = 跟别的关节一样，2 = 硬一倍。</string>
+    <string name="rig_collider_radius_label">碰撞半径 %1$d%2$s</string>
+    <string name="rig_collider_auto">（自动：按身高算）</string>
+    <string name="rig_collider_show_all">显示所有部位的碰撞范围</string>
+    <string name="rig_collider_show_off">只看这一节</string>
     <string name="rig_collider">碰撞体</string>
     <string name="rig_collider_capsule">沿骨骼的胶囊</string>
     <string name="rig_collider_circle">中点的圆</string>

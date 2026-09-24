@@ -111,6 +111,27 @@ class SkeletonView @JvmOverloads constructor(
     var editBones = false
         private set
 
+    /**
+     * 碰撞范围画不画（1.21.0）：调「碰撞半径」的时候看不见它，等于闭着眼睛调。
+     *
+     * [colliderFocus] 是**正在调的那一节**（属性弹窗打开时设上、关掉时清掉）—— 它一个人
+     * 亮着画；[showColliders] 是"全画"，用来对位（比如让一根绳子的落点正好落在手的碰撞体上）。
+     *
+     * 半径来自 [CharacterSpec.colliderRadiusOf]，也就是说**画出来的就是道具真正撞上的那个**。
+     */
+    var showColliders = false
+        private set
+    var colliderFocus: String? = null
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    fun setShowColliders(on: Boolean) {
+        showColliders = on
+        invalidate()
+    }
+
     private val density = resources.displayMetrics.density
 
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -135,6 +156,22 @@ class SkeletonView @JvmOverloads constructor(
         strokeWidth = 2f * density
         color = 0xFFE2653C.toInt()
     }
+    /** 碰撞范围：淡填充 + 描边，和骨骼线分得开（蓝）。 */
+    private val colliderFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0x2E2C7BE5
+    }
+    private val colliderEdge = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 1.5f * density
+        color = 0x882C7BE5.toInt()
+    }
+    /** 正在调的那一节更亮，一眼看得出是哪一根。 */
+    private val colliderHot = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = 0xFF1E63C8.toInt()
+    }
     private val selectPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeWidth = 2.5f * density
@@ -142,6 +179,9 @@ class SkeletonView @JvmOverloads constructor(
     }
 
     /** Nodes: a dot for where the point is, a ring for how far away it can be touched. */
+    /** 胶囊那一条线用的笔（宽度每次按半径设）。 */
+    private val colliderStroke = Paint(Paint.ANTI_ALIAS_FLAG)
+
     private val nodePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val nodeRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -759,6 +799,73 @@ class SkeletonView @JvmOverloads constructor(
      * The radius is the bone's own length, so the arc reaches where the tip reaches, and a
      * floor keeps a very short bone's arc from disappearing under the joint dot.
      */
+    /**
+     * 碰撞范围（1.21.0）：正在调的那一节，或者全部。
+     *
+     * 「调骨骼碰撞时可以看见范围」。形状和半径都跟着**求解器**走：
+     *
+     *  * 半径取 `spec.colliderRadiusOf` —— 和 Ragdoll 里那一份是同一个函数，
+     *    所以这里画出来的圆就是道具真正撞上的圆（不是"差不多"）；
+     *  * 胶囊画成一条有圆头的粗线（头到尾），圆画在骨头中点上 —— 和 `PropWorld`/`Ragdoll`
+     *    里那两句一模一样；
+     *  * `collides = false` 的骨头不画：它对世界不存在，画一个不存在的碰撞体会让人以为
+     *    那个开关没生效。
+     */
+    private fun drawColliders(canvas: Canvas, sk: Skeleton) {
+        val parsed = spec ?: return
+        val focus = colliderFocus
+        if (!showColliders && focus == null) return
+        for (b in sk.bones) {
+            val bone = parsed.bones.firstOrNull { it.name == b.name } ?: continue
+            val hot = b.name == focus
+            if (!showColliders && !hot) continue
+            if (!bone.collides) continue
+            val r = parsed.colliderRadiusOf(bone) * scale
+            if (r <= 0.5f) continue
+            val fill = if (hot) colliderFill else colliderFill
+            val edge = if (hot) colliderHot else colliderEdge
+            val head = b.worldPosition
+            val tip = b.tipPosition()
+            if (bone.colliderType == "circle") {
+                val cx = vx(Vec2((head.x + tip.x) / 2f, (head.y + tip.y) / 2f))
+                val cy = vy(Vec2((head.x + tip.x) / 2f, (head.y + tip.y) / 2f))
+                canvas.drawCircle(cx, cy, r, fill)
+                canvas.drawCircle(cx, cy, r, edge)
+                if (hot) {
+                    canvas.drawText(
+                        context.getString(
+                            R.string.rig_collider_radius_label,
+                            Math.round(parsed.colliderRadiusOf(bone)).toInt(),
+                            if (bone.colliderRadius > 0f) "" else
+                                context.getString(R.string.rig_collider_auto),
+                        ),
+                        cx + 10f * density, cy - 8f * density, textPaint,
+                    )
+                }
+            } else {
+                // 胶囊：一条圆头的粗线，宽度就是直径 —— 这就是求解器碰撞用的那个形状。
+                colliderStroke.style = Paint.Style.STROKE
+                colliderStroke.strokeCap = Paint.Cap.ROUND
+                colliderStroke.strokeWidth = r * 2f
+                colliderStroke.color = fill.color
+                canvas.drawLine(vx(head), vy(head), vx(tip), vy(tip), colliderStroke)
+                colliderStroke.color = edge.color
+                canvas.drawLine(vx(head), vy(head), vx(tip), vy(tip), colliderStroke)
+                if (hot) {
+                    canvas.drawText(
+                        context.getString(
+                            R.string.rig_collider_radius_label,
+                            Math.round(parsed.colliderRadiusOf(bone)).toInt(),
+                            if (bone.colliderRadius > 0f) "" else
+                                context.getString(R.string.rig_collider_auto),
+                        ),
+                        vx(tip) + 10f * density, vy(tip) - 8f * density, textPaint,
+                    )
+                }
+            }
+        }
+    }
+
     private fun drawRange(canvas: Canvas, b: Bone) {
         val rest = b.worldRotation - b.rotation
         val lo = rest + b.minAngle
@@ -874,6 +981,8 @@ class SkeletonView @JvmOverloads constructor(
             nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
             canvas.drawCircle(px, py, 5f * density, nodePaint)
         }
+
+        drawColliders(canvas, sk)
 
         // The bone the side panel picked, ringed at both ends: the canvas is zoomed in far
         // enough by then that "somewhere in that arm" is not a useful answer.

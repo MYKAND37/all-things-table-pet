@@ -229,6 +229,10 @@
     <string name="logic_tied_on">Tied</string>
     <string name="logic_timer_seconds">Wait how long (s)</string>
     <string name="logic_when">When:</string>
+    <string name="menu_anims">Animations</string>
+    <string name="anim_page_hint">Every animation of one pet: a list of frames played in order. A frame can carry a pose (interpolated between keyframes), a set of drawings, or both. Playing still happens on the bench — an animation is something you watch.</string>
+    <string name="anim_need_pet">Animations belong to a pet (and one of its rigs): pick one on the bench first.</string>
+    <string name="anim_playing">playing</string>
     <string name="menu_liquids">Liquids</string>
     <string name="menu_logic">Logic</string>
     <string name="menu_particles">Particles</string>
@@ -346,6 +350,10 @@
     <string name="rig_change_parent">Change parent</string>
     <string name="rig_clear">Clear bones</string>
     <string name="rig_clear_button">Clear (keep the root)</string>
+    <string name="rig_collider_radius_label">Collider %1$d%2$s</string>
+    <string name="rig_collider_auto"> (auto, from the height)</string>
+    <string name="rig_collider_show_all">Show every part\'s collider</string>
+    <string name="rig_collider_show_off">Only this part</string>
     <string name="rig_collider">Collider</string>
     <string name="rig_collider_capsule">Capsule along the bone</string>
     <string name="rig_collider_circle">Circle at the middle</string>
@@ -556,4 +564,11 @@ The full text (licence status, how to report, applicable law) is in the reposito
     <string name="disclaimer_accepted_at">Accepted version %1$d</string>
     <string name="settings_disclaimer_hint">Which version of the disclaimer you accepted, and how to read it again (it re-asks when the text changes).</string>
     <string name="settings_disclaimer">Disclaimer</string>
+    <string name="part_variant_mode">How this picture relates to the existing one</string>
+    <string name="part_variant_overlay">Overlay on top (keep the existing one)</string>
+    <string name="part_variant_replace">Replace it (another drawing of the same bone)</string>
+    <string name="part_variant_mode_hint">Overlay: bandages, wounds, sweat, accessories — both are drawn, and the transparent parts of the top one show the one underneath. Replace: a mechanical arm, another outfit — the other drawing of the same bone, and the original is not drawn while the state is on.</string>
+    <string name="part_variant_to_overlay">Make it an overlay</string>
+    <string name="part_variant_to_replace">Make it a replacement</string>
+    <string name="part_variant_switched">Changed</string>
 </resources>

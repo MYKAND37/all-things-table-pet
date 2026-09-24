@@ -87,7 +87,7 @@ class MainActivity : AppCompatActivity() {
 
     private enum class Pane {
         PLACEHOLDER, SANDBOX, PET_LIST, PET_PARTS, PET_PART_FILES, PET_RIG, PART_ALIGN, PET_DEPTH,
-        PET_PROPS, PET_LOGIC, LIQUIDS, PARTICLES, SETTINGS
+        PET_PROPS, PET_LOGIC, LIQUIDS, PARTICLES, ANIMS, SETTINGS
     }
 
     /**
@@ -228,6 +228,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var liquidList: LinearLayout
     private lateinit var particleScroll: View
     private lateinit var particleList: LinearLayout
+    private lateinit var animScroll: View
+    private lateinit var animList: LinearLayout
     private lateinit var settingsScroll: View
     private lateinit var settingsList: LinearLayout
     private lateinit var liquidBar: LinearLayout
@@ -320,6 +322,8 @@ class MainActivity : AppCompatActivity() {
         liquidScroll = findViewById(R.id.liquidScroll)
         liquidList = findViewById(R.id.liquidList)
         particleScroll = findViewById(R.id.particleScroll)
+        animScroll = findViewById(R.id.animScroll)
+        animList = findViewById(R.id.animList)
         particleList = findViewById(R.id.particleList)
         settingsScroll = findViewById(R.id.settingsScroll)
         settingsList = findViewById(R.id.settingsList)
@@ -465,6 +469,7 @@ class MainActivity : AppCompatActivity() {
             findViewById(R.id.menuLogic),
             findViewById(R.id.menuLiquids),
             findViewById(R.id.menuParticles),
+            findViewById(R.id.menuAnims),
             findViewById(R.id.menuSettings),
         )
         menuItems.forEach { item ->
@@ -658,6 +663,12 @@ class MainActivity : AppCompatActivity() {
                 openParticles()
                 show(Pane.PARTICLES)
             }
+            R.id.menuAnims -> {
+                // 动画有自己的页面了（1.21.0）：在测试场那张动作表里也能做，但"管理一串帧"
+                // 是另一件事 —— 那里是"现在让它演一遍"，这里是"我把这几段整理好"。
+                buildAnimList()
+                show(Pane.ANIMS)
+            }
             R.id.menuSettings -> {
                 buildSettingsPane()
                 show(Pane.SETTINGS)
@@ -679,6 +690,7 @@ class MainActivity : AppCompatActivity() {
         logicPane.visibility = if (pane == Pane.PET_LOGIC) View.VISIBLE else View.GONE
         liquidScroll.visibility = if (pane == Pane.LIQUIDS) View.VISIBLE else View.GONE
         particleScroll.visibility = if (pane == Pane.PARTICLES) View.VISIBLE else View.GONE
+        animScroll.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
         settingsScroll.visibility = if (pane == Pane.SETTINGS) View.VISIBLE else View.GONE
         rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         if (pane != Pane.PET_RIG && rigBoneMode) {
@@ -1131,7 +1143,7 @@ class MainActivity : AppCompatActivity() {
             }
             row.addView(play)
 
-            row.setOnClickListener { askAnimation(folder, anim, box) }
+            row.setOnClickListener { askAnimation(folder, anim) { fillActionList(box, folder) } }
             box.addView(row)
         }
 
@@ -1142,7 +1154,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT,
         ).apply { topMargin = dp(4) }
-        add.setOnClickListener { askAnimation(folder, null, box) }
+        add.setOnClickListener { askAnimation(folder, null) { fillActionList(box, folder) } }
         box.addView(add)
 
         if (anims.isEmpty()) {
@@ -1157,7 +1169,7 @@ class MainActivity : AppCompatActivity() {
      * 或者用动作表把宠物摆好，再回来按「用现在的姿势加一帧」。这不是顺手，而是这个功能唯一
      * 说得通的入口 —— 帧就是"我看到的样子"，而不是一串要手敲的角度。
      */
-    private fun askAnimation(folder: CharacterFolder, existing: AnimationSpec?, listBox: LinearLayout) {
+    private fun askAnimation(folder: CharacterFolder, existing: AnimationSpec?, after: () -> Unit) {
         var speed = existing?.speed ?: 1f
         var loop = existing?.loop ?: true
         val id = existing?.id ?: nextAnimationId(folder)
@@ -1192,7 +1204,8 @@ class MainActivity : AppCompatActivity() {
             val name = nameInput.text.toString().trim().ifEmpty { id }
             store.saveAnimation(folder, AnimationSpec(id, name, frames.toList(), speedOf(), loop))
             refreshAnimations(folder)
-            fillActionList(listBox, folder)
+            // 谁开的这个弹窗，谁决定重画什么：测试场那张动作表，或者动画管理页。
+            after()
         }
 
         fun fillFrames() {
@@ -1271,7 +1284,7 @@ class MainActivity : AppCompatActivity() {
                         store.deleteAnimation(folder, id)
                         sandboxView.stopAnimation()
                         refreshAnimations(folder)
-                        fillActionList(listBox, folder)
+                        after()
                     }
                     .setNegativeButton(R.string.depth_cancel, null)
                     .show()
@@ -2202,6 +2215,38 @@ class MainActivity : AppCompatActivity() {
                 fit.setOnClickListener { askAddVariant(folder, bone) }
                 row.addView(fit)
             }
+            // 一张状态图：能一键在"叠加"和"替换"之间换（1.21.0）。判据是那根骨头"平时就画"
+            // 的那一层有没有被挂上 `!状态` —— 所以判据本身和画法是同一个事实。
+            if (bone != null && layer != null && layer.state.isNotEmpty() &&
+                !layer.state.startsWith("!")
+            ) {
+                // "现在是不是叠加"的判据：那根骨头"平时就画"的那一层有没有挂着 `!这一版`。
+                // 判据和画法是同一个事实（LayerSpec.visible 看的就是这个），所以不会说两套话。
+                val gated = CharacterSpec.parseOrNull(folder.specText())?.layers
+                    ?.any { it.bone == bone && it.state == "!" + layer.state } == true
+                val overlayNow = !gated
+                val swap = label(
+                    getString(
+                        if (overlayNow) R.string.part_variant_to_replace
+                        else R.string.part_variant_to_overlay
+                    ),
+                    11f, MUTED,
+                )
+                swap.setPadding(dp(8), dp(6), dp(8), dp(6))
+                swap.setOnClickListener {
+                    // 层里挂的是**标签**（部件自己的状态是 `hand_L:出汗`），而 store 要的是
+                    // 状态 id —— tagState 正是"标签 → id"的那一处判断。
+                    val state = Subjects.tagState(layer.state)
+                    if (store.setVariantOverlay(folder, bone, state, overlay = !overlayNow)) {
+                        Toast.makeText(this, R.string.part_variant_switched, Toast.LENGTH_SHORT).show()
+                        buildPartFiles(folder)
+                        reloadSummoned(folder)
+                    } else {
+                        Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                row.addView(swap)
+            }
 
             val del = label(getString(R.string.part_files_delete), 11f, MUTED)
             del.setPadding(dp(8), dp(6), dp(8), dp(6))
@@ -2328,13 +2373,26 @@ class MainActivity : AppCompatActivity() {
             hint = getString(R.string.part_variant_hint),
             current = null,
         ) { state ->
-            awaitingVariant = bone to (bone + "__" + state)
-            awaitingBone = bone
-            opened = folder
-            if (store.addVariant(folder, bone, state)) {
-                pickImage.launch(arrayOf("image/*"))
-            } else {
-                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            // 第二问：这张图和原来那张什么关系（1.21.0）。替换是老行为，叠加是新加的 ——
+            // 绷带、伤口、汗、配件都是"盖上去"，而机械臂那种是"换掉"。
+            pickList(
+                title = getString(R.string.part_variant_mode),
+                options = listOf(
+                    "overlay" to getString(R.string.part_variant_overlay),
+                    "replace" to getString(R.string.part_variant_replace),
+                ),
+                hint = getString(R.string.part_variant_mode_hint),
+                current = null,
+            ) { mode ->
+                awaitingVariant = bone to (bone + "__" + state)
+                awaitingBone = bone
+                opened = folder
+                if (store.addVariant(folder, bone, state, overlay = mode == "overlay")) {
+                    pickImage.launch(arrayOf("image/*"))
+                } else {
+                    Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                }
+                true
             }
             true
         }
@@ -3624,6 +3682,8 @@ class MainActivity : AppCompatActivity() {
      * two answers to one question.
      */
     private fun askBoneAttributes(folder: CharacterFolder, bone: BoneSpec) {
+        // 这一节正在被调：画布上把它的碰撞范围亮着画（关掉弹窗就撤掉）。
+        skeletonView.colliderFocus = bone.name
         var minAngle = bone.minAngle
         var maxAngle = bone.maxAngle
         var type = bone.colliderType
@@ -3696,6 +3756,32 @@ class MainActivity : AppCompatActivity() {
         box.addView(radiusInput)
         box.addView(label(getString(R.string.rig_collider_hint), 10f, MUTED, top = 6))
 
+        // 「调骨骼碰撞时可以看见范围」：这一节的范围在画布上亮着画（下面这个开关则把**所有**
+        // 部位的都画出来，用来对位）。判据和画法都在 SkeletonView，半径和求解器共用一个函数。
+        val showChip = label(
+            getString(
+                if (skeletonView.showColliders) R.string.rig_collider_show_off
+                else R.string.rig_collider_show_all
+            ),
+            11f, MUTED, top = 8,
+        )
+        showChip.setPadding(dp(12), dp(8), dp(12), dp(8))
+        showChip.background = getDrawable(
+            if (skeletonView.showColliders) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+        )
+        showChip.setOnClickListener {
+            skeletonView.setShowColliders(!skeletonView.showColliders)
+            showChip.text = getString(
+                if (skeletonView.showColliders) R.string.rig_collider_show_off
+                else R.string.rig_collider_show_all
+            )
+            showChip.background = getDrawable(
+                if (skeletonView.showColliders) R.drawable.menu_item_selected
+                else R.drawable.menu_item_idle
+            )
+        }
+        box.addView(showChip)
+
         // The two switches. They are what turns a part into scenery: a ribbon that should not
         // shove the table, or a part that exists only so a rule can name it.
         box.addView(label(getString(R.string.rig_part_switches), 11f, MUTED, top = 14, bottom = 6))
@@ -3757,6 +3843,9 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.depth_cancel, null)
             .create()
+        // 弹窗关掉（保存或取消都一样）就把"正在调这一节"撤掉：画布上不该留着上一节的圈，
+        // 那会让人以为它还在被调。
+        dialog.setOnDismissListener { skeletonView.colliderFocus = null }
         dialog.show()
         paintChips(typeViews, listOf("capsule", "circle"), { type })
         paintPartSwitches()
@@ -5493,6 +5582,91 @@ class MainActivity : AppCompatActivity() {
             applySettingsChange(settings.copy(backgroundDim = levels[level.coerceIn(0, 3)]))
             buildSettingsPane()
             true
+        }
+    }
+
+    /**
+     * 动画管理：一只桌宠的动画，一个页面（1.21.0）。
+     *
+     * 和测试场那张动作表里的动画段是同一批数据（`animations.json`），但用途不同：那边是
+     * 「现在让它演一遍」，这里是「我把这几段整理好」—— 新建、改帧、改速度、删掉、试播。
+     * 播放仍然只在测试场看得见（动画是**演给眼睛看**的，放在这页里播没有人看得到宠物）。
+     */
+    private fun buildAnimList() {
+        animList.removeAllViews()
+        animList.addView(label(getString(R.string.menu_anims), 17f, INK, bottom = 4))
+        animList.addView(label(getString(R.string.anim_page_hint), 11f, MUTED, bottom = 10))
+
+        val folder = summoned ?: opened
+        if (folder == null) {
+            animList.addView(label(getString(R.string.anim_need_pet), 12f, MUTED))
+            return
+        }
+        val anims = store.loadAnimations(folder)
+        val playing = sandboxView.animationInfo()
+        for (anim in anims) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = getDrawable(R.drawable.menu_item_idle)
+                setPadding(dp(12), dp(9), dp(12), dp(9))
+                isClickable = true
+                isFocusable = true
+            }
+            row.layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+            ).apply { bottomMargin = dp(6) }
+
+            val text = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            text.layoutParams = LinearLayout.LayoutParams(
+                0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
+            )
+            val here = playing?.takeIf { it.first == anim.name }
+            text.addView(label(anim.name + if (here != null) " · " + getString(R.string.anim_playing) else "", 14f, INK))
+            text.addView(
+                label(
+                    getString(
+                        R.string.anim_detail,
+                        anim.frames.size,
+                        "%.2f×".format(anim.speed),
+                        "%.2f".format(Anim.realDuration(anim)),
+                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else "",
+                    10f, MUTED,
+                )
+            )
+            row.addView(text)
+
+            val play = label(
+                getString(if (here != null) R.string.anim_stop else R.string.anim_play), 11f, INK,
+            )
+            play.setPadding(dp(8), dp(6), dp(8), dp(6))
+            play.setOnClickListener {
+                if (here != null) {
+                    sandboxView.stopAnimation()
+                } else if (!sandboxView.playAnimation(anim.id)) {
+                    Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+                }
+                buildAnimList()
+            }
+            row.addView(play)
+
+            row.setOnClickListener { askAnimation(folder, anim) { buildAnimList() } }
+            animList.addView(row)
+        }
+
+        val add = label(getString(R.string.anim_new), 13f, INK)
+        add.setPadding(dp(14), dp(11), dp(14), dp(11))
+        add.background = getDrawable(R.drawable.menu_item_selected)
+        add.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { topMargin = dp(4) }
+        add.setOnClickListener { askAnimation(folder, null) { buildAnimList() } }
+        animList.addView(add)
+
+        if (anims.isEmpty()) {
+            animList.addView(label(getString(R.string.anim_empty), 10f, MUTED, top = 8))
         }
     }
 

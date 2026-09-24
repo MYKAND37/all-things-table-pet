@@ -187,6 +187,25 @@ class CharacterSpec(
     fun drawOrder(): List<LayerSpec> = layers.sortedBy { it.z }
 
     /**
+     * 一根骨头在世界里的碰撞半径（像素）：写了就用写的，空着就按身高自动算。
+     *
+     * **这是唯一一处判断**，而且求解器（Ragdoll）和骨骼编辑器（SkeletonView 画碰撞范围）
+     * 都调它 —— 编辑器画出来的圆必须就是道具真正撞上的那个圆，不然那个功能就是在骗人。
+     */
+    fun colliderRadiusOf(bone: BoneSpec): Float =
+        if (bone.colliderRadius > 0f) bone.colliderRadius else headHeight * AUTO_COLLIDER_RATIO
+
+    companion object {
+        /**
+         * 没写半径时，碰撞半径和身高成这个比例。
+         *
+         * 0.18 是量出来的老数（Ragdoll 从第一版就用它）：比一根前臂细、比一根手指粗，
+         * 让"人形"在道具面前既不漏也不糊。
+         */
+        const val AUTO_COLLIDER_RATIO = 0.18f
+    }
+
+    /**
      * Bake authored head/tail pairs into parent-relative rest transforms.
      *
      * For a child, the head offset is rotated back by the parent's own rest angle, and

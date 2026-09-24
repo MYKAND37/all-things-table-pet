@@ -112,6 +112,11 @@
                 android:text="@string/menu_particles" />
 
             <TextView
+                android:id="@+id/menuAnims"
+                style="@style/MenuItem"
+                android:text="@string/menu_anims" />
+
+            <TextView
                 android:id="@+id/menuSettings"
                 style="@style/MenuItem"
                 android:text="@string/menu_settings" />
@@ -289,6 +294,21 @@
 
                 <LinearLayout
                     android:id="@+id/particleList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="12dp" />
+            </ScrollView>
+
+            <!-- ── 动画管理 ─────────────────────────── -->
+            <ScrollView
+                android:id="@+id/animScroll"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:id="@+id/animList"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:orientation="vertical"

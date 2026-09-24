@@ -478,7 +478,26 @@ class CharacterStore(private val context: Context) {
      * The base layer is put on "not [state]" at the same time. Without that both drawings
      * appear the instant the state turns on, which is the one thing a variant is for.
      */
-    fun addVariant(folder: CharacterFolder, bone: String, state: String): Boolean {
+    /**
+     * 给一根骨头加一张"状态图"。
+     *
+     * 两种关系，[overlay] 决定是哪一种 —— 这是 1.21.0 加的（在那之前只有替换）：
+     *
+     *  * **替换**（`overlay = false`，老行为）：原来那张图被标成"这个状态**关着**时画"，
+     *    于是状态打开时它是同一根骨头的**另一张画** —— 机械臂、另一套衣服；
+     *  * **叠加**（`overlay = true`）：原来那张图**不动**，新的一层在它**上面** ——
+     *    绷带、伤口、汗、腮红、配件。部位图是整张画布、要透明的地方是透明的，
+     *    所以"叠加"不需要任何新机制，它就是"两张都画"。
+     *
+     * [z] 也顺手修了：新层贴着它替换/叠加的那张图（`baseZ + 1`），而不是压在所有东西上面 ——
+     * 一条手臂的变体不该盖住胸口。
+     */
+    fun addVariant(
+        folder: CharacterFolder,
+        bone: String,
+        state: String,
+        overlay: Boolean = false,
+    ): Boolean {
         // Which LEVEL this state belongs to, decided by who declares it: a state the PART
         // declares is tagged with the bone ("hand_L:sweat"), a global one is just its name.
         // The two levels may share a name -- a hand that sweats and a character that sweats are
@@ -491,16 +510,23 @@ class CharacterStore(private val context: Context) {
             val root = JSONObject(folder.specText())
             val arr = root.optJSONArray("layers") ?: JSONArray()
             var top = 0
+            // 这一根骨头"平时就画"的那一层（画在上面才对）。没有就退回"最上面"。
+            var baseZ = Int.MIN_VALUE
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 top = maxOf(top, l.optInt("z", 0))
-                if (l.getString("bone") == bone && l.optString("state", "").isEmpty()) {
+                if (l.getString("bone") == bone && !l.optString("state", "").startsWith("!")) {
+                    baseZ = maxOf(baseZ, l.optInt("z", 0))
+                }
+                if (!overlay && l.getString("bone") == bone && l.optString("state", "").isEmpty()) {
+                    // 替换：原来那张只在状态**关着**的时候画。
                     l.put("state", "!" + tag)
                 }
             }
             arr.put(
                 JSONObject()
-                    .put("bone", bone).put("z", top + 10)
+                    .put("bone", bone)
+                    .put("z", if (baseZ == Int.MIN_VALUE) top + 10 else baseZ + 1)
                     .put("state", tag).put("art", bone + VARIANT_SEPARATOR + state)
             )
             root.put("layers", arr)
@@ -509,6 +535,56 @@ class CharacterStore(private val context: Context) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 把一个**已经存在**的状态图改成叠加 / 改成替换（1.21.0）。
+     *
+     * 区别只有一处，而且是可逆的：那根骨头"平时就画"的那一层，是挂着 `!状态`（替换：状态
+     * 开着时它不画）还是空着（叠加：两张都画）。所以这个函数不碰图、不碰 z、不碰别的骨头 ——
+     * 它只改那一个标记。用户已经画好的东西不该因为改了一个关系而丢。
+     */
+    fun setVariantOverlay(
+        folder: CharacterFolder,
+        bone: String,
+        state: String,
+        overlay: Boolean,
+    ): Boolean {
+        val local = loadObjectLogic()[Subjects.part(bone)]
+            ?.states?.any { it.id == state } == true
+        val tag = if (local) Subjects.stateTag(bone, state) else state
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.optJSONArray("layers") ?: JSONArray()
+            var touched = false
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                if (l.getString("bone") != bone) continue
+                val s2 = l.optString("state", "")
+                if (overlay && s2 == "!" + tag) {
+                    l.put("state", "")
+                    touched = true
+                } else if (!overlay && s2.isEmpty() && hasVariant(arr, bone, tag)) {
+                    l.put("state", "!" + tag)
+                    touched = true
+                }
+            }
+            if (!touched) return false
+            root.put("layers", arr)
+            root.put("version", root.optInt("version", 0) + 1)
+            writeSpec(folder, root)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 这根骨头有没有这个状态的那张图（"改成替换"要先有东西可换，不然就是把图藏起来）。 */
+    private fun hasVariant(arr: JSONArray, bone: String, tag: String): Boolean {
+        for (i in 0 until arr.length()) {
+            val l = arr.optJSONObject(i) ?: continue
+            if (l.getString("bone") == bone && l.optString("state", "") == tag) return true
+        }
+        return false
     }
 
     /**

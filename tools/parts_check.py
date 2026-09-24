@@ -194,6 +194,36 @@ def main():
            blank_reason(len(library), len(drawable([], library)), 0)
            == "no layer names any of them")
 
+    print("\n叠加还是替换：同一个状态，两种关系")
+    # 1.21.0：「部位状态不一定是替换一张图，而是叠加一张图上去」。两张画的**层**是同一对，
+    # 区别只在一处 —— 原来那层挂着 `!状态`（替换：状态开着时它不画）还是空着（叠加：都画）。
+    # 所以这条镜像量的是"同一个状态开起来，屏幕上出现几张"。
+    replace_pair = [
+        {"bone": "arm", "z": 10, "state": "!机械", "art": "arm"},
+        {"bone": "arm", "z": 11, "state": "机械", "art": "arm__mech"},
+    ]
+    overlay_pair = [
+        {"bone": "arm", "z": 10, "art": "arm"},
+        {"bone": "arm", "z": 11, "state": "绷带", "art": "arm__bandage"},
+    ]
+    lib = {"arm", "arm__mech", "arm__bandage"}
+    report("替换：状态开着时只画新那张（老的让位）",
+           drawn(replace_pair, {"机械": True}, lib) == ["arm__mech"],
+           str(drawn(replace_pair, {"机械": True}, lib)))
+    report("替换：状态关着时只画老那张",
+           drawn(replace_pair, {}, lib) == ["arm"], str(drawn(replace_pair, {}, lib)))
+    report("叠加：状态开着时**两张都画**，新的在上面",
+           drawn(overlay_pair, {"绷带": True}, lib) == ["arm", "arm__bandage"],
+           str(drawn(overlay_pair, {"绷带": True}, lib)))
+    report("叠加：状态关着时只剩老那张",
+           drawn(overlay_pair, {}, lib) == ["arm"], str(drawn(overlay_pair, {}, lib)))
+    # z 是"贴着它替换/叠加的那张图"（baseZ + 1），不是压在所有东西上面 —— 一条手臂的变体
+    # 不该盖住胸口。这里量的是层序：新层紧跟在它那张图后面。
+    report("新层紧贴它那张图，不是压在最上面",
+           drawn(overlay_pair + [{"bone": "chest", "z": 99, "art": "chest"}], {"绷带": True},
+                 lib | {"chest"}) == ["arm", "arm__bandage", "chest"],
+           "手臂的叠加层画在胸口**之前**")
+
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

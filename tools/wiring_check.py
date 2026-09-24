@@ -222,6 +222,12 @@ def main():
         ("部件测全局的状态", "logic_pick_state"),
         # 「在桌面上也要能摆预设动作」：入口是长按召唤按钮弹出的那张菜单里的这一行。
         ("桌面上的摆动作", "pet_summon_pose"),
+        # 独立的动画管理页：侧栏那一项。
+        ("动画管理（侧栏）", "menu_anims"),
+        # 状态图叠加 / 替换：入口在部位文件夹那一行（"状态版本"与"改成叠加"）。
+        ("状态图的叠加与替换", "part_variant_overlay"),
+        # 调骨骼碰撞时看得见范围：入口在属性弹窗里。
+        ("碰撞范围可见", "rig_collider_show_all"),
         # 免责声明那道门：入口就是启动时的弹窗（设置里也留了一处"重新阅读"）。
         ("免责声明确认", "disclaimer_agree"),
         # 应用背景图（主题）：入口在全局设置里那一段。
@@ -545,6 +551,71 @@ def main():
     report("换套之后记性跟着走（新套 + 动作名属于旧套，清掉）",
            "rememberRig(this, name)" in overlay
            and activity.count("PetOverlayService.rememberPet(this, pet.id, null, folder.rig)") >= 2)
+
+    print("== 状态图可以叠加（1.21.0）：替换和叠加只差一个标记 ==")
+    # 「希望部位状态不一定是替换一张图，而是叠加一张图上去」。两种关系的**层**是同一对，
+    # 区别只在一处：原来那层挂着 `!状态`（替换）还是空着（叠加）。所以这里盯的是：
+    # 两种都能选、能反悔（一键切换）、以及新层贴着它那张图（不是压在最上面）。
+    store_text = next((t for p2, t in files.items() if p2.endswith("data/CharacterStore.kt")), "")
+    report("加变体时能选两种关系（叠加 / 替换）",
+           "fun addVariant(" in store_text and "overlay: Boolean = false" in store_text
+           and "part_variant_overlay" in activity and "part_variant_replace" in activity)
+    report("替换：原来那层被标成「状态关着时画」",
+           'l.put("state", "!" + tag)' in store_text and "if (!overlay &&" in store_text)
+    report("叠加：原来那层一个字都不动（两张都画）",
+           "if (!overlay && l.getString(\"bone\") == bone" in store_text.replace("\n", " ")
+           or "!overlay && l.getString" in store_text)
+    report("新层贴着它那张图（baseZ + 1），不是压在所有东西上面",
+           "baseZ + 1" in store_text and "baseZ = maxOf(baseZ" in store_text)
+    report("已经做好的图能在两种关系之间反悔（一键切换）",
+           "fun setVariantOverlay(" in store_text and "part_variant_to_overlay" in activity
+           and "part_variant_to_replace" in activity)
+    report("切换只改那一个标记（不碰图、不碰 z、不碰别的骨头）",
+           "l.put(\"state\", \"\")" in store_text and "hasVariant(" in store_text)
+    report("没有那张图就不给「改成替换」（不然等于把图藏起来）",
+           "s2.isEmpty() && hasVariant(arr, bone, tag)" in store_text)
+
+    print("== 调骨骼碰撞时看得见范围（1.21.0）==")
+    # 「调骨骼碰撞时可以看见范围」。要害是**画出来的就是撞上的那个**：半径必须和求解器共用
+    # 同一个函数，形状必须和求解器那两句一样，而且"对世界不存在"的骨头不能画。
+    spec_text = next((t for p2, t in files.items() if p2.endswith("skeleton/CharacterSpec.kt")), "")
+    ragdoll_text = next((t for p2, t in files.items() if p2.endswith("physics/Ragdoll.kt")), "")
+    view_text = next((t for p2, t in files.items() if p2.endswith("ui/SkeletonView.kt")), "")
+    report("半径只有一处判断，求解器和编辑器都用它",
+           "fun colliderRadiusOf(bone: BoneSpec)" in spec_text
+           and "spec.colliderRadiusOf(s)" in ragdoll_text
+           and "parsed.colliderRadiusOf(bone)" in view_text)
+    report("形状跟着求解器：胶囊是圆头粗线、圆画在中点",
+           "colliderType == \"circle\"" in view_text and "strokeCap = Paint.Cap.ROUND" in view_text
+           and "canvas.drawLine(vx(head), vy(head), vx(tip), vy(tip), colliderStroke)" in view_text)
+    report("「对世界不存在」的骨头不画（画了会让人以为开关没生效）",
+           "if (!bone.collides) continue" in view_text)
+    report("正在调的那一节亮着画，关掉弹窗就撤掉",
+           "var colliderFocus: String?" in view_text
+           and "skeletonView.colliderFocus = bone.name" in activity
+           and "setOnDismissListener { skeletonView.colliderFocus = null }" in activity)
+    report("还能一键看全部（用来对位）",
+           "var showColliders = false" in view_text and "fun setShowColliders(" in view_text
+           and "rig_collider_show_all" in activity)
+    report("半径写在图旁边，自动算的会说明是自动",
+           "rig_collider_radius_label" in view_text and "rig_collider_auto" in view_text)
+
+    print("== 独立的动画管理页（1.21.0）==")
+    # 「加一个独立的动画管理」。它是一条侧栏项，所以 rails 那两句话也管着它（顺序都要对）；
+    # 内容上和测试场那张表共用编辑器（after 回调），但用途不同：那边是"现在演一遍"。
+    layout_text = open(os.path.join(REPO, "app/src/main/res/layout/activity_main.xml"),
+                       encoding="utf-8").read()
+    report("侧栏多了「动画管理」，而且有自己的一页",
+           "@+id/menuAnims" in layout_text and "@+id/animScroll" in layout_text
+           and "R.id.menuAnims ->" in activity and "Pane.ANIMS" in activity)
+    report("按 MenuItem 的规矩进 menuItems（rail 检查会盯着顺序）",
+           "findViewById(R.id.menuAnims)," in activity)
+    report("页面自己建（buildAnimList），并且和测试场共用那个编辑器",
+           "private fun buildAnimList(" in activity
+           and "askAnimation(folder, anim) { buildAnimList() }" in activity)
+    report("编辑器不再绑定某一个容器（改完叫回调，谁开的重画谁）",
+           "existing: AnimationSpec?, after: () -> Unit" in activity
+           and "after()" in activity)
 
     print("== 免责声明那道门：同意之前什么都不做，不同意就退出 ==")
     # 「将免责声明添加到用户打开的弹窗，确认后才能继续使用，不确认自己退出」（1.20.1）。
