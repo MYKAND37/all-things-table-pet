@@ -2,6 +2,55 @@
 
 把桌宠做成一个**平台**，而不是一个会动的图片。
 
+## 免责声明
+
+### 1. 这个仓库全部由 DeepSeek 开发
+
+代码、测试、文档、提交信息，全部由 **DeepSeek** 的编码智能体（`deepseek-v4-flash`）按仓库
+所有者的自然语言要求撰写 —— 包括**测试也是它自己写的**。这一点值得说清楚：写的人和测的人
+是同一个，所以镜子里看不出镜子自己的盲点。这个仓库最诚实的一句保证是「有一条机器断言钉着
+它」，而不是「它一定对」。
+
+因此：**按现状提供（as-is），不提供任何担保**，包括但不限于可用性、正确性与适用于某个
+特定用途。用之前请自己判断。
+
+### 2. `.atppet` 文件的制作与分发，责任在制作者
+
+`.atppet` 是**用户自己做的内容包**（骨架、部位图、动作、规则、粒子、液体都在里面）。
+
+- 制作和分发 `.atppet` 必须遵守**你所在地的法律法规** —— 包括但不限于著作权、肖像权、
+  商标、内容分级，以及你所用素材各自的授权条款；
+- **用户制作的 `.atppet` 与开发者无关**，由此产生的一切责任**完全由制作者自己承担**；
+- 仓库内置的素体与占位图是本项目自己的产物（见「关于 `parts/` 里的占位素材」），
+  **不包含任何第三方美术素材**；你导入的东西是你带进来的。
+
+### 3. 不要在 Issues 里分享 `.atppet`
+
+**请不要在 Issues（以及 PR、讨论）里上传、粘贴或索要 `.atppet` 文件**，也不要上传其中的
+美术素材。理由很实在：那是用户自己带来的内容，来源与授权**维护者无法核实**，一旦进了仓库
+或 Issue，就会变成这个仓库在分发它。
+
+这类内容会被直接删除 / 关闭，不另行通知。要交流问题，请贴**文字描述、截图，或者你自己做的
+最小复现**（一条规则、一张骨架截图）——那些足够定位问题，而且不牵涉任何人的素材。
+
+### Disclaimer (English)
+
+This repository is **developed entirely by DeepSeek** — an AI coding agent (`deepseek-v4-flash`)
+writing code, tests and documentation from the owner's instructions in natural language. The
+tests are written by the same author as the code, so they share its blind spots. Everything is
+provided **as-is, without warranty of any kind**.
+
+`.atppet` files are **content made by users**. Creating and distributing them must comply with
+the laws that apply where you are (copyright, personality rights, trademarks, content rating,
+and the licence of whatever assets you use). User-made `.atppet` files are **not** the
+developer's doing, and **the maker bears full responsibility for them**. The bundled figure and
+placeholder art are this project's own; no third-party artwork ships here.
+
+**Please do not share `.atppet` files in issues** (or pull requests) — the maintainer cannot
+verify where that content came from or whether it may be redistributed. Such content is removed
+without notice; a text description, a screenshot or a minimal reproduction of your own is what
+actually helps.
+
 ## 这个项目想做什么
 
 | 方向 | 用户能做什么 |

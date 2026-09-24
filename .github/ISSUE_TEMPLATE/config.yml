@@ -1,0 +1,2 @@
+# 让"空白 issue"仍然可用（有的问题套不进模板），其余链接留空。
+blank_issues_enabled: true
