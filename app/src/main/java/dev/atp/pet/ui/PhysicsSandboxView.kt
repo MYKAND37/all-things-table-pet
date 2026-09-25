@@ -1513,7 +1513,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
                     val bone = a.bone.ifEmpty {
                         if (Subjects.isPart(acting)) Subjects.partId(acting) else ""
                     }
-                    renderer?.setDepth(bone, a.text != "back")
+                    when (a.text) {
+                        // 排到另一节的前面/后面（1.27.0）："这一截现在在胸前面"这种效果
+                        // 需要的不是最前或最后，而是"挨着某一节"。
+                        "before" -> renderer?.placeDepth(bone, a.bone2, after = false)
+                        "after" -> renderer?.placeDepth(bone, a.bone2, after = true)
+                        else -> renderer?.setDepth(bone, a.text != "back")
+                    }
                 }
                 "clearPose" -> applyPose(null)
                 "spawn" -> propSpecs.firstOrNull { it.id == a.prop }?.let {

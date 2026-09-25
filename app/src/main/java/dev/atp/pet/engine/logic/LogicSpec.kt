@@ -261,6 +261,13 @@ data class ActionSpec(
      */
     val value2: Float = 0f,
     val bone: String = "",
+    /**
+     * 第二节骨头：**改变部位深度**排到谁的前面/后面时用得着（1.27.0）。
+     *
+     * 一个字段而不是把两节骨头挤进 [text]：这一版刚因为"两个东西共用一个字段"出过事，
+     * 而规则文件是要能被人读的 —— `"bone": "hand_L", "bone2": "chest"` 一眼就懂。
+     */
+    val bone2: String = "",
     val prop: String = "",
     /**
      * The shape of a stream: [Shapes.COLUMN] (a jet that lands as one line) or
@@ -418,7 +425,9 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
      * 在后面"恰恰是很多动作要的效果：抬手时袖子该在胸前面，手放下时该在后面。所以这是一个
      * **运行时的**顺序：动的是这一次会话里怎么画，不动文件，收回/换骨骼套就回到原样。
      *
-     * 参数：哪根骨头（[ActionSpec.bone]），以及往前还是往后（[ActionSpec.text]，"front"/"back"）。
+     * 参数：哪根骨头（[ActionSpec.bone]），怎么排（[ActionSpec.text]）：`"front"`/`"back"` 是
+     * 最前面/最后面，`"before"`/`"after"` 是**排到另一节骨头的前面/后面**
+     * （[ActionSpec.bone2]，1.27.0）。
      */
     DEPTH("depth", "改变部位深度", "boneFront"),
     /**
@@ -663,6 +672,7 @@ class LogicSpec(
                         value = a.optDouble("value", 0.0).toFloat(),
                         value2 = a.optDouble("value2", 0.0).toFloat(),
                         bone = a.optString("bone", ""),
+                        bone2 = a.optString("bone2", ""),
                         prop = a.optString("prop", ""),
                         state = a.optString("state", ""),
                         shape = a.optString("shape", ""),
@@ -809,7 +819,7 @@ class LogicSpec(
                                 .put("kind", a.kind).put("text", a.text).put("stat", a.stat)
                                 .put("value", a.value.toDouble())
                                 .put("value2", a.value2.toDouble())
-                                .put("bone", a.bone)
+                                .put("bone", a.bone).put("bone2", a.bone2)
                                 .put("prop", a.prop).put("state", a.state)
                                 // Written only when it was chosen: a file that never asked for
                                 // a shape does not grow a key that means "the default".

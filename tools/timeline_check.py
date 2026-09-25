@@ -18,7 +18,7 @@
 
 镜像 Timeline.kt 与 TimelineLayout.kt，常数从 Kotlin 源码里读出来。
 """
-import os, random, re, sys
+import math, os, random, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -446,9 +446,11 @@ def main():
     report("时间格 / 命中半径 / 名字列宽和 Kotlin 一致",
            TIME_GRID == 0.01 and HIT_RADIUS_DP == 16.0 and NAME_COLUMN_DP == 76.0,
            "%.2f / %.0f / %.0f" % (TIME_GRID, HIT_RADIUS_DP, NAME_COLUMN_DP))
-    report("三类通道各有最小跨度，而且边距是同一个数",
-           MIN_ROT_SPAN == 60.0 and MIN_OFFSET_SPAN == 80.0 and MIN_SCALE_SPAN == 0.6
-           and PAD_RATIO == 0.15)
+    # 旋转的最小跨度是 **1 弧度**（≈57°），不是 60 —— 60 是把它当度数了（1.27.0 修的）。
+    report("三类通道各有最小跨度（旋转按弧度），而且边距是同一个数",
+           MIN_ROT_SPAN == 1.0 and MIN_OFFSET_SPAN == 80.0 and MIN_SCALE_SPAN == 0.6
+           and PAD_RATIO == 0.15,
+           "旋转 %.2f 弧度" % MIN_ROT_SPAN)
 
     print("\n一条通道在某一刻的值")
     ks = [key(0.0, 0.0, EASE_LINEAR), key(1.0, 100.0, EASE_LINEAR)]
@@ -559,6 +561,24 @@ def main():
     report("速度倍率对通道和帧是同一个（2 倍速时 1 秒 = 动画第 2 秒）",
            abs(local_time(anim([frame({}, seconds=1.0), frame({}, seconds=1.0)], speed=2.0),
                           0.5) - 1.0) < 1e-4)
+
+    print("\n单位：打一个关键帧不能把姿势改掉（1.27.0 修的那条）")
+    # 用户报的：「点点加关键帧和存入关键帧她会突然旋转，然后两个关键帧之间也没有动画衔接」。
+    # 根因是写进去的值用了**度数**，而帧里的角度、求解器的目标、关节的限位全是**弧度**
+    # （Bone.rotation）：一个 20° 的姿势会被写成 20，比它能转到的范围大 57 倍。
+    for pose in (0.0, 0.349, -1.2, 2.9):
+        spec = anim([frame({"arm": pose}, seconds=1.0), frame({"arm": pose}, seconds=1.0)],
+                    tracks={"arm": {"rot": with_key([], 0.0, pose, EASE_SMOOTH)}})
+        s = timeline_sample(spec, 0.0)
+        got = s["angles"]["arm"]
+        report("姿势 %.3f 弧度打一个关键帧之后，采样还是它自己" % pose,
+               abs(got - pose) < 1e-6, "%.6f" % got)
+    # 反向断言：写成度数（20 而不是 0.349）会超出关节能到的范围 —— 这一条会红，
+    # 它说明"为什么必须和帧同一个单位"。
+    joint_limit = 3.2       # 弧度，约 183°：任何人体关节的实际限位都在它以内
+    report("如果把度数当弧度写进去，立刻超出关节能到的范围（|值| 必须 ≤ %.1f）" % joint_limit,
+           abs(math.radians(20.0)) <= joint_limit and math.radians(20.0) < 1.0,
+           "20° 应该是 %.3f 弧度，而写成度数就是 20" % math.radians(20.0))
 
     print("\n插一帧 / 删一帧：关键帧跟着走")
     tr = {"hand_L": {"rot": [key(0.0, 0.0, EASE_LINEAR), key(1.0, 30.0, EASE_LINEAR),

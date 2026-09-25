@@ -363,6 +363,10 @@ class TimelineView @JvmOverloads constructor(
     private var dragV = 0f
     private var dragMoved = false
 
+    /** 手指落下的位置：判断这一下是"点"还是"拖"。 */
+    private var downX = 0f
+    private var downY = 0f
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val s = spec ?: return false
         when (event.actionMasked) {
@@ -426,7 +430,12 @@ class TimelineView @JvmOverloads constructor(
                 dragKey = hit
                 dragBone = bone
                 dragMoved = false
+                downX = event.x
+                downY = event.y
                 grabParent()
+                // **点一下 = 选中**（1.27.0）。手指落下几毫米是常态，而"只要动了一个像素就算拖动"
+                // 会把"选一个关键帧"变成"把它挪走一点点并立刻落盘" —— 用户报的"选中不了已有关键帧"
+                // 就是这个。真正的拖动要过 TOUCH_SLOP（见 ACTION_MOVE）。
                 onKeyPicked?.invoke(bone, hit)
                 return true
             }
@@ -439,6 +448,13 @@ class TimelineView @JvmOverloads constructor(
                 val bone = dragBone ?: return false
                 val row = bones.indexOf(bone)
                 if (row < 0 || dragKey < 0) return false
+                // 还没挪够 = 还是"点"：什么都不做，让手指抬起时保持"选中"这一个结果。
+                if (!dragMoved &&
+                    kotlin.math.hypot(event.x - downX, event.y - downY) < dp(TOUCH_SLOP_DP)
+                ) {
+                    return true
+                }
+                dragMoved = true
                 val lane = laneOf(row)
                 val keys = keysOf(bone)
                 val range = TimelineLayout.rangeOf(keys, channel)
@@ -458,7 +474,6 @@ class TimelineView @JvmOverloads constructor(
                 }
                 dragT = t
                 dragV = v
-                dragMoved = true
                 onKeyMoved?.invoke(bone, dragKey, t, v, false)
                 return true
             }
@@ -513,6 +528,14 @@ class TimelineView @JvmOverloads constructor(
     }
 
     private companion object {
+        /**
+         * 手指挪过这么多才算"拖关键帧"，否则那一下就是"选它"。
+         *
+         * 手指落在屏幕上总会动几毫米，而"动了一个像素就算拖动"会把"选一个关键帧"变成
+         * "把它挪走一点点并且立刻落盘" —— 用户报的「选中不了已有关键帧，光标会乱跳」。
+         */
+        const val TOUCH_SLOP_DP = 8f
+
         /** 标尺那一行多高。 */
         const val RULER_DP = 20f
 

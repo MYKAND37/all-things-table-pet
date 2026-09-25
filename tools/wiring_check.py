@@ -69,6 +69,21 @@ def layout_ids():
     return out
 
 
+def code_only(text):
+    """去掉注释行和行尾注释 —— 断言不许 grep 到注释里。
+
+    这是这一仓库里犯过的错（见 docs/JOURNAL.md 第五节）：一条"某个写法不再出现"的断言命中了
+    **我自己解释旧写法的那行注释**。所以凡是要数"某句话还在不在"的，都先过这一层。
+    """
+    out = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("//") or stripped.startswith("*") or stripped.startswith("/*"):
+            continue
+        out.append(line.split("//")[0])
+    return "\n".join(out)
+
+
 def layout_parents():
     """id -> 父 id（布局里的从属关系）。"谁是谁的孩子"这件事只能这么问。"""
     out = {}
@@ -809,6 +824,62 @@ def main():
     report("绑规则有入口，而且说清楚规则只在测试场和桌面上才会响",
            "@+id/animBind" in layout_text and "private fun bindStudioRule(" in activity
            and "anim_bind_where" in activity)
+
+    print("== 关键帧的单位：弧度和帧一致（1.27.0 修的那条）==")
+    code = code_only(activity)
+    key_fn = code.split("private fun studioKeyValue")[1].split("private fun")[0]
+    report("关键帧的值来自 currentAngles（和帧同一个单位），不是 currentDegrees",
+           "animView.currentAngles()[bone] ?: Timeline.defaultValue(animChannel)" in key_fn
+           and "currentDegrees" not in key_fn)
+    report("currentDegrees 只用在**给人看的**那一处（关节范围的最小/最大）",
+           code.count("currentDegrees") == 1 and "skeletonView.currentDegrees(it)" in code)
+    view_code = code_only(view_kt)
+    slop_block = view_code.split("if (!dragMoved &&")[1].split("}")[0] if "if (!dragMoved &&" in view_code else ""
+    report("点一个菱形是**选中**：过了 8dp 才算拖（否则手指落下几毫米就把它挪走并落盘）",
+           "const val TOUCH_SLOP_DP = 8f" in view_code
+           and "hypot(" in slop_block and "TOUCH_SLOP_DP" in slop_block
+           and view_code.count("dragMoved = true") == 1)
+    report("选一个关键帧不动播放头（播放头是「我在看哪一刻」）",
+           "每点一下就把它拽到别处" in activity
+           and "animTimeline.setPlayhead(key.t)" not in code_only(activity)
+           and "拖菱形**不拖播放头**" in activity)
+    report("拖完保留选中（原来落盘时清成 -1，那是选中不了的另一半）",
+           "选中**留着**" in activity
+           and "animKeyIndex = -1\n        // 挪的只是" not in activity)
+    report("状态栏上才把弧度换成度（写进文件的一律是弧度）",
+           '"%.0f°".format(Math.toDegrees(v.toDouble()))' in activity)
+
+    print("== 图层深度：改的是哪一套骨架 + 排到某一节前/后（1.26.2 / 1.27.0）==")
+    report("深度页自己记住它在改哪一套（不再拿 opened，否则会改一套存另一套）",
+           "private var depthFolder: CharacterFolder? = null" in activity
+           and "depthFolder = folder" in activity
+           and activity.count("val folder = depthFolder ?: return") >= 4
+           and activity.count("val folder = opened ?: return") >= 1)
+    report("排到某一节的前/后：渲染器有 placeDepth，而且按说的顺序应用",
+           "fun placeDepth(bone: String, anchor: String, after: Boolean)" in renderer_kt
+           and "placements.add(Triple(bone, anchor, after))" in renderer_kt
+           and "for ((bone, anchor, after) in placements)" in renderer_kt)
+    report("动作里两个方向都接上了（before/after 走 placeDepth，最前/最后走 setDepth）",
+           '"before" -> renderer?.placeDepth(bone, a.bone2, after = false)' in bench
+           and '"after" -> renderer?.placeDepth(bone, a.bone2, after = true)' in bench
+           and 'else -> renderer?.setDepth(bone, a.text != "back")' in bench)
+    report("编辑器四选一，选完还要选排到哪一节（不能选它自己）",
+           "R.string.logic_depth_before" in activity and "R.string.logic_depth_after" in activity
+           and "R.string.logic_depth_anchor" in activity
+           and ".filter { it != bone }" in activity)
+    report("第二节骨头是**自己的字段**（bone2），不是挤进 text",
+           "val bone2: String = \"\"" in next(
+               (t for p, t in files.items() if p.endswith("engine/logic/LogicSpec.kt")), "")
+           and 'optString("bone2", "")' in next(
+               (t for p, t in files.items() if p.endswith("engine/logic/LogicSpec.kt")), "")
+           and '.put("bone", a.bone).put("bone2", a.bone2)' in next(
+               (t for p, t in files.items() if p.endswith("engine/logic/LogicSpec.kt")), ""))
+    report("动作在图上说得出来（原来落到原始的 id `depth`）",
+           '// 「改变部位深度」原来没有这一支' in activity
+           and '"排到" + partText(a.bone2) + "前面"' in activity)
+    report("部位列表标出场上是哪一套，存档时也说了另一套",
+           "R.string.rig_on_bench" in activity and "R.string.depth_saved_other_rig" in activity
+           and "it.rig != folder.rig" in activity)
 
     print("== 部位状态好几套：让位标记 + 权重（1.26.0）==")
     spec_kt = next((t for p, t in files.items() if p.endswith("engine/skeleton/CharacterSpec.kt")), "")

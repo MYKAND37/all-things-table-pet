@@ -42,6 +42,9 @@ class PartRenderer(
      */
     var hidden: Set<String> = emptySet()
 
+    /** 运行时的相对排位：谁 排到 谁的 前面/后面。见 [placeDepth]。 */
+    private val placements = ArrayList<Triple<String, String, Boolean>>()
+
     /** Which states are on right now. A state nobody declares reads as off. */
     var states: Map<String, Boolean> = emptyMap()
 
@@ -113,11 +116,26 @@ class PartRenderer(
         invalidateOrder()
     }
 
+    /**
+     * 把一节排到**另一节的前面/后面**（1.27.0）：「切换骨骼深度」不只最前和最后。
+     *
+     * 抬手时袖子该在胸前面、手放下时该在后面 —— 而"胸"不是一个端点，是另一节骨头。
+     * 排位是**按顺序应用**的，后说的覆盖先说的（同一个骨头只留最后一次），所以一串规则
+     * 叠起来的结果是确定的。
+     */
+    fun placeDepth(bone: String, anchor: String, after: Boolean) {
+        if (bone.isEmpty() || anchor.isEmpty() || bone == anchor) return
+        placements.removeAll { it.first == bone }
+        placements.add(Triple(bone, anchor, after))
+        invalidateOrder()
+    }
+
     /** Forget every runtime depth: back to the file's order. */
     fun clearDepth() {
-        if (raised.isEmpty() && lowered.isEmpty()) return
+        if (raised.isEmpty() && lowered.isEmpty() && placements.isEmpty()) return
         raised.clear()
         lowered.clear()
+        placements.clear()
         invalidateOrder()
     }
 
@@ -184,12 +202,31 @@ class PartRenderer(
      * somebody who just raised it expects.
      */
     private fun applyRuntimeDepth(): List<LayerSpec> {
-        if (raised.isEmpty() && lowered.isEmpty()) return baseOrder
-        val out = ArrayList<LayerSpec>(baseOrder.size)
-        out.addAll(baseOrder.filter { it.bone in lowered })
-        out.addAll(baseOrder.filter { it.bone !in lowered && it.bone !in raised })
-        out.addAll(baseOrder.filter { it.bone in raised })
-        return out
+        if (raised.isEmpty() && lowered.isEmpty() && placements.isEmpty()) return baseOrder
+        var list = ArrayList(baseOrder)
+        if (lowered.isNotEmpty() || raised.isNotEmpty()) {
+            val out = ArrayList<LayerSpec>(baseOrder.size)
+            out.addAll(list.filter { it.bone in lowered })
+            out.addAll(list.filter { it.bone !in lowered && it.bone !in raised })
+            out.addAll(list.filter { it.bone in raised })
+            list = out
+        }
+        // 相对排位：一次一条，按说的顺序来。挪的是**这一节的所有层**（一根骨头的图是一组），
+        // 插在锚点那一组的前/后 —— 和"一根骨头是一个整体"这条规矩一致。
+        for ((bone, anchor, after) in placements) {
+            val moving = list.filter { it.bone == bone }
+            if (moving.isEmpty()) continue
+            val rest = list.filter { it.bone != bone }
+            val at = if (after) {
+                rest.indexOfLast { it.bone == anchor } + 1
+            } else {
+                rest.indexOfFirst { it.bone == anchor }
+            }
+            if (at < 0 || (at == 0 && rest.none { it.bone == anchor })) continue
+            list = ArrayList(rest)
+            list.addAll(at, moving)
+        }
+        return list
     }
 
     private fun isTriggered(rule: SwapRuleSpec): Boolean {

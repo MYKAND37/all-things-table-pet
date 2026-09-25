@@ -246,6 +246,8 @@
     <string name="rig_ref_light">淡</string>
     <string name="rig_ref_mid">中</string>
     <string name="rig_ref_strong">浓</string>
+    <string name="rig_on_bench">（场上）</string>
+    <string name="depth_saved_other_rig">存进「%1$s」了。场上穿的是「%2$s」—— 想让这一套上场，点一下它的名字。</string>
     <string name="rig_row">骨骼套（这只桌宠有哪几副身体）</string>
     <string name="rig_default">默认骨骼套</string>
     <string name="rig_new">新建骨骼套</string>
@@ -613,6 +615,11 @@
     <string name="logic_tied_hint">留「任何部位」= 身上随便哪一处被绳子连着都算。钉子不算 —— 钉子钉住的是位置，绳子拴住的是两点之间。</string>
     <string name="logic_depth_bone">哪一节</string>
     <string name="logic_depth_way">往哪边</string>
+    <string name="logic_depth_before">排到某一节的前面</string>
+    <string name="logic_depth_after">排到某一节的后面</string>
+    <string name="logic_depth_way_hint">最前面/最后面是"整只身上"；前面/后面是"挨着某一节"（抬手时袖子在胸前面，就是它）。</string>
+    <string name="logic_depth_anchor">排在哪一节的前/后</string>
+    <string name="logic_depth_anchor_none">这套骨骼还没有别的部位</string>
     <string name="logic_depth_front">拉到最前面</string>
     <string name="logic_depth_back">压到最后面</string>
     <string name="logic_cond_chance">概率</string>

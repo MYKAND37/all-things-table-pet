@@ -173,6 +173,10 @@
     <string name="logic_delete_rule">Delete the rule</string>
     <string name="logic_depth_back">Push to the back</string>
     <string name="logic_depth_bone">Which part</string>
+    <string name="logic_depth_anchor_none">This rig has no other parts</string>
+    <string name="logic_depth_before">Move it before a part</string>
+    <string name="logic_depth_after">Move it after a part</string>
+    <string name="logic_depth_anchor">Before/after which part</string>
     <string name="logic_depth_front">Bring to the front</string>
     <string name="logic_depth_way">Which way</string>
     <string name="logic_dir_away">Away from what hit it</string>
@@ -468,6 +472,7 @@
     <string name="rig_reset_failed">Reset failed (no factory figure)</string>
     <string name="rig_reset_undo">Back to the last save</string>
     <string name="rig_root_undeletable">The root cannot be deleted</string>
+    <string name="rig_on_bench"> (on the bench)</string>
     <string name="rig_row">Rigs (the bodies this pet has)</string>
     <string name="rig_save_bones">Save skeleton</string>
     <string name="rig_save_failed">Save failed</string>

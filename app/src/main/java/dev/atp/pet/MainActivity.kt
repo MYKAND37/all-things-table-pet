@@ -184,6 +184,16 @@ class MainActivity : AppCompatActivity() {
     /** Depth editing state, back-to-front. */
     private lateinit var depthScroll: View
     private lateinit var depthList: LinearLayout
+    /**
+     * 这一页正在改**哪一套骨架**（1.26.2）。
+     *
+     * 之前这一页的五个函数都拿 `opened` —— 而它是"打开的那只桌宠"，在"看另一套骨骼"和
+     * "桌宠被召唤时穿的是哪一套"之间会跟丢：用户报的「另一套骨架改图层深度没有实现」
+     * 就是这么来的（改的和存的不是同一套）。现在它记住自己被打开时那一份，
+     * 和动画工作台的 [animEditId] 是同一条规矩：**页面自己说得出它在改什么**。
+     */
+    private var depthFolder: CharacterFolder? = null
+
     private var depthLayers = mutableListOf<LayerSpec>()
 
     /** The edited character's states, for the depth editor to choose from. */
@@ -2182,8 +2192,13 @@ class MainActivity : AppCompatActivity() {
             label(getString(R.string.rig_row), 11f, MUTED, top = 8, bottom = 6)
         )
         val rigs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val worn = summoned?.takeIf { it.id == folder.id }?.rig
         for (name in folder.rigs()) {
-            val c = chip(rigLabel(name), name == folder.rig, 12f)
+            // 穿在场上那一套标出来：改的那套和场上穿的那套不是一个的时候，
+            // "改完看不出变化"就是这么来的（1.26.2）。
+            val here = name == folder.rig
+            val tag = if (worn != null && name == worn) getString(R.string.rig_on_bench) else ""
+            val c = chip(rigLabel(name) + tag, here, 12f)
             c.setOnClickListener { chooseRig(folder, name) }
             if (name.isNotEmpty()) {
                 // Long press rather than another row of buttons: a rig has exactly two other
@@ -2702,6 +2717,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun openDepth(folder: CharacterFolder) {
         val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return
+        depthFolder = folder
 
         depthLayers = parsed.layers.sortedBy { it.z }.toMutableList()
         // A bone with artwork but no layer entry is never drawn at all. The shoulders were
@@ -2791,7 +2807,7 @@ class MainActivity : AppCompatActivity() {
      * sent to the drawing it wants instead, because no state will ever make that one draw.
      */
     private fun askFixLayer(index: Int) {
-        val folder = opened ?: return
+        val folder = depthFolder ?: return
         val layer = depthLayers.getOrNull(index) ?: return
         val reason = depthUnusedReason(folder, layer) ?: return
         val missingArt = !folder.partFile(layer.artKey).isFile
@@ -2850,7 +2866,7 @@ class MainActivity : AppCompatActivity() {
      * not turn this drawing on -- which is the same bug wearing a hat.
      */
     private fun recreateState(bone: String, id: String) {
-        val folder = opened ?: return
+        val folder = depthFolder ?: return
         val clean = RigEdit.sanitise(id).ifEmpty { "state" }
         // LogicSpec is not a data class (it is written by hand so that every field can say
         // what it is for), so there is no copy(): the new spec is spelled out, which is also
@@ -2890,7 +2906,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun moveDepth(index: Int, step: Int) {
-        val folder = opened ?: return
+        val folder = depthFolder ?: return
         val shown = depthLayers.indices.filter { depthShows(folder, depthLayers[it]) }
         val here = shown.indexOf(index)
         if (here < 0) return
@@ -2902,7 +2918,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun buildDepthPane() {
-        val folder = opened ?: return
+        val folder = depthFolder ?: return
         depthList.removeAllViews()
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -3301,10 +3317,19 @@ class MainActivity : AppCompatActivity() {
 
     private fun saveDepth(folder: CharacterFolder) {
         val ok = store.saveDepth(folder, depthLayers, depthRules)
+        val other = summoned?.takeIf { it.id == folder.id && it.rig != folder.rig }?.rig
         Toast.makeText(
             this,
-            getString(if (ok) R.string.depth_saved else R.string.depth_save_failed),
-            Toast.LENGTH_SHORT,
+            when {
+                !ok -> getString(R.string.depth_save_failed)
+                // 改的是**另一套骨骼**：存进去了，但场上看不见 —— 不说这一句，用户看到的就是
+                // "改了没生效"（这一版修的就是这个误会）。
+                other != null -> getString(
+                    R.string.depth_saved_other_rig, rigLabel(folder.rig), rigLabel(other),
+                )
+                else -> getString(R.string.depth_saved)
+            },
+            if (ok && other != null) Toast.LENGTH_LONG else Toast.LENGTH_SHORT,
         ).show()
         if (!ok) return
         reloadSummoned(folder)
@@ -6203,7 +6228,13 @@ class MainActivity : AppCompatActivity() {
      */
     private fun studioKeyValue(anim: AnimationSpec, bone: String, t: Float): Float {
         if (animChannel == Timeline.ROTATION) {
-            return animView.currentDegrees(bone) ?: Timeline.defaultValue(animChannel)
+            // **弧度，不是度**（1.27.0 修的）。帧里的角度、求解器的目标、关节的限位全是同一个
+            // 单位 —— 就是 `Bone.rotation` 本身。这里原来调的是 `currentDegrees`，于是打一个
+            // 关键帧就把 0.35 写成 20：预览里 `rotation = 20`（= 1146°）看起来是"猛地一转"，
+            // 测试场里那个目标远超关节限位、骨头被顶死在限位上 —— 用户说的「突然旋转」和
+            // 「两个关键帧之间没有动画衔接」都是这一行。给人看的度数是**显示**那一层的事
+            // （见 formatValue），写进文件的值和帧一致。
+            return animView.currentAngles()[bone] ?: Timeline.defaultValue(animChannel)
         }
         val track = anim.tracks[bone] ?: BoneTrack()
         val keys = track.keys(animChannel)
@@ -6211,8 +6242,12 @@ class MainActivity : AppCompatActivity() {
         return Timeline.valueAt(keys, t)
     }
 
-    private fun formatValue(v: Float): String =
-        if (animChannel == Timeline.SCALE) "%.2f×".format(v) else "%.1f".format(v)
+    /** 状态栏上那个值：**只有这里**把弧度换成度（写进文件的一律是弧度）。 */
+    private fun formatValue(v: Float): String = when (animChannel) {
+        Timeline.ROTATION -> "%.0f°".format(Math.toDegrees(v.toDouble()))
+        Timeline.SCALE -> "%.2f×".format(v)
+        else -> "%.0fpx".format(v)
+    }
 
     /**
      * 「转成时间轴」：把现在这几帧烘成每根骨头自己的通道。
@@ -6268,10 +6303,9 @@ class MainActivity : AppCompatActivity() {
         val folder = studioFolder() ?: return
         val anim = studioAnimation(folder) ?: return
         val key = anim.tracks[bone]?.keys(animChannel)?.getOrNull(index) ?: return
-        val sample = Timeline.sample(anim, frameClock(anim, key.t)) ?: return
-        animFrameIndex = TimelineLayout.frameAt(anim, key.t)
-        applyStudioSample(sample)
-        animTimeline.setPlayhead(key.t)
+        // **不动播放头**（1.27.0）：点一个菱形是"选中它"，而播放头是"我在看哪一刻" ——
+        // 每点一下就把它拽到别处，用户看到的就是"光标乱跳"（而且连点几个根本选不下来）。
+        // 想跳过去看那一刻，拖标尺；锚点那一行仍然会跳（那是它的规矩）。
         animTimeline.setSelection(bone, index, animFrameIndex)
         animStatus.text = getString(
             R.string.anim_key_status, bone, channelLabel(), formatValue(key.v), "%.2f".format(key.t),
@@ -6297,7 +6331,8 @@ class MainActivity : AppCompatActivity() {
         animBone = bone
         animKeyIndex = moved.indexOfFirst { abs(it.t - t) < 1e-4 }
         animTimeline.setData(anim.copy(tracks = tracks), animTimeline.bones, animChannel)
-        animTimeline.setPlayhead(t)
+        // 拖菱形**不拖播放头**（1.27.0）：播放头是"我在看哪一刻"，碰一下就被拽走的话，
+        // 用户看到的就是"光标乱跳"，而且刚摆好的那一刻也跟着变了。
         animTimeline.setSelection(bone, animKeyIndex, animFrameIndex)
         if (!done) {
             animStatus.text = getString(
@@ -6308,8 +6343,8 @@ class MainActivity : AppCompatActivity() {
         animPending = null
         pushStudioUndo(anim)
         if (!writeStudioAnimation(folder, anim.copy(tracks = tracks))) return
-        animKeyIndex = -1
-        // 挪的只是**时间**：值没变，所以姿势不该变。回到播放头那一刻重新摆一次。
+        // 选中**留着**（原来这里清成 -1）：拖完还想接着调这一帧的值，而"拖一下就没选中了"
+        // 正是"选中不了已有关键帧"的另一半。
         buildAnimList()
     }
 
@@ -8275,6 +8310,16 @@ class MainActivity : AppCompatActivity() {
         "spill" -> "喷" + liquidName(a.text) + " " + a.value.toInt()
         "emit" -> "发信号：" + a.text
         "pushProp" -> "推" + propName(a.prop) + " " + directionText(a.text) + " " + a.value.toInt()
+        // 「改变部位深度」原来没有这一支：图上显示的是原始 id `depth`（一个用户看不懂的词）。
+        "depth" -> {
+            val who = if (a.bone.isEmpty()) "被打到的部位" else partText(a.bone)
+            when (a.text) {
+                "back" -> "把" + who + "压到最后面"
+                "before" -> "把" + who + "排到" + partText(a.bone2) + "前面"
+                "after" -> "把" + who + "排到" + partText(a.bone2) + "后面"
+                else -> "把" + who + "拉到最前面"
+            }
+        }
         "clear" -> if (a.text == "liquid" || Subjects.isLiquid(logicSubject)) {
             "清掉液体"
         } else {
@@ -9033,14 +9078,38 @@ class MainActivity : AppCompatActivity() {
                         listOf(
                             "front" to getString(R.string.logic_depth_front),
                             "back" to getString(R.string.logic_depth_back),
+                            // 挨着某一节（1.27.0）：抬手时袖子在胸前面、放下时在后面 ——
+                            // "胸"不是一个端点，是另一节骨头。
+                            "before" to getString(R.string.logic_depth_before),
+                            "after" to getString(R.string.logic_depth_after),
                         ),
-                        "",
+                        getString(R.string.logic_depth_way_hint),
                         existing?.text ?: "front",
                     ) { way ->
-                        putAction(
-                            index, actionIndex, isElse,
-                            ActionSpec(kind.id, text = way, bone = bone),
-                        )
+                        if (way != "before" && way != "after") {
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = way, bone = bone),
+                            )
+                            return@pickList true
+                        }
+                        // 排到谁的前/后：**另一节**骨头（不能是它自己）。
+                        // 哪几节可选：**这只桌宠正在用的那一套骨骼**（逻辑页的主体就是它）。
+                        val rig = summoned ?: opened
+                        val options = rig?.let { boneNames(it) }.orEmpty().filter { it != bone }
+                        pickList(
+                            getString(R.string.logic_depth_anchor),
+                            options.map { it to (boneLabel(it).ifEmpty { it }) },
+                            getString(R.string.logic_depth_anchor_none),
+                            existing?.bone2?.takeIf { it.isNotEmpty() },
+                        ) { anchor ->
+                            if (anchor.isEmpty()) return@pickList false
+                            putAction(
+                                index, actionIndex, isElse,
+                                ActionSpec(kind.id, text = way, bone = bone, bone2 = anchor),
+                            )
+                            true
+                        }
                         true
                     }
                 }

@@ -178,8 +178,13 @@ object TimelineLayout {
     /** 时间轴上的格子：0.01 秒。拖动吸附用它，也定义了两个关键帧算不算"同一时刻"。 */
     const val TIME_GRID = 0.01f
 
-    /** 旋转通道最少画 60 度的跨度，位置最少 80 像素，缩放最少 0.6 倍。 */
-    const val MIN_ROT_SPAN = 60f
+    /**
+     * 旋转通道最少画 1 弧度的跨度（≈57°），位置最少 80 像素，缩放最少 0.6 倍。
+     *
+     * 旋转的单位是**弧度**（和帧里的角度、求解器的目标同一个单位，见 MainActivity.studioKeyValue）
+     * —— 老代码这里写 60，是把它当度数了，于是一条常量通道会在行里被压成一条线。
+     */
+    const val MIN_ROT_SPAN = 1f
     const val MIN_OFFSET_SPAN = 80f
     const val MIN_SCALE_SPAN = 0.6f
 
