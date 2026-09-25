@@ -135,8 +135,16 @@ object Labels {
      * 返回空串而不是原样返回 bone：调用方要能分清"有名字"和"没有名字" —— 一个节点的名字就
      * 是它自己，而一根骨头没有中文名时界面得显示它的英文 id。
      */
+    /**
+     * 一根骨头的名字：能翻的翻（素体那 19 节），**翻不了的就用骨头自己的名字**。
+     *
+     * 这里原来对认不出的骨头返回空串 —— 于是**用户自己加的骨骼在界面上是空白的**
+     * （用户报的「自己添加的骨骼在逻辑里面没有显示名字」）：逻辑页的主体名、部位那一行、
+     * 深度页的层名、骨骼列表，全都调这一个函数。空白的名字比一个没翻译的名字糟得多：
+     * 前者看不出是什么，后者至少是用户自己起的那个名字。
+     */
     fun bone(context: Context, bone: String): String =
-        BONES[bone]?.let { context.getString(it) } ?: ""
+        BONES[bone]?.let { context.getString(it) } ?: bone
 
     /** 一个键查不到就退回引擎那份（宁可显示中文，也不要显示空白）。 */
     private fun pick(context: Context, id: Int?, fallback: String): String =

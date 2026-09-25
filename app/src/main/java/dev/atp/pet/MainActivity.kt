@@ -2306,9 +2306,9 @@ class MainActivity : AppCompatActivity() {
             partFilesList.addView(rules)
         }
 
-        if (boneLabel(bone).isNotEmpty()) {
-            partFilesList.addView(label(boneLabel(bone), 11f, MUTED, top = 6, bottom = 8))
-        }
+        // 这一节叫什么。名字**永远不为空**（认不出的骨头就用它自己的名字，见 Labels.bone），
+        // 所以不再有"空就不显示"那一条 —— 那正是"自己加的骨骼没有名字"的一半原因。
+        partFilesList.addView(label(boneLabel(bone), 11f, MUTED, top = 6, bottom = 8))
 
         // Which state each drawing is for comes out of the LAYERS, because that is where the
         // decision actually lives: a file on its own does not know when it is drawn.

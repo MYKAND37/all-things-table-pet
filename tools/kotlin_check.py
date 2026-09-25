@@ -816,6 +816,31 @@ def check_canvas_saved_before_transform():
            not bad, "\n         ".join(bad))
 
 
+def check_labels_fall_back():
+    """
+    认不出的名字要用**它自己**，不能是空串。
+
+    用户报的「自己添加的骨骼在逻辑里面没有显示名字」：`Labels.bone` 认不出就 `?: ""`，而逻辑
+    页的主体名、部位那一行、深度页的层名、骨骼列表全都调它 —— 于是自己加的骨骼在界面上是
+    一片空白。判据只有一条，而且正是那条 bug：**回退必须引用传进来的那个名字**。
+    """
+    labels_kt = next((open(p, encoding="utf-8").read() for p in kotlin_files()
+                      if p.endswith("ui/Labels.kt")), "")
+    m = re.search(r"fun bone\(context: Context, bone: String\): String =\s*\n?(.*)", labels_kt)
+    body = m.group(1) if m else ""
+    report("骨头名认不出时回退到它自己的名字（不是空串）",
+           "?: bone" in body or "ifEmpty { bone }" in body,
+           body.strip()[:70])
+    # 同一个毛病在别处也出现过（骨骼编辑器自己抄了一份前缀表）—— 判据是"只有一处实现"。
+    skel_kt = next((open(p, encoding="utf-8").read() for p in kotlin_files()
+                    if p.endswith("ui/SkeletonView.kt")), "")
+    # 骨骼编辑器原来自己抄了一份"前缀 → 中文"的表（认不出就空串），所以判据是
+    # **那一份表不在了**、名字走同一处 —— 不是"文件里没有 startsWith"（骨骼颜色也用它）。
+    report("骨头名只有一处实现（骨骼编辑器那份前缀表已经删掉，改用 Labels）",
+           "private fun boneLabel(name: String): String = Labels.bone(context, name)" in skel_kt
+           and "private fun boneLabel(name: String): String = when {" not in skel_kt)
+
+
 def check_one_home_for_a_file_name():
     """
     A file the app writes and reads has to be named in exactly ONE place.
@@ -898,6 +923,7 @@ def main():
     check_view_resources()
     check_platform_view_names()
     check_canvas_saved_before_transform()
+    check_labels_fall_back()
     check_one_home_for_a_file_name()
     check_dialog_bodies_scroll()
     print("")

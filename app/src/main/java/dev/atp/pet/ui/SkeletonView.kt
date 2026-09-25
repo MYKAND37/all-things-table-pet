@@ -810,16 +810,11 @@ class SkeletonView @JvmOverloads constructor(
         onInfo?.invoke(name + " · " + boneLabel(name))
     }
 
-    private fun boneLabel(name: String): String = when {
-        name.startsWith("shoulder") -> "肩"
-        name.startsWith("upperarm") -> "上臂"
-        name.startsWith("forearm") -> "前臂"
-        name.startsWith("hand") -> "手"
-        name.startsWith("thigh") -> "大腿"
-        name.startsWith("shin") -> "小腿"
-        name.startsWith("foot") -> "脚"
-        else -> ""
-    }
+    /**
+     * 一根骨头叫什么。**同一个来源**（[Labels.bone]）—— 这里原来自己抄了一份"前缀 → 中文"的
+     * 表，认不出的骨头返回空串，于是用户自己加的骨骼在这一页也是空白。
+     */
+    private fun boneLabel(name: String): String = Labels.bone(context, name)
 
     /** Drag the end of a limb: a two-bone chain is solved, a single bone is aimed. */
     private fun dragHandle(h: Handle, sk: Skeleton, event: MotionEvent) {
