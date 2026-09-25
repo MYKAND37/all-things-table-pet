@@ -507,6 +507,20 @@ class Engine:
                 out.extend(self.branch_actions(index, rule, bi))
         return out
 
+    def run_rule(self, rid):
+        """按 id 跑一条规则（动画的姿态锚点绑的就是它，1.24.0）。
+
+        和 handle 的区别只有一处：不问「当」—— 触发已经发生了。如果、冷却、只一次全都不放宽，
+        因为走的是同一个 fire()。
+        """
+        if not rid:
+            return []
+        for index, rule in enumerate(self.spec["rules"]):
+            if rule.get("id") == rid:
+                return self.fire(index, rule, set())
+        self.lines.append("· 动画的锚点绑着规则 " + str(rid) + "，但这份文件里已经没有它了")
+        return []
+
     def handle(self, etype, part="", value=0.0, prop=""):
         return self.resolve({"type": etype, "part": part, "value": value, "prop": prop})
 
@@ -799,6 +813,43 @@ def main():
     e.value["H"] = 10.0
     report("clamped at the bottom", e.add("H", -40) == -10.0, str(e.value["H"]))
     report("an unknown stat is ignored", e.add("ZZ", 5) == 0.0)
+
+    print("\n姿态锚点绑的规则：按 id 跑一条（1.24.0）")
+    # 动画的锚点不问「当」（播放头走到那一刻，触发已经发生了），但**如果**、冷却、只一次
+    # 一个字都不放宽 —— 走的是同一个 fire()。
+    anchor_spec = {"stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100}],
+                   "rules": [
+                       {"id": "wave", "on": "click", "cooldown": 0.0,
+                        "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                        "then": [{"kind": "say", "text": "挥手"}],
+                        "else": [{"kind": "say", "text": "太累了"}]},
+                       {"id": "tired", "on": "click", "cooldown": 0.0, "once": True,
+                        "then": [{"kind": "add", "stat": "H", "value": -10}]},
+                   ]}
+    e = Engine(anchor_spec)
+    report("按 id 直接跑：动作照样出来（不问当）", says(e.run_rule("wave")) == ["挥手"])
+    e.value["H"] = 10.0
+    report("如果照样要过：条件不成立就走否则", says(e.run_rule("wave")) == ["太累了"])
+
+    cool = Engine({"stats": [], "rules": [
+        {"id": "beat", "on": "click", "cooldown": 5.0, "then": [{"kind": "say", "text": "咚"}]}]})
+    report("冷却照样算：同一个 clock 里只响一次",
+           says(cool.run_rule("beat")) == ["咚"] and says(cool.run_rule("beat")) == [])
+    cool.clock += 6.0
+    report("冷却过去之后又响", says(cool.run_rule("beat")) == ["咚"])
+
+    once = Engine({"stats": [], "rules": [
+        {"id": "only", "on": "click", "once": True, "cooldown": 0.0,
+         "then": [{"kind": "say", "text": "一辈子一次"}]}]})
+    report("只一次照样只一次",
+           says(once.run_rule("only")) == ["一辈子一次"] and says(once.run_rule("only")) == [])
+    missing = Engine({"stats": [], "rules": []})
+    report("找不到的 id：什么都不做，但说一句（不静默）",
+           missing.run_rule("not-there") == []
+           and any("not-there" in l for l in missing.lines))
+    blank = Engine({"stats": [], "rules": []})
+    report("空 id 连日志都不写（没绑就是没绑）",
+           blank.run_rule("") == [] and not blank.lines)
 
     print("\nonce-only rules")
     e = Engine({"stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],

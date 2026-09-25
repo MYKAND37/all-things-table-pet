@@ -1053,6 +1053,7 @@ class CharacterStore(private val context: Context) {
                         angles = angles,
                         state = f.optString("state", ""),
                         seconds = f.optDouble("seconds", 0.4).toFloat(),
+                        rule = f.optString("rule", ""),
                     )
                 }
                 AnimationSpec(
@@ -1145,6 +1146,8 @@ class CharacterStore(private val context: Context) {
                         .put("angles", angles)
                         .put("state", f.state)
                         .put("seconds", f.seconds.toDouble())
+                        // 姿态锚点绑的规则（1.24.0）。空的时候也写：读的那一半要看到同一个键。
+                        .put("rule", f.rule)
                 )
             }
             arr.put(

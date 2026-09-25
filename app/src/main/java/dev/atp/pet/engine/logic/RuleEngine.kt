@@ -175,6 +175,32 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
      */
     fun handle(event: GameEvent): List<ActionSpec> = resolve(event.copy(at = clock))
 
+    /** 这份文件里有没有这条规则（按 id）。动画的锚点绑的是 id，删掉规则之后要说得出来。 */
+    fun hasRule(id: String): Boolean = spec.rules.any { it.id == id }
+
+    /**
+     * 按 id 跑一条规则 —— 动画的**姿态锚点**绑的就是它（1.24.0）。
+     *
+     * 和事件那条路的区别只有一处：这里不问「当」。触发**已经**发生了（播放头走到了锚点那一格），
+     * 再问"你等的是不是这个事件"就没有意义了。
+     *
+     * 其余一个字都不放宽：**如果**照样要过（条件不成立、而且没有否则，就是不响）、冷却照样算、
+     * 「只一次」照样只一次 —— 那些是规则自己的规矩，动画没有权力替它跳过。走的是同一个
+     * [fire]，所以"按 id 跑"和"事件触发"不可能长出两套语义。
+     *
+     * 找不到这条规则时**什么都不做**，但在日志里说一句：绑着的规则被删掉，是用户做得到的事，
+     * 而一个悄悄不响的锚点和一个坏掉的锚点长得一模一样。
+     */
+    fun runRule(id: String): List<ActionSpec> {
+        if (id.isEmpty()) return emptyList()
+        val index = spec.rules.indexOfFirst { it.id == id }
+        if (index < 0) {
+            log("· 动画的锚点绑着规则 " + id + "，但这份文件里已经没有它了")
+            return emptyList()
+        }
+        return fire(index, spec.rules[index], mutableSetOf())
+    }
+
     /** Time passing: delayed actions come due, and TICK is raised on its own schedule. */
     fun step(dt: Float): List<ActionSpec> {
         clock += dt

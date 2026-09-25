@@ -341,6 +341,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * 和 [animState] 一样，它们只进渲染器，不进引擎 —— 所以规则问不到它们，宠物的碰撞、
      * 绳子、被抓起来的手感也一点都不变。
      */
+    /**
+     * 姿态锚点绑的规则（1.24.0）：这是第几遍、这一遍里哪些锚点已经响过。
+     *
+     * 一遍响一次（不是"每帧都响"），所以循环的动画每绕一圈，同一格的规则会再响一次 ——
+     * "每走一圈就咳一下"这种动画因此不需要任何额外机制。
+     */
+    private var animPass = -1
+    private val animFired = mutableSetOf<Int>()
+
     private var animOffsetX: Map<String, Float> = emptyMap()
     private var animOffsetY: Map<String, Float> = emptyMap()
     private var animScale: Map<String, Float> = emptyMap()
@@ -1255,6 +1264,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         animFrame = 0
         animFrames = anim.frames.size
         animState = anim.frames.first().state
+        animPass = -1
+        animFired.clear()
         invalidate()
         return true
     }
@@ -1275,6 +1286,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         animOffsetX = emptyMap()
         animOffsetY = emptyMap()
         animScale = emptyMap()
+        animPass = -1
+        animFired.clear()
         invalidate()
     }
 
@@ -1906,6 +1919,24 @@ class PhysicsSandboxView @JvmOverloads constructor(
         animOffsetX = s.offsetX
         animOffsetY = s.offsetY
         animScale = s.scale
+
+        // 姿态锚点绑的规则：播放头**走到**那一格时响一次。一遍只响一次（pass 变了才清），
+        // 所以循环的动画每绕一圈会再响一次，而"停在这一格"不会每帧都响。
+        val pass = Timeline.passIndex(anim, playClock)
+        if (pass != animPass) {
+            animPass = pass
+            animFired.clear()
+        }
+        val bound = anim.frames.getOrNull(s.frame)?.rule ?: ""
+        if (bound.isNotEmpty() && animFired.add(s.frame)) {
+            val actions = engine?.runRule(bound) ?: emptyList()
+            if (actions.isNotEmpty()) {
+                perform(actions, null)
+                // 和别的执行动作的路一样：动作抬起来的信号得当场发出去，否则一条
+                // 「响完再喊一声」的规则要等到下次有人碰它才响。
+                drainSignals()
+            }
+        }
         // 不循环的走完了就停下 —— 停在最后一帧上：姿势留到最后那一帧，图也留着。
         if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
             playing = null

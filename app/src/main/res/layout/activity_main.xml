@@ -305,12 +305,25 @@
                 右边能看见角色（1.22.0），因为"摆一帧"本来就是对着角色摆的：在左边改数字、
                 跑到测试场看效果、再跑回来，那不是编辑动画，那是来回跑。
             -->
+            <!--
+                动画管理是一整页：工作台（列表 + 时间轴 + 角色）+ 底栏 + 它自己的状态行。
+
+                这三样必须**纵向排下来**，不能浮在内容上面（1.23.1）：平板横屏时屏幕矮，浮着
+                的底栏正好压在时间轴上 —— 用户看到的就是"时间轴和按钮全被挡住了"。
+            -->
             <LinearLayout
-                android:id="@+id/animRow"
+                android:id="@+id/animPane"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
                 android:orientation="vertical"
                 android:visibility="gone">
+
+              <LinearLayout
+                android:id="@+id/animRow"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
 
               <LinearLayout
                 android:layout_width="match_parent"
@@ -380,7 +393,7 @@
                     android:id="@+id/animTimelineScroll"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:maxHeight="240dp"
+                    android:maxHeight="170dp"
                     android:background="@drawable/glass_panel"
                     android:paddingStart="6dp"
                     android:paddingEnd="6dp"
@@ -391,6 +404,128 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content" />
                 </ScrollView>
+              </LinearLayout>
+
+                <HorizontalScrollView
+                    android:id="@+id/animBarScroll"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="8dp"
+                    android:paddingEnd="8dp"
+                    android:scrollbars="none"
+                    android:visibility="gone">
+
+                    <LinearLayout
+                        android:id="@+id/animBar"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:gravity="center"
+                        android:orientation="horizontal"
+                        android:paddingTop="6dp"
+                        android:paddingBottom="6dp">
+
+                        <TextView
+                            android:id="@+id/animPlay"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_play" />
+
+                        <!-- 姿态锚点（1.24.0）：一帧 = 一整套姿势，落在播放头那一刻。
+                             绑了规则的锚点，播到它的时候会响一次（见 bindStudioRule）。 -->
+                        <TextView
+                            android:id="@+id/animFrameAdd"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_anchor_add" />
+
+                        <TextView
+                            android:id="@+id/animBind"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_bind" />
+
+                        <TextView
+                            android:id="@+id/animSaveFrame"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_save_frame" />
+
+                        <TextView
+                            android:id="@+id/animSlower"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_frame_shorter" />
+
+                        <TextView
+                            android:id="@+id/animLonger"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_frame_longer" />
+
+                        <TextView
+                            android:id="@+id/animDropFrame"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_drop_frame" />
+
+                        <TextView
+                            android:id="@+id/animResetPose"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_reset_pose" />
+
+                        <!-- 时间轴（1.23.0）：打一个关键帧 / 删一个 / 换通道 / 把帧转成通道。 -->
+                        <TextView
+                            android:id="@+id/animKeyAdd"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_key_add" />
+
+                        <TextView
+                            android:id="@+id/animKeyDrop"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_key_drop" />
+
+                        <TextView
+                            android:id="@+id/animChannel"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_channel_rot" />
+
+                        <TextView
+                            android:id="@+id/animBake"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_bake" />
+
+                        <TextView
+                            android:id="@+id/animFit"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_fit" />
+
+                        <TextView
+                            android:id="@+id/animBones"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_bones" />
+
+                        <TextView
+                            android:id="@+id/animEditBones"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_edit_bones" />
+
+                        <TextView
+                            android:id="@+id/animSaveBones"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_save_bones" />
+
+                        <TextView
+                            android:id="@+id/animMeta"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_meta" />
+                    </LinearLayout>
+                </HorizontalScrollView>
+
+                <!-- 工作台自己的状态行。根布局那条在这一页是藏起来的（见 show()）：
+                     否则它会盖在底栏上，而底栏会盖在时间轴上。 -->
+                <TextView
+                    android:id="@+id/animStatus"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:paddingStart="6dp"
+                    android:paddingTop="4dp"
+                    android:paddingEnd="6dp"
+                    android:paddingBottom="6dp"
+                    android:textColor="@color/text_muted"
+                    android:textSize="11sp" />
             </LinearLayout>
 
             <!-- ── 全局设置 ─────────────────────────── -->
@@ -667,107 +802,6 @@
                 动画工作台的底下那条：都是"对这一帧做什么"。顺序照着做一帧的顺序排 ——
                 先播看一遍、再把现在的样子存进这一帧、再调时长，最后才是加帧删帧。
             -->
-            <HorizontalScrollView
-                android:id="@+id/animBarScroll"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_gravity="bottom"
-                android:paddingStart="8dp"
-                android:paddingEnd="8dp"
-                android:scrollbars="none"
-                android:visibility="gone">
-
-                <LinearLayout
-                    android:id="@+id/animBar"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:gravity="center"
-                    android:orientation="horizontal"
-                    android:paddingTop="6dp"
-                    android:paddingBottom="6dp">
-
-                    <TextView
-                        android:id="@+id/animPlay"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_play" />
-
-                    <TextView
-                        android:id="@+id/animFrameAdd"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_frame_add" />
-
-                    <TextView
-                        android:id="@+id/animSaveFrame"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_save_frame" />
-
-                    <TextView
-                        android:id="@+id/animSlower"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_frame_shorter" />
-
-                    <TextView
-                        android:id="@+id/animLonger"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_frame_longer" />
-
-                    <TextView
-                        android:id="@+id/animDropFrame"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_drop_frame" />
-
-                    <TextView
-                        android:id="@+id/animResetPose"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_reset_pose" />
-
-                    <!-- 时间轴（1.23.0）：打一个关键帧 / 删一个 / 换通道 / 把帧转成通道。 -->
-                    <TextView
-                        android:id="@+id/animKeyAdd"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_key_add" />
-
-                    <TextView
-                        android:id="@+id/animKeyDrop"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_key_drop" />
-
-                    <TextView
-                        android:id="@+id/animChannel"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_channel_rot" />
-
-                    <TextView
-                        android:id="@+id/animBake"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_bake" />
-
-                    <TextView
-                        android:id="@+id/animFit"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_fit" />
-
-                    <TextView
-                        android:id="@+id/animBones"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_bones" />
-
-                    <TextView
-                        android:id="@+id/animEditBones"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_edit_bones" />
-
-                    <TextView
-                        android:id="@+id/animSaveBones"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_save_bones" />
-
-                    <TextView
-                        android:id="@+id/animMeta"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_meta" />
-                </LinearLayout>
-            </HorizontalScrollView>
 
             <TextView
                 android:id="@+id/statusLine"

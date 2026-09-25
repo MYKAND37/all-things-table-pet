@@ -26,6 +26,16 @@ data class AnimFrame(
     val angles: Map<String, Float> = emptyMap(),
     val state: String = "",
     val seconds: Float = Anim.DEFAULT_FRAME_SECONDS,
+    /**
+     * 绑在这一帧上的**规则 id**（1.24.0），空 = 没绑。
+     *
+     * 一帧本来就是"一整套完整的姿势 + 这一刻画哪套图"，所以它也是时间轴上那个**姿态锚点**：
+     * 播到这一格的时候，如果绑了规则，就让引擎按 id 跑那条规则（[Timeline] 那边只管时间，
+     * 谁去跑由宿主决定 —— 编辑器里没有世界可跑，测试场和桌面那两只有）。
+     *
+     * 存的是 **id 不是名字**：规则可以改名，而锚点认的是"哪一条"。
+     */
+    val rule: String = "",
 )
 
 /**

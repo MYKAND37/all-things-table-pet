@@ -374,6 +374,21 @@ object Timeline {
      */
     fun maxTime(spec: AnimationSpec): Float = max(Anim.MIN_FRAME, Anim.duration(spec))
 
+    /**
+     * 这是第几遍（0 起）。循环动画每绕一圈 +1，不循环的永远是 0。
+     *
+     * 姿态锚点绑的规则"每经过一次响一次"，靠的就是它：同一个 pass 里响过的锚点记在宿主那儿，
+     * pass 一变就清空。用"帧号变了"来判断是不行的 —— 一帧的动画循环时帧号一直是 0，
+     * 那条规则就再也响不了；而用"秒数取模"又会在浮点边界上抖。整遍数是个整数，不抖。
+     */
+    fun passIndex(spec: AnimationSpec, seconds: Float): Int {
+        // 不循环的动画一辈子就一遍：它走完就停了，没有"第二遍"可言。
+        if (!spec.loop) return 0
+        val total = Anim.duration(spec)
+        if (total <= 0f) return 0
+        return max(0, kotlin.math.floor(max(0f, seconds) * Anim.speedOf(spec) / total).toInt())
+    }
+
     /** 两个关键帧算"同一时刻"的容差，和界面那 0.01 秒的吸附对齐。 */
     const val TIME_EPSILON = 0.005f
 }

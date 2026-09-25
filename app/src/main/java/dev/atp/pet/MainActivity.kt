@@ -279,11 +279,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var particleList: LinearLayout
     private lateinit var animScroll: View
     private lateinit var animList: LinearLayout
+    private lateinit var animPane: View
+    private lateinit var animStatus: TextView
     private lateinit var animRow: View
     private lateinit var animView: SkeletonView
     private lateinit var animTimeline: TimelineView
     private lateinit var animStates: LinearLayout
-    private lateinit var animBarScroll: View
     private lateinit var animPlay: TextView
     private lateinit var animBonesChip: TextView
     private lateinit var animEditBones: TextView
@@ -382,17 +383,19 @@ class MainActivity : AppCompatActivity() {
         particleScroll = findViewById(R.id.particleScroll)
         animScroll = findViewById(R.id.animScroll)
         animList = findViewById(R.id.animList)
+        animPane = findViewById(R.id.animPane)
+        animStatus = findViewById(R.id.animStatus)
         animRow = findViewById(R.id.animRow)
         animView = findViewById(R.id.animView)
         animTimeline = findViewById(R.id.animTimeline)
         animStates = findViewById(R.id.animStates)
-        animBarScroll = findViewById(R.id.animBarScroll)
         animPlay = findViewById(R.id.animPlay)
         animBonesChip = findViewById(R.id.animBones)
         animEditBones = findViewById(R.id.animEditBones)
         animSaveBones = findViewById(R.id.animSaveBones)
         animPlay.setOnClickListener { toggleStudioPlay() }
-        findViewById<View>(R.id.animFrameAdd).setOnClickListener { captureStudioFrame() }
+        findViewById<View>(R.id.animFrameAdd).setOnClickListener { addStudioAnchor() }
+        findViewById<View>(R.id.animBind).setOnClickListener { bindStudioRule() }
         findViewById<View>(R.id.animSaveFrame).setOnClickListener { saveStudioFrame() }
         findViewById<View>(R.id.animSlower).setOnClickListener { nudgeStudioFrame(-0.1f) }
         findViewById<View>(R.id.animLonger).setOnClickListener { nudgeStudioFrame(0.1f) }
@@ -411,6 +414,7 @@ class MainActivity : AppCompatActivity() {
         animTimeline.onKeyPicked = { bone, index -> pickStudioKey(bone, index) }
         animTimeline.onKeyMoved = { bone, index, t, v, done -> moveStudioKey(bone, index, t, v, done) }
         animTimeline.onFramePicked = { index -> pickStudioFrame(index) }
+        animTimeline.onAnchorPicked = { index -> pickStudioAnchor(index) }
         animTimeline.onBonePicked = { bone -> pickStudioBone(bone) }
         findViewById<View>(R.id.animMeta).setOnClickListener {
             // 名字/速度/循环，外加"删掉这一段"。帧本身在这页里编，所以那个弹窗不带帧那一半。
@@ -418,7 +422,7 @@ class MainActivity : AppCompatActivity() {
             askAnimation(folder, anim, withFrames = false) { buildAnimList() }
         }
         // 工作台里摆姿势：姿势是**抓帧的内容**，所以拖动本身不改任何东西，改的是"现在这个样子"。
-        animView.onInfo = { statusLine.text = it }
+        animView.onInfo = { animStatus.text = it }
         animView.onPoseEdited = {
             if (animPlaying) haltStudioPlay()
             markStudioDirty()
@@ -799,8 +803,9 @@ class MainActivity : AppCompatActivity() {
         logicPane.visibility = if (pane == Pane.PET_LOGIC) View.VISIBLE else View.GONE
         liquidScroll.visibility = if (pane == Pane.LIQUIDS) View.VISIBLE else View.GONE
         particleScroll.visibility = if (pane == Pane.PARTICLES) View.VISIBLE else View.GONE
-        animRow.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
-        animBarScroll.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
+        // 动画页是**一整页**（工作台 + 时间轴 + 底栏 + 它自己的状态行），一起开关。
+        // 底栏和状态行不再是浮在内容上面的那一层 —— 平板横屏时那会正好压在时间轴上。
+        animPane.visibility = if (pane == Pane.ANIMS) View.VISIBLE else View.GONE
         settingsScroll.visibility = if (pane == Pane.SETTINGS) View.VISIBLE else View.GONE
         rigBar.visibility = if (pane == Pane.PET_RIG) View.VISIBLE else View.GONE
         if (pane != Pane.PET_RIG && rigBoneMode) {
@@ -816,8 +821,7 @@ class MainActivity : AppCompatActivity() {
         statusLine.visibility =
             if (pane == Pane.SANDBOX || pane == Pane.PET_RIG || pane == Pane.PART_ALIGN ||
                 pane == Pane.PET_PROPS || pane == Pane.PET_LOGIC || pane == Pane.PET_PART_FILES ||
-                pane == Pane.LIQUIDS || pane == Pane.PARTICLES || pane == Pane.SETTINGS ||
-                pane == Pane.ANIMS
+                pane == Pane.LIQUIDS || pane == Pane.PARTICLES || pane == Pane.SETTINGS
             ) View.VISIBLE else View.GONE
 
         when (pane) {
@@ -840,7 +844,7 @@ class MainActivity : AppCompatActivity() {
                 }
             Pane.LIQUIDS -> statusLine.text = getString(R.string.liquid_subtitle)
             Pane.PARTICLES -> statusLine.text = getString(R.string.particle_subtitle)
-            Pane.ANIMS -> statusLine.text = getString(R.string.anim_page_hint)
+            Pane.ANIMS -> animStatus.text = getString(R.string.anim_page_hint)
             Pane.SETTINGS -> statusLine.text = getString(R.string.settings_hint)
             Pane.PLACEHOLDER -> statusLine.text = ""
         }
@@ -5881,7 +5885,7 @@ class MainActivity : AppCompatActivity() {
         applyStudioStates()
         buildStateChips(folder)
         refreshTimeline(folder, anim, here)
-        statusLine.text = frameStatusText(anim, animFrameIndex)
+        animStatus.text = frameStatusText(anim, animFrameIndex)
     }
 
     /**
@@ -6002,7 +6006,7 @@ class MainActivity : AppCompatActivity() {
         animKeyIndex = Timeline.withKey(track.keys(animChannel), t, value).indexOfLast { it.t <= t + Timeline.TIME_EPSILON }
         writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
         buildAnimList()
-        statusLine.text = getString(
+        animStatus.text = getString(
             R.string.anim_key_added, bone, channelLabel(), "%.2f".format(t), formatValue(value),
         )
     }
@@ -6021,7 +6025,7 @@ class MainActivity : AppCompatActivity() {
         animKeyIndex = -1
         writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
         buildAnimList()
-        statusLine.text = getString(R.string.anim_key_dropped, bone, channelLabel())
+        animStatus.text = getString(R.string.anim_key_dropped, bone, channelLabel())
     }
 
     /** 「通道：…」：旋转 → 位置X → 位置Y → 缩放，转一圈。 */
@@ -6095,7 +6099,7 @@ class MainActivity : AppCompatActivity() {
         if (!writeStudioAnimation(folder, anim.copy(tracks = baked))) return
         animKeyIndex = -1
         buildAnimList()
-        statusLine.text = getString(R.string.anim_baked, Timeline.trackedBones(anim.copy(tracks = baked)))
+        animStatus.text = getString(R.string.anim_baked, Timeline.trackedBones(anim.copy(tracks = baked)))
     }
 
     /** 拖播放头：把这一刻的样子摆到右边，并选中"这一刻落在哪一帧"。 */
@@ -6114,7 +6118,7 @@ class MainActivity : AppCompatActivity() {
         animTimeline.setData(anim, animTimeline.bones, animChannel)
         animTimeline.setPlayhead(t)
         animTimeline.setSelection(animBone, animKeyIndex, animFrameIndex)
-        statusLine.text = getString(
+        animStatus.text = getString(
             R.string.anim_scrub, "%.2f".format(t), animFrameIndex + 1,
         )
     }
@@ -6131,7 +6135,7 @@ class MainActivity : AppCompatActivity() {
         applyStudioSample(sample)
         animTimeline.setPlayhead(key.t)
         animTimeline.setSelection(bone, index, animFrameIndex)
-        statusLine.text = getString(
+        animStatus.text = getString(
             R.string.anim_key_status, bone, channelLabel(), formatValue(key.v), "%.2f".format(key.t),
         )
     }
@@ -6158,7 +6162,7 @@ class MainActivity : AppCompatActivity() {
         animTimeline.setPlayhead(t)
         animTimeline.setSelection(bone, animKeyIndex, animFrameIndex)
         if (!done) {
-            statusLine.text = getString(
+            animStatus.text = getString(
                 R.string.anim_key_status, bone, channelLabel(), formatValue(v), "%.2f".format(t),
             )
             return
@@ -6185,7 +6189,7 @@ class MainActivity : AppCompatActivity() {
         // 预览也跟着选中它：时间轴上点名字和画布上拖关节应该是同一件事。
         animView.focusOn(bone)
         val anim = studioFolder()?.let { studioAnimation(it) } ?: return
-        statusLine.text = frameStatusText(anim, animFrameIndex)
+        animStatus.text = frameStatusText(anim, animFrameIndex)
     }
 
     /** 换了一套图：重画那一排（✓ 的位置变了），预览跟着换，并记下"和这一帧不一样了"。 */
@@ -6198,7 +6202,7 @@ class MainActivity : AppCompatActivity() {
     /** 用户改过预览（姿势或图）：说明"现在看到的不等于存下来的"。 */
     private fun markStudioDirty() {
         val anim = studioFolder()?.let { studioAnimation(it) } ?: return
-        statusLine.text = getString(R.string.anim_dirty_hint) + " · " + frameStatusText(anim, animFrameIndex)
+        animStatus.text = getString(R.string.anim_dirty_hint) + " · " + frameStatusText(anim, animFrameIndex)
     }
 
     /** 状态栏那一行：第几帧、多久、存的是几节骨头、哪几套图。 */
@@ -6230,7 +6234,7 @@ class MainActivity : AppCompatActivity() {
         animLastTick = System.nanoTime()
         animShownFrame = -1
         animPlay.text = getString(R.string.anim_stop)
-        statusLine.text = getString(R.string.anim_playing_hint)
+        animStatus.text = getString(R.string.anim_playing_hint)
         animView.postOnAnimation(studioTick)
     }
 
@@ -6306,31 +6310,162 @@ class MainActivity : AppCompatActivity() {
         showStudioFrame(folder, anim, animFrameIndex)
     }
 
-    /** 「＋ 帧」：把**现在的样子**（姿势 + 开着的图）插到这一帧后面，并选中新的那一帧。 */
-    private fun captureStudioFrame() {
+    /**
+     * 「＋锚点」：把**现在的样子**（一整套姿势 + 开着的图）存成一个姿态锚点。
+     *
+     * 落在哪儿由**播放头**说了算，两种情况各是各的：
+     *
+     *  * 播放头正落在某一帧的开头 → 在它**后面**插一帧（和老的「＋ 帧」一样：连按几下就是一串
+     *    锚点，节奏是"上一帧多长、新的就多长"）；
+     *  * 播放头落在某一帧**中间** → 把那一帧在播放头处**断开**：前半段留在原帧，新的锚点拿走
+     *    后半段的时长。整段动画的长度一点没变，所以时间轴上的关键帧一个都不用挪。
+     *
+     * 这就是"锚点"和"帧"在本应用里是同一个东西的原因：一帧本来就是"某一刻起的一整套姿势"。
+     */
+    private fun addStudioAnchor() {
         val (folder, anim) = studioEdit() ?: return
         haltStudioPlay()
-        val at = if (anim.frames.isEmpty()) 0 else (animFrameIndex + 1).coerceAtMost(anim.frames.size)
-        val frame = AnimFrame(
-            angles = animView.currentAngles(),
-            state = Anim.joinStates(animLiveStates),
-            // 新的一帧先跟上一帧一样长：连抓几帧做一个动作时，节奏不该每帧都要重调一遍。
-            seconds = anim.frames.getOrNull(animFrameIndex)?.seconds ?: Anim.DEFAULT_FRAME_SECONDS,
-        )
-        val next = anim.frames.toMutableList().apply { add(at, frame) }
-        // 帧和通道是同一个时间轴的两半：往中间插一帧，后面的关键帧必须跟着往后挪，
-        // 否则图往后走了一格、通道留在原地，动作和画就对不上了。
-        val shifted = Timeline.shifted(
-            anim.tracks, TimelineLayout.frameStarts(anim).getOrElse(at) { 0f },
-            Anim.frameSeconds(frame), Anim.duration(anim.copy(frames = next)),
-        )
-        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = shifted))) return
-        animFrameIndex = at
+        val t = animTimeline.playhead
+        val starts = TimelineLayout.frameStarts(anim)
+        val pose = animView.currentAngles()
+        val state = Anim.joinStates(animLiveStates)
+        val trackKeys = trackedKeysAt(anim, t, pose)
+
+        if (anim.frames.isEmpty()) {
+            // 一帧都没有：这一下就是第 1 帧，时长给个能看见的默认值。
+            val first = AnimFrame(pose, state, Anim.DEFAULT_FRAME_SECONDS)
+            if (!writeStudioAnimation(folder, anim.copy(frames = listOf(first), tracks = trackKeys))) return
+            animFrameIndex = 0
+            buildAnimList()
+            Toast.makeText(
+                this, getString(R.string.anim_anchor_added, "%.2f".format(0f), 1), Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
+
+        val i = TimelineLayout.frameAt(anim, t)
+        val at = starts.getOrElse(i) { 0f }
+        val here = anim.frames[i]
+        val next = anim.frames.toMutableList()
+        val tracks: Map<String, BoneTrack>
+        val insertedAt: Int
+        if (t <= at + Timeline.TIME_EPSILON) {
+            // 落在帧开头：插在它后面，新的这一帧跟这一帧一样长，后面的关键帧整体后移。
+            val fresh = AnimFrame(pose, state, Anim.frameSeconds(here))
+            insertedAt = i + 1
+            next.add(insertedAt, fresh)
+            tracks = Timeline.shifted(
+                anim.tracks, at, Anim.frameSeconds(fresh),
+                Anim.duration(anim.copy(frames = next)),
+            )
+        } else {
+            // 落在帧中间：把这一帧断开（总时长不变，所以通道一个都不用挪）。
+            val first = (t - at).coerceAtLeast(Anim.MIN_FRAME)
+            val rest = (Anim.frameSeconds(here) - first).coerceAtLeast(Anim.MIN_FRAME)
+            next[i] = here.copy(seconds = first)
+            insertedAt = i + 1
+            next.add(insertedAt, AnimFrame(pose, state, rest))
+            tracks = trackKeysAt(anim, t, pose)
+            Toast.makeText(
+                this, getString(R.string.anim_anchor_split, i + 1, "%.2f".format(t)),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = tracks))) return
+        animFrameIndex = insertedAt
         buildAnimList()
-        Toast.makeText(
-            this, getString(R.string.anim_frame_added, at + 1), Toast.LENGTH_SHORT,
-        ).show()
+        if (t <= at + Timeline.TIME_EPSILON) {
+            Toast.makeText(
+                this,
+                getString(R.string.anim_anchor_added, "%.2f".format(t), insertedAt + 1),
+                Toast.LENGTH_SHORT,
+            ).show()
+        }
     }
+
+    /** 新锚点落下的那一刻，给**已经有通道的骨头**也打一个关键帧（帧和通道是两半）。 */
+    private fun trackedKeysAt(
+        anim: AnimationSpec,
+        t: Float,
+        pose: Map<String, Float>,
+    ): Map<String, BoneTrack> = anim.tracks.mapValues { (bone, track) ->
+        if (track.rot.isEmpty()) return@mapValues track
+        track.copy(rot = Timeline.withKey(track.rot, t, pose[bone] ?: 0f))
+    }
+
+    /** 「绑规则」：给选中的姿态锚点挑一条**这只桌宠自己的**规则，播到它的时候响一次。 */
+    private fun bindStudioRule() {
+        val (folder, anim) = studioEdit() ?: return
+        val frame = anim.frames.getOrNull(animFrameIndex)
+        if (frame == null) {
+            Toast.makeText(this, R.string.anim_need_anchor, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val rules = store.loadLogic(folder.id).rules
+        if (rules.isEmpty()) {
+            Toast.makeText(this, R.string.anim_bind_empty, Toast.LENGTH_LONG).show()
+            return
+        }
+        val options = listOf("" to getString(R.string.anim_bind_none)) +
+            rules.map { it.id to ruleLabel(it) }
+        pickList(
+            title = getString(R.string.anim_bind_title),
+            options = options,
+            hint = getString(R.string.anim_bind_none_hint) + getString(R.string.anim_bind_where),
+            current = frame.rule,
+        ) { picked ->
+            val next = anim.frames.toMutableList().apply {
+                this[animFrameIndex] = frame.copy(rule = picked)
+            }
+            if (writeStudioAnimation(folder, anim.copy(frames = next))) {
+                buildAnimList()
+                Toast.makeText(
+                    this,
+                    if (picked.isEmpty()) {
+                        getString(R.string.anim_bind_cleared, animFrameIndex + 1)
+                    } else {
+                        getString(R.string.anim_bind_done, animFrameIndex + 1, ruleLabel2(rules, picked))
+                    },
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
+            true
+        }
+    }
+
+    /** 规则在选择器里怎么念：「1 · 挥手」这种（编号是它在文件里的位置，和逻辑页一致）。 */
+    private fun ruleLabel(rule: RuleSpec): String {
+        val index = store.loadLogic(studioFolder()?.id ?: "").rules.indexOfFirst { it.id == rule.id }
+        return (index + 1).toString() + " · " + rule.name
+    }
+
+    private fun ruleLabel2(rules: List<RuleSpec>, id: String): String {
+        val index = rules.indexOfFirst { it.id == id }
+        val rule = rules.getOrNull(index)
+        return if (rule == null) id else (index + 1).toString() + " · " + rule.name
+    }
+
+    /** 点了一个姿态锚点：跳播放头、载入它存的那一套姿势（和点图那一块同一件事，换个说法）。 */
+    private fun pickStudioAnchor(index: Int) {
+        haltStudioPlay()
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        showStudioFrame(folder, anim, index)
+        val frame = anim.frames.getOrNull(index) ?: return
+        val rule = if (frame.rule.isEmpty()) {
+            getString(R.string.anim_anchor_unbound)
+        } else {
+            getString(R.string.anim_anchor_bound, ruleLabel2(store.loadLogic(folder.id).rules, frame.rule))
+        }
+        animStatus.text = getString(
+            R.string.anim_anchor_status, index + 1,
+            "%.2f".format(TimelineLayout.frameStarts(anim).getOrElse(index) { 0f }),
+            frame.angles.size,
+            if (frame.state.isEmpty()) getString(R.string.anim_no_art) else frame.state,
+            rule,
+        ) + getString(R.string.anim_bind_where)
+    }
+
 
     /**
      * 「存入这一帧」：把现在这个姿势和这几套图写成这一帧的内容。
@@ -6392,7 +6527,7 @@ class MainActivity : AppCompatActivity() {
         )
         if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = shifted))) return
         buildAnimList()
-        statusLine.text = getString(
+        animStatus.text = getString(
             R.string.anim_frame_seconds_now, animFrameIndex + 1, "%.2f".format(seconds),
         )
     }
@@ -6454,7 +6589,7 @@ class MainActivity : AppCompatActivity() {
         )
         animBonesChip.text = getString(R.string.anim_bones) + if (animShowBones) " ✓" else ""
         animSaveBones.visibility = if (animBoneMode) View.VISIBLE else View.GONE
-        if (animBoneMode) statusLine.text = getString(R.string.anim_bone_mode_hint)
+        if (animBoneMode) animStatus.text = getString(R.string.anim_bone_mode_hint)
     }
 
     /**
@@ -6523,7 +6658,7 @@ class MainActivity : AppCompatActivity() {
             animView.release()
             animViewRig = ""
         }
-        statusLine.text = getString(R.string.anim_pick_one)
+        animStatus.text = getString(R.string.anim_pick_one)
     }
 
     /**

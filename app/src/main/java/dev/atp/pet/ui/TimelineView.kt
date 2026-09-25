@@ -70,6 +70,9 @@ class TimelineView @JvmOverloads constructor(
     var onKeyMoved: ((String, Int, Float, Float, Boolean) -> Unit)? = null
     var onKeyPicked: ((String, Int) -> Unit)? = null
     var onFramePicked: ((Int) -> Unit)? = null
+
+    /** 点了一个姿态锚点（小方块）：和点图那一块一样要跳播放头 + 载入姿势，但说法不同。 */
+    var onAnchorPicked: ((Int) -> Unit)? = null
     var onBonePicked: ((String) -> Unit)? = null
 
     // ── 输入 ───────────────────────────────────────────────────────────────
@@ -102,7 +105,7 @@ class TimelineView @JvmOverloads constructor(
     }
 
     private fun laneOf(row: Int): TimelineLayout.Lane {
-        val top = dp(RULER_DP) + dp(ART_ROW_DP) + row * dp(ROW_DP)
+        val top = dp(RULER_DP) + dp(ANCHOR_ROW_DP) + dp(ART_ROW_DP) + row * dp(ROW_DP)
         val left = dp(TimelineLayout.NAME_COLUMN_DP)
         return TimelineLayout.Lane(
             left, top, max(1f, width - left - dp(RIGHT_PAD_DP)), dp(ROW_DP), duration(),
@@ -112,14 +115,23 @@ class TimelineView @JvmOverloads constructor(
     private fun artLane(): TimelineLayout.Lane {
         val left = dp(TimelineLayout.NAME_COLUMN_DP)
         return TimelineLayout.Lane(
-            left, dp(RULER_DP), max(1f, width - left - dp(RIGHT_PAD_DP)), dp(ART_ROW_DP), duration(),
+            left, dp(RULER_DP) + dp(ANCHOR_ROW_DP),
+            max(1f, width - left - dp(RIGHT_PAD_DP)), dp(ART_ROW_DP), duration(),
+        )
+    }
+
+    /** 姿态锚点那一行：一帧一个小方块，位置就是它开始的那一刻。 */
+    private fun anchorLane(): TimelineLayout.Lane {
+        val left = dp(TimelineLayout.NAME_COLUMN_DP)
+        return TimelineLayout.Lane(
+            left, dp(RULER_DP), max(1f, width - left - dp(RIGHT_PAD_DP)), dp(ANCHOR_ROW_DP), duration(),
         )
     }
 
     private fun duration(): Float = max(0.01f, spec?.let { Timeline.maxTime(it) } ?: 0.01f)
 
     private fun rowAt(y: Float): Int {
-        val first = dp(RULER_DP) + dp(ART_ROW_DP)
+        val first = dp(RULER_DP) + dp(ANCHOR_ROW_DP) + dp(ART_ROW_DP)
         if (y < first) return -1
         val row = ((y - first) / dp(ROW_DP)).toInt()
         return if (row in bones.indices) row else -1
@@ -134,7 +146,8 @@ class TimelineView @JvmOverloads constructor(
         // 不该一样高，而外面那个 ScrollView 负责更长的情况。
         // dp() 给的是像素的浮点数，而 setMeasuredDimension 要的是整数 —— 这里向上取整，
         // 最后一行不会因为少了半个像素被切掉。
-        val h = dp(RULER_DP) + dp(ART_ROW_DP) + bones.size * dp(ROW_DP) + dp(BOTTOM_PAD_DP)
+        val h = dp(RULER_DP) + dp(ANCHOR_ROW_DP) + dp(ART_ROW_DP) +
+            bones.size * dp(ROW_DP) + dp(BOTTOM_PAD_DP)
         setMeasuredDimension(w, Math.ceil(h.toDouble()).toInt())
     }
 
@@ -181,6 +194,7 @@ class TimelineView @JvmOverloads constructor(
         if (width <= 0) return
 
         drawRuler(canvas)
+        drawAnchorRow(canvas, s)
         drawArtRow(canvas, s)
         for (row in bones.indices) drawBoneRow(canvas, row)
         drawPlayhead(canvas)
@@ -203,6 +217,43 @@ class TimelineView @JvmOverloads constructor(
             t += step
         }
         canvas.drawText(context.getString(R.string.timeline_seconds), 2f, dp(12f), tinyPaint)
+    }
+
+    /**
+     * 姿态锚点那一行：一帧一个**小方块**，位置是这一帧开始的那一刻。
+     *
+     * 方块 = 一整套存下来的角色姿势（这一帧的 angles）。空心方块 = 这一帧没存姿势（只有图）；
+     * 右上角多一个小点 = 这一帧**绑了规则**，播到这一格的时候那条规则会响一次。
+     *
+     * 和下面"图"那一行的区别是刻意的：那一行画的是**时长**（块有多宽 = 这一帧走多久），
+     * 这一行画的是**时刻**（方块在哪儿 = 姿势在哪一刻换）。两件事都要看得见。
+     */
+    private fun drawAnchorRow(canvas: Canvas, s: AnimationSpec) {
+        val lane = anchorLane()
+        canvas.drawRect(lane.left, lane.top, lane.left + lane.width, lane.top + lane.height, rowPaint)
+        canvas.drawText(
+            context.getString(R.string.timeline_anchor_row),
+            2f, lane.top + lane.height * 0.7f, tinyPaint,
+        )
+        var acc = 0f
+        for ((i, f) in s.frames.withIndex()) {
+            val x = TimelineLayout.timeToX(lane, acc)
+            val y = lane.top + lane.height / 2f
+            val r = dp(if (i == selectedFrame) 6f else 5f)
+            val posed = f.angles.isNotEmpty()
+            diamond.reset()
+            diamond.moveTo(x, y - r)
+            diamond.lineTo(x + r, y)
+            diamond.lineTo(x, y + r)
+            diamond.lineTo(x - r, y)
+            diamond.close()
+            canvas.drawPath(diamond, if (posed) keyPaint else curvePaint)
+            // 绑了规则的锚点右上角点一个小点 —— 一眼看得出哪几格会"响"。
+            if (f.rule.isNotEmpty()) {
+                canvas.drawCircle(x + r, y - r, dp(3f), playHeadPaint)
+            }
+            acc += Anim.frameSeconds(f)
+        }
     }
 
     /** 图那一行：一帧一块，宽度就是这一帧走多久。点一块 = 选中那一帧。 */
@@ -319,8 +370,23 @@ class TimelineView @JvmOverloads constructor(
                     scrubTo(event.x)
                     return true
                 }
+                // 姿态锚点那一行：点一个小方块 = 跳到那一刻 + 载入那一套姿势。
+                if (event.y < dp(RULER_DP) + dp(ANCHOR_ROW_DP)) {
+                    val lane = anchorLane()
+                    val t = TimelineLayout.xToTime(lane, event.x)
+                    var acc = 0f
+                    for ((i, f) in s.frames.withIndex()) {
+                        val x = TimelineLayout.timeToX(lane, acc)
+                        if (abs(x - event.x) <= dp(TimelineLayout.HIT_RADIUS_DP)) {
+                            onAnchorPicked?.invoke(i)
+                            return true
+                        }
+                        acc += Anim.frameSeconds(f)
+                    }
+                    return false
+                }
                 // 图那一行：点一块就是选中那一帧。
-                if (event.y < dp(RULER_DP) + dp(ART_ROW_DP)) {
+                if (event.y < dp(RULER_DP) + dp(ANCHOR_ROW_DP) + dp(ART_ROW_DP)) {
                     val lane = artLane()
                     val t = TimelineLayout.xToTime(lane, event.x)
                     var acc = 0f
@@ -437,6 +503,9 @@ class TimelineView @JvmOverloads constructor(
     private companion object {
         /** 标尺那一行多高。 */
         const val RULER_DP = 20f
+
+        /** 姿态锚点那一行。 */
+        const val ANCHOR_ROW_DP = 22f
 
         /** 图那一行。 */
         const val ART_ROW_DP = 20f

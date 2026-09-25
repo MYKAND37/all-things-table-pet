@@ -69,6 +69,38 @@ def layout_ids():
     return out
 
 
+def layout_parents():
+    """id -> 父 id（布局里的从属关系）。"谁是谁的孩子"这件事只能这么问。"""
+    out = {}
+    base = os.path.join(RES, "layout")
+    for n in os.listdir(base):
+        if not n.endswith(".xml"):
+            continue
+        try:
+            root = ET.parse(os.path.join(base, n)).getroot()
+        except ET.ParseError:
+            continue
+        parent = {}
+        for p in root.iter():
+            for c in p:
+                parent[c] = p
+        for el in root.iter():
+            vid = el.get("{http://schemas.android.com/apk/res/android}id") or ""
+            if not vid.startswith("@+id/"):
+                continue
+            name = vid[len("@+id/"):]
+            pid = ""
+            cur = el
+            while cur in parent:
+                cur = parent[cur]
+                pv = cur.get("{http://schemas.android.com/apk/res/android}id") or ""
+                if pv.startswith("@+id/"):
+                    pid = pv[len("@+id/"):]
+                    break
+            out[name] = pid
+    return out
+
+
 def kotlin_text():
     parts = {}
     for base, _, names in os.walk(SRC):
@@ -633,8 +665,25 @@ def main():
            "@+id/animList" in layout_text and "@+id/animTimeline" in layout_text
            and "dev.atp.pet.ui.TimelineView" in layout_text
            and "private fun refreshTimeline(" in activity and "animTimeline.setData(" in activity)
-    report("「＋ 帧」还在底栏（帧是图那一行的时间单位，不是被删掉的功能）",
-           "@+id/animFrameAdd" in layout_text and "captureStudioFrame()" in activity)
+    # 平板横屏把这个问题顶出来了：屏幕矮的时候，浮在内容上面的底栏正好压住时间轴。
+    # 所以这一页改成"纵向排下来"的一整页（工作台 / 底栏 / 状态行），而且根布局那条状态行
+    # 在这一页是藏起来的 —— 一条断言直接问布局："谁是谁的孩子"。
+    parents = layout_parents()
+    report("动画页的底栏与状态行在**这一页的纵向流里**，不是浮在内容上面的那一层",
+           parents.get("animBarScroll") == "animPane"
+           and parents.get("animStatus") == "animPane"
+           and parents.get("animRow") == "animPane"
+           and parents.get("animPane") == "content"
+           and "layout_gravity" not in layout_text.split('@+id/animBarScroll')[0].split("<HorizontalScrollView")[-1])
+    report("根布局那条状态行在动画页藏起来（否则它盖底栏、底栏盖时间轴）",
+           "animPane.visibility = if (pane == Pane.ANIMS)" in activity
+           and not re.search(r"pane == Pane\.ANIMS\s*\n\s*\) View\.VISIBLE", activity))
+    report("工作台的状态都写进它自己那一条",
+           activity.count("animStatus.text") >= 12 and "animView.onInfo = { animStatus.text = it }" in activity)
+
+    report("「＋锚点」在底栏（1.24.0 起它按**播放头**落点：帧开头插后面、帧中间断开）",
+           "@+id/animFrameAdd" in layout_text and "addStudioAnchor()" in activity
+           and "anim_anchor_add" in activity)
 
     print("== 时间轴：可拖的播放头、可拖的菱形、每根骨头一条通道 ==")
     tl_kt = next((t for p, t in files.items() if p.endswith("engine/anim/Timeline.kt")), "")
@@ -675,6 +724,43 @@ def main():
     report("位置与缩放**只改画面**：渲染器认它们，求解器一个字都不知道",
            "animOffsetX" in renderer_kt and "private fun animated(" in renderer_kt
            and "animOffsetX" not in ragdoll_kt and "animScale" not in ragdoll_kt)
+    print("== 姿态锚点：小方块、绑规则、播到就响（1.24.0）==")
+    logic_kt = next((t for p, t in files.items() if p.endswith("engine/logic/RuleEngine.kt")), "")
+    report("锚点就是帧：一帧本来就带一整套姿势，锚点只是它在时间轴上的画法",
+           "val rule: String = \"\"" in anim_kt and "private fun addStudioAnchor(" in activity)
+    report("锚点那一行画的是**时刻**（小方块），图那一行画的是**时长**（块有多宽）",
+           "private fun drawAnchorRow(" in view_kt and "private fun anchorLane(" in view_kt
+           and "private fun drawArtRow(" in view_kt and "ANCHOR_ROW_DP" in view_kt)
+    report("点小方块 = 跳播放头 + 载入那一套姿势（独立回调，说话不一样）",
+           "var onAnchorPicked: ((Int) -> Unit)?" in view_kt
+           and "animTimeline.onAnchorPicked" in activity and "private fun pickStudioAnchor(" in activity)
+    report("＋锚点落在**播放头**那一刻：帧开头插后面、帧中间就把那一帧断开",
+           "val t = animTimeline.playhead" in activity
+           and "next[i] = here.copy(seconds = first)" in activity
+           and "next.add(insertedAt, AnimFrame(pose, state, rest))" in activity)
+    report("断开不改总时长，所以那种情况下一个关键帧都不用挪",
+           "tracks = trackKeysAt(anim, t, pose)" in activity
+           and activity.count("Timeline.shifted(") >= 2)
+    report("绑的是 id（规则能改名，锚点认的是哪一条）",
+           'put("rule", f.rule)' in next((t for p, t in files.items()
+                                          if p.endswith("data/CharacterStore.kt")), "")
+           and 'rule = f.optString("rule", "")' in next((t for p, t in files.items()
+                                                          if p.endswith("data/CharacterStore.kt")), ""))
+    report("引擎多了一个入口：按 id 跑一条规则（走的是同一个 fire）",
+           "fun runRule(id: String): List<ActionSpec>" in logic_kt
+           and "return fire(index, spec.rules[index], mutableSetOf())" in logic_kt)
+    report("触发只免掉「当」：如果 / 冷却 / 只一次 一个字都不放宽",
+           "fun hasRule(id: String): Boolean" in logic_kt
+           and "这份文件里已经没有它了" in logic_kt)
+    report("播到那一格才响，而且**一遍只响一次**（循环每绕一圈再响）",
+           "Timeline.passIndex(anim, playClock)" in bench and "animFired.add(s.frame)" in bench
+           and "fun passIndex(spec: AnimationSpec, seconds: Float): Int" in tl_kt)
+    report("响完抬起来的信号当场发出去（不然要等下一次有人碰它）",
+           "engine?.runRule(bound)" in bench and "drainSignals()" in bench)
+    report("绑规则有入口，而且说清楚规则只在测试场和桌面上才会响",
+           "@+id/animBind" in layout_text and "private fun bindStudioRule(" in activity
+           and "anim_bind_where" in activity)
+
     report("两根骨头之间的插值在引擎里，界面不算数学",
            "fun valueAt(keys: List<AnimKey>, time: Float)" in tl_kt
            and "fun ease(f: Float, kind: Int)" in tl_kt and "fun withKey(" in tl_kt)
@@ -719,11 +805,12 @@ def main():
     report("工作台里也能播（不是只能跑去测试场）",
            "private fun toggleStudioPlay(" in activity and "private val studioTick" in activity
            and "Anim.startSeconds(anim, animFrameIndex)" in activity)
-    report("关键帧四件事各有一个人：加、存、删、改时长",
-           "private fun captureStudioFrame(" in activity and "private fun saveStudioFrame(" in activity
+    report("关键帧四件事各有一个人：加锚点、存、删、改时长",
+           "private fun addStudioAnchor(" in activity and "private fun saveStudioFrame(" in activity
            and "private fun dropStudioFrame(" in activity and "private fun nudgeStudioFrame(" in activity)
-    report("加帧是插在**这一帧后面**，不是永远加在末尾",
-           "(animFrameIndex + 1).coerceAtMost(anim.frames.size)" in activity)
+    report("锚点落在播放头那一刻（不是永远加在末尾）",
+           "val t = animTimeline.playhead" in activity
+           and "val i = TimelineLayout.frameAt(anim, t)" in activity)
     report("存这一帧写的是整只的姿势（抓帧本来就抓一个完整的姿势）",
            "angles = animView.currentAngles()" in activity)
     report("时长两个方向各 0.1 秒，并且夹在界面那把尺子里",
@@ -732,7 +819,8 @@ def main():
            and "const val MIN_FRAME_SECONDS = 0.1f" in activity)
     report("底下那条每个 chip 都挂上了自己那一件事",
            all(("R.id.%s" % i) in activity and ("setOnClickListener { %s" % fn) in activity
-               for i, fn in (("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "captureStudioFrame()"),
+               for i, fn in (("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "addStudioAnchor()"),
+                             ("animBind", "bindStudioRule()"),
                              ("animSaveFrame", "saveStudioFrame()"), ("animSlower", "nudgeStudioFrame(-0.1f)"),
                              ("animLonger", "nudgeStudioFrame(0.1f)"), ("animDropFrame", "dropStudioFrame()"),
                              ("animResetPose", "animView.resetPose()"),

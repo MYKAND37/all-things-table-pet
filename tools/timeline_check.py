@@ -296,6 +296,19 @@ def timeline_sample(spec, seconds):
     return {"angles": angles, "x": ox, "y": oy, "scale": sc}
 
 
+def pass_index(spec, seconds):
+    """这是第几遍（0 起）。姿态锚点绑的规则"每经过一次响一次"就靠它。
+
+    不循环的动画一辈子就一遍（Kotlin 那边第一句就是 `if (!spec.loop) return 0`）。
+    """
+    if not spec.get("loop", True):
+        return 0
+    total = duration(spec)
+    if total <= 0:
+        return 0
+    return max(0, int(max(0.0, seconds) * speed_of(spec) / total))
+
+
 def max_time(spec):
     return max(MIN_FRAME, duration(spec))
 
@@ -540,6 +553,24 @@ def main():
            str([k["t"] for k in gone["hand_L"]["rot"]]))
     report("空表 / 零长度区间原样返回（不是崩）",
            shifted({}, 0.0, 1.0, 2.0) == {} and dropped(tr, 1.0, 1.0, 2.0) == tr)
+
+    print("\n姿态锚点绑的规则：一遍响一次（1.24.0）")
+    loop2 = anim([frame({}, seconds=1.0), frame({}, seconds=1.0)])
+    report("前两秒是第 0 遍、接下来两秒是第 1 遍",
+           [pass_index(loop2, x) for x in (0.0, 1.9, 2.0, 3.9, 4.0)] == [0, 0, 1, 1, 2],
+           str([pass_index(loop2, x) for x in (0.0, 1.9, 2.0, 3.9, 4.0)]))
+    report("2 倍速时一遍只有一半长",
+           pass_index(anim([frame({}, seconds=1.0)], speed=2.0), 0.5) == 1)
+    report("不循环的就一直是第 0 遍",
+           all(pass_index(anim([frame({}, seconds=1.0)], loop=False), x) == 0
+               for x in (0.0, 5.0, 99.0)))
+    report("一帧都没有也不会除零", pass_index(anim([]), 3.0) == 0)
+    report("负的时间算第 0 遍（不是负数）", pass_index(loop2, -5.0) == 0)
+    # 一帧的动画循环时**帧号一直是 0** —— 用"帧号变了"来判断"又走了一圈"会永远不响，
+    # 这正是 passIndex 存在的理由。
+    one = anim([frame({}, seconds=0.5)])
+    report("一帧的动画每半秒就是一遍（帧号不变，遍数会变）",
+           pass_index(one, 0.0) == 0 and pass_index(one, 0.6) == 1 and pass_index(one, 1.1) == 2)
 
     print("\n几何：时间和像素")
     lane = Lane(left=80.0, top=0.0, width=400.0, height=40.0, dur=2.0)
