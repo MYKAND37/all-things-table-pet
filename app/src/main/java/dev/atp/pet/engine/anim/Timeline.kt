@@ -226,20 +226,17 @@ object Timeline {
         if (index !in keys.indices) keys else keys.filterIndexed { i, _ -> i != index }
 
     /**
-     * 把一帧一帧的动画**烘**成通道：每根骨头、每个帧边界一个关键帧。
+     * 把一帧一帧的动画**烘**成通道：每根骨头、每个"提到过它的帧"一个关键帧。
      *
-     * 烘完再采样和烘之前**逐点相同** —— 而且这不是"大致一样"，是同一组数字
-     * （`tools/timeline_check.py` 拿 60 段随机动画 × 41 个时刻逐点比过，最大差 0.000000）。
+     * 烘完再采样和烘之前**逐点相同**（`tools/timeline_check.py` 拿 60 段随机动画 × 41 个时刻
+     * 逐点比过，最大差 0.000000）。要精确，就得照着帧模型真正的规矩来 —— 而 1.25.0 之后那条
+     * 规矩简单了：**每根骨头各自在"提到过它的帧"之间线性插值，两头保持**（见 [Anim.poseAt]）。
+     * 所以烘培就是"在这些帧的起点各打一个关键帧，全部匀速"，循环时再在末尾补一个"回到第一帧"
+     * 的关键帧把圈闭上。
      *
-     * 要精确，就得照着帧模型**真正**的规矩来，而那三条规矩比看上去细：
-     *
-     *  * 两根相邻的帧都写了这根骨头 → 这一段是**斜坡**（[AnimKey.EASE_LINEAR]）；
-     *  * 只有一侧写了 → 这一段是**保持**（值是写了的那一侧的），到下一个边界才变 ——
-     *    所以那一段的缓动必须是 [AnimKey.EASE_STEP]，否则烘出来的会是一段斜坡，
-     *    而原来是一动不动然后一跳；
-     *  * 两根都没写 → 这一段里这根骨头**不存在**，而"不存在"在消费端等于**回站姿（0）**
-     *    （求解器给没提到的骨头设 0 度）。所以边界上要老老实实写一个 0，
-     *    不能"沿用上一个值" —— 第一版就是这么写的，于是烘完差了 168 度。
+     * 上一版这里要用**阶跃**去凑"只写一侧时保持不动"，于是烘完的动作会在关键帧处**一下子跳过去**
+     * —— 用户报的「部位的关键帧像是在瞬移」「还没到下一个关键帧动作就执行完了」就是它。帧模型
+     * 自己平滑之后，阶跃这一半就没有存在的理由了。
      *
      * 已经有过通道的骨头不重烘：用户手调过的那几条通道，不该被一次"转换"覆盖掉。
      */
@@ -247,14 +244,13 @@ object Timeline {
         val frames = spec.frames
         if (frames.isEmpty()) return spec.tracks
         val out = LinkedHashMap(spec.tracks)
-        val n = frames.size
-        val starts = ArrayList<Float>(n + 1)
+        val starts = ArrayList<Float>(frames.size)
         var acc = 0f
         for (f in frames) {
             starts.add(acc)
             acc += Anim.frameSeconds(f)
         }
-        starts.add(acc)
+        val total = acc
 
         val names = LinkedHashSet<String>()
         for (f in frames) names.addAll(f.angles.keys)
@@ -263,28 +259,17 @@ object Timeline {
             val existing = out[name]?.rot
             if (!existing.isNullOrEmpty()) continue
             var keys = existing ?: emptyList()
-            for (i in 0 until n) {
-                val here = frames[i]
-                val next = frames.getOrNull(i + 1) ?: if (spec.loop) frames[0] else here
-                val mine = here.angles[name]
-                val theirs = next.angles[name]
-                val value = mine ?: theirs ?: 0f
-                val ramps = mine != null && theirs != null
+            val mentions = frames.indices.filter { frames[it].angles.containsKey(name) }
+            for (m in mentions) {
+                keys = withKey(keys, starts[m], frames[m].angles[name] ?: 0f, AnimKey.EASE_LINEAR)
+            }
+            // 循环：末尾补一个"回到第一个提到它的帧的值"，那一圈才是闭合的（和播放时一样）。
+            if (spec.loop && mentions.isNotEmpty()) {
                 keys = withKey(
-                    keys, starts[i], value,
-                    if (ramps) AnimKey.EASE_LINEAR else AnimKey.EASE_STEP,
+                    keys, total, frames[mentions.first()].angles[name] ?: 0f, AnimKey.EASE_LINEAR,
                 )
             }
-            // 末尾那一个：循环时回到第一帧的值（"最后一帧 → 第一帧"那一段因此和原来一样），
-            // 不循环时停在最后一帧上 —— 和播放器同一条规矩。
-            val endValue = if (spec.loop) {
-                Anim.framePose(spec, 0)[name] ?: 0f
-            } else {
-                frames[n - 1].angles[name] ?: 0f
-            }
-            keys = withKey(keys, starts[n], endValue, AnimKey.EASE_LINEAR)
-            val track = out[name] ?: BoneTrack()
-            out[name] = track.copy(rot = keys)
+            out[name] = (out[name] ?: BoneTrack()).copy(rot = keys)
         }
         return out
     }

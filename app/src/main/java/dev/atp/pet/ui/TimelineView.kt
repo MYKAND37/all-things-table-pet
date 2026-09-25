@@ -66,6 +66,10 @@ class TimelineView @JvmOverloads constructor(
     /**
      * 一个菱形被拖到了 (t, v)。[done] = 手指抬起来了 —— 拖动期间界面要立刻跟着动，但**落盘
      * 只在抬手那一次**（一秒几十次写文件是拿电池换一个没人看得见的中间状态）。
+     *
+     * **旋转通道只改时间**（v 原样传回去）：旋转的值来自"你把这一节摆成什么样"，在时间轴上
+     * 竖着拖会把刚摆好的角度拖歪 —— 用户报的"不好点、不该上线拖动"就是这个。位置与缩放没有
+     * 别的输入方式，那两条通道仍然允许竖拖。
      */
     var onKeyMoved: ((String, Int, Float, Float, Boolean) -> Unit)? = null
     var onKeyPicked: ((String, Int) -> Unit)? = null
@@ -412,8 +416,11 @@ class TimelineView @JvmOverloads constructor(
                 val lane = laneOf(row)
                 val keys = keysOf(bone)
                 val range = TimelineLayout.rangeOf(keys, channel)
-                val hit = TimelineLayout.hitKey(
-                    keys, lane, range[0], range[1], event.x, event.y, dp(TimelineLayout.HIT_RADIUS_DP),
+                // 命中：**只看横向**（这一行整条都是可点的带子）。菱形画在哪儿受值的影响，
+                // 而值不是用户在这里要调的东西 —— 让他必须正好按在那个小菱形上，是把难度
+                // 加在了不重要的那一维上。
+                val hit = TimelineLayout.hitKeyInRow(
+                    keys, lane, event.x, dp(TimelineLayout.HIT_RADIUS_DP),
                 )
                 if (hit < 0) return false
                 dragKey = hit
@@ -443,7 +450,12 @@ class TimelineView @JvmOverloads constructor(
                     ),
                     duration(),
                 )
-                val v = TimelineLayout.yToValue(event.y, range[0], range[1], lane)
+                // 旋转：值跟着手指走是**错的**（把刚摆好的角度拖歪）；位置/缩放没有别的输入方式。
+                val v = if (channel == Timeline.ROTATION) {
+                    keys.getOrNull(dragKey)?.v ?: 0f
+                } else {
+                    TimelineLayout.yToValue(event.y, range[0], range[1], lane)
+                }
                 dragT = t
                 dragV = v
                 dragMoved = true

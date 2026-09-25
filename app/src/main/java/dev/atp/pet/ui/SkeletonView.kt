@@ -102,28 +102,6 @@ class SkeletonView @JvmOverloads constructor(
     private var pinchSpan = 0f
 
     /**
-     * 画布转了多少度（1.22.0），以及它的两个三角函数值。
-     *
-     * 转的是**视图**，不是角色：角色躺在画布里，转的是看它的那只眼睛。所以骨架、图、参考图
-     * 一起转，拖关节算出来的角度一点没变 —— 那正是"斜着画的身体"需要的东西（斜着摆姿势，
-     * 手是顺着画走的，不是顺着屏幕走的）。
-     *
-     * 绕的是**视图中心**：`vx/vy`、`toCanvas`、双指缩放的中点对齐（[anchorAt]）全都用同一个
-     * 支点，所以四件事（缩放 / 旋转 / 平移 / 拖关节）互相之间不需要知道对方的存在。
-     * cos/sin 缓存在字段里而不是每帧算：`onDraw` 里每个点都要用，一次绘制几十次三角函数
-     * 是白烧的电。
-     */
-    var viewRotation = 0f
-        private set
-    private var cosR = 1f
-    private var sinR = 0f
-    private var pivotX = 0f
-    private var pivotY = 0f
-
-    /** 双指那一转从上一次事件到现在转了多少，靠它算增量。 */
-    private var twistAngle = 0f
-
-    /**
      * 骨骼、关节、手柄画不画（1.22.0）。
      *
      * 动画预览要回答的是"这只桌宠看起来是什么样"，不是"它的骨头在哪"。关掉之后画面上只剩
@@ -805,10 +783,6 @@ class SkeletonView @JvmOverloads constructor(
         skeleton?.find(name)?.let { Math.toDegrees(it.rotation.toDouble()).toFloat() }
 
     override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
-        // 旋转的支点就是视图中心，尺寸一变就得跟着变 —— 不然转过之后窗口一改大小，
-        // 画面会绕着一个已经不在屏幕上的点转。
-        pivotX = w / 2f
-        pivotY = h / 2f
         val s = spec ?: return
         computeFit(w, h, s)
         // Only refit while nobody has zoomed: a rotation should not throw away the view
@@ -828,7 +802,6 @@ class SkeletonView @JvmOverloads constructor(
         selected = name
         val p = bone.worldPosition
         scale = (fitScale * ZOOM_ON_PICK).coerceIn(fitScale * 0.25f, fitScale * 12f)
-        // 转过之后"居中"不能再用减法：得走那个反变换，否则点了名字骨头跑到画面外去。
         anchorAt(p, width / 2f, height / 2f)
         zoomed = true
         invalidate()
@@ -981,80 +954,29 @@ class SkeletonView @JvmOverloads constructor(
         return hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
     }
 
-    /** 两指连线的方向，度。双指旋转用的就是它的变化量。 */
-    private fun angleOf(e: MotionEvent): Float {
-        if (e.pointerCount < 2) return 0f
-        return Math.toDegrees(
-            Math.atan2((e.getY(1) - e.getY(0)).toDouble(), (e.getX(1) - e.getX(0)).toDouble())
-        ).toFloat()
-    }
-
     private fun midX(e: MotionEvent) = if (e.pointerCount >= 2) (e.getX(0) + e.getX(1)) / 2f else e.x
     private fun midY(e: MotionEvent) = if (e.pointerCount >= 2) (e.getY(0) + e.getY(1)) / 2f else e.y
 
     /**
-     * 画布坐标 ↔ 视图坐标。
+     * 画布坐标 ↔ 视图坐标：**缩放 + 平移**，没有旋转（1.25.0 起视角定死）。
      *
-     * 顺序是**先缩放平移、后旋转**：`offset` 是没旋转的那套坐标里的，旋转绕 [pivotX]/[pivotY]
-     * （视图中心）。反过来算就是 [toCanvas] 里那个逆变换。旋转是 0 的时候 cos=1、sin=0，
-     * 这几行就是原来那两句乘法 —— 也就是说这一版没有给"没转过"的情况加任何代价。
+     * 只有这一套数（scale / offsetX / offsetY），骨头和图都走它 —— 所以它们不可能错位。
+     * 之前多一个旋转时，骨头走 vx/vy、图走 canvas 的变换，两边各转一次，骨头就被转了**两遍**：
+     * 转 90° 时骨骼和画差了一倍的角度，用户看到的就是"错位"。
      */
-    private fun vx(p: Vec2): Float {
-        val u = offsetX + p.x * scale - pivotX
-        val v = offsetY + p.y * scale - pivotY
-        return pivotX + u * cosR - v * sinR
-    }
+    private fun vx(p: Vec2): Float = offsetX + p.x * scale
 
-    private fun vy(p: Vec2): Float {
-        val u = offsetX + p.x * scale - pivotX
-        val v = offsetY + p.y * scale - pivotY
-        return pivotY + u * sinR + v * cosR
-    }
+    private fun vy(p: Vec2): Float = offsetY + p.y * scale
 
-    private fun toCanvas(x: Float, y: Float): Vec2 {
-        val dx = x - pivotX
-        val dy = y - pivotY
-        val u = dx * cosR + dy * sinR
-        val v = -dx * sinR + dy * cosR
-        return Vec2((u + pivotX - offsetX) / scale, (v + pivotY - offsetY) / scale)
-    }
+    private fun toCanvas(x: Float, y: Float): Vec2 =
+        Vec2((x - offsetX) / scale, (y - offsetY) / scale)
 
-    /**
-     * 让画布上的 [c] 正好落在视图的 ([x], [y]) 上。
-     *
-     * 双指缩放、双指旋转、双指一起挪，三件事都是这一句：手指底下原来那个画布点，变换之后
-     * 还得在手指底下。所以它们可以同时发生而互不干扰。
-     */
+    /** 让画布上的 [c] 正好落在视图的 ([x], [y]) 上（双指缩放的中点对齐用）。 */
     private fun anchorAt(c: Vec2, x: Float, y: Float) {
-        val dx = x - pivotX
-        val dy = y - pivotY
-        offsetX = pivotX + dx * cosR + dy * sinR - c.x * scale
-        offsetY = pivotY - dx * sinR + dy * cosR - c.y * scale
+        offsetX = x - c.x * scale
+        offsetY = y - c.y * scale
     }
 
-    /** 角度收进 (-180, 180]：转十圈和没转是同一个朝向，数字不该一直涨上去。 */
-    private fun wrapDegrees(deg: Float): Float {
-        var d = (deg + 180f) % 360f
-        if (d < 0f) d += 360f
-        return d - 180f
-    }
-
-    /**
-     * 设成某个角度。名字**不能**叫 `setRotation` —— 那是 `View` 自己的方法（转整个控件，
-     * 和这里转画布完全是两件事），重名要么编译不过，要么悄悄把控件一起转了。
-     */
-    private fun applyViewRotation(deg: Float) {
-        viewRotation = wrapDegrees(deg)
-        val rad = Math.toRadians(viewRotation.toDouble())
-        cosR = cos(rad).toFloat()
-        sinR = sin(rad).toFloat()
-    }
-
-    /** 转一下（正数是顺时针）。界面那个「转 90°」按钮和双指旋转都走这里。 */
-    fun rotateBy(delta: Float) {
-        applyViewRotation(viewRotation + delta)
-        invalidate()
-    }
 
     private fun computeFit(w: Int, h: Int, s: CharacterSpec) {
         val pad = 8f * density
@@ -1069,14 +991,13 @@ class SkeletonView @JvmOverloads constructor(
     }
 
     /**
-     * 视图摆正：不转、不偏、缩放到"刚好装下"。
+     * 视角摆正：不偏、缩放到"刚好装下"（1.25.0 起视角里已经没有旋转了）。
      *
-     * 和双击复位（那只复位**姿势**）是两件事，所以是两个动作：摆姿势的时候常常先要把画布
-     * 转正看清，而看清之后要复位的往往是姿势而不是视角。
+     * 和双击复位（那只复位**姿势**）是两件事：看细节时会放大和平移，看完要一把收回来的
+     * 往往是视角，而不是姿势。
      */
     fun resetView() {
         val s = spec ?: return
-        applyViewRotation(0f)
         zoomed = false
         computeFit(width, height, s)
         placeFitted()
@@ -1093,19 +1014,11 @@ class SkeletonView @JvmOverloads constructor(
         val s = spec ?: return
         val sk = skeleton ?: return
 
-        // 旋转是**视图**的：画框、参考图、角色、骨骼一起转，所以只在这一层做一次。
-        // 提示文字留到 restore 之后画 —— 一行说明横躺着没人看得懂。
+        // 画布**不转**（1.25.0 起视角定死）。转过一版，而它是错的：骨头是拿 vx/vy 画的、
+        // 图是拿 canvas.translate/scale 画的 —— 两个变换各转一次，骨头就被转了**两遍**
+        // （图一遍、骨头两遍），转 90° 时骨头和画彻底错位。用户看到的就是"骨骼和图片错位"，
+        // 所以干脆把旋转整个拿掉：只剩缩放和平移，那两个变换两边共用同一套数，错不了。
         //
-        // save() 是**必须的**，而且它漏过一次：转了没 save 的话，一是这个旋转会漏给父控件
-        // （整个界面跟着转），二是下面那两个 restore 会去弹**别人的**存档 —— Android 的
-        // restore 弹空了就直接崩（"Underflow in restore"）。用户点「转 90°」闪退就是这个，
-        // 而双指旋转走的是同一段代码，所以只删那个按钮是治不好的。见 kotlin_check 第十条。
-        val turned = viewRotation != 0f
-        if (turned) {
-            canvas.save()
-            canvas.rotate(viewRotation, pivotX, pivotY)
-        }
-
         canvas.drawRect(
             offsetX, offsetY,
             offsetX + s.canvasWidth * scale, offsetY + s.canvasHeight * scale,
@@ -1228,7 +1141,6 @@ class SkeletonView @JvmOverloads constructor(
                 }
             }
         }
-        if (turned) canvas.restore()
         drawHint(canvas)
     }
 
@@ -1245,8 +1157,8 @@ class SkeletonView @JvmOverloads constructor(
                     "加骨骼 " + pendingName + " · 点一下起点（关节）"
                 pendingName != null ->
                     "加骨骼 " + pendingName + " · 再点一下末端"
-                editBones -> "蓝点 = 关节 · 橙点 = 末端 · 双指缩放/旋转"
-                else -> "拖关节摆姿势 · 双指缩放/旋转 · 双击复位"
+                editBones -> "蓝点 = 关节 · 橙点 = 末端 · 双指缩放"
+                else -> "拖关节摆姿势 · 双指缩放 · 双击复位"
             },
             10f * density, 16f * density, textPaint
         )
@@ -1343,7 +1255,6 @@ class SkeletonView @JvmOverloads constructor(
                 heldJoint = null
                 panning = false
                 pinchSpan = span(event)
-                twistAngle = angleOf(event)
                 return true
             }
 
@@ -1357,15 +1268,8 @@ class SkeletonView @JvmOverloads constructor(
                     if (pinchSpan > 1f && s > 1f) {
                         scale = (scale * (s / pinchSpan)).coerceIn(fitScale * 0.25f, fitScale * 12f)
                     }
-                    // 双指转多少，画布就转多少：这是"斜着画的身体"唯一的摆法 —— 手顺着画走，
-                    // 而不是顺着屏幕走。增量是绝对角之差，跨过 ±180 时会被 wrapDegrees 收回来。
-                    val ang = angleOf(event)
-                    if (ang != twistAngle) {
-                        applyViewRotation(viewRotation + (ang - twistAngle))
-                        twistAngle = ang
-                    }
                     pinchSpan = s
-                    // 这一句同时管了三件事：张开是放大、转是旋转、一起挪是平移。
+                    // 张开是放大、两指一起挪是平移（没有旋转：视角定死，见 onDraw 的说明）。
                     anchorAt(held, focusX, focusY)
                     zoomed = true
                     invalidate()
@@ -1382,9 +1286,8 @@ class SkeletonView @JvmOverloads constructor(
                 if (panning) {
                     val dx = event.x - lastPanX
                     val dy = event.y - lastPanY
-                    // 手指的位移在**屏幕**上，而 offset 是没旋转的那套坐标，所以转回去再加。
-                    offsetX += dx * cosR + dy * sinR
-                    offsetY += -dx * sinR + dy * cosR
+                    offsetX += dx
+                    offsetY += dy
                     lastPanX = event.x
                     lastPanY = event.y
                     zoomed = true
@@ -1399,7 +1302,6 @@ class SkeletonView @JvmOverloads constructor(
                 heldJoint = null
                 panning = false
                 pinchSpan = 0f
-                twistAngle = 0f
                 invalidate()
                 return true
             }

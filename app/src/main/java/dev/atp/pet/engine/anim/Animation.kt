@@ -131,19 +131,12 @@ object Anim {
     /**
      * 第 [index] 帧**开始那一刻**的姿势，或者空表（没有这一帧）。
      *
-     * 这就是编辑器里"选中第 3 帧"该显示的样子，而它不等于"第 3 帧里写的角度"：[blend] 那条
-     * 规矩（没写到的一侧保持另一侧的值）意味着**下一帧新引入的那根骨头，在这一帧里已经是
-     * 下一帧的值了**。编辑器必须照播放时的规矩显示，否则用户看到的是一个引擎演不出来的姿势
-     * —— 摆好了、存下去、一播却不一样，是最难查的那种错。
-     *
-     * 所以这里不是"另算一套"，就是把 `sample` 在帧起点那一瞬的结果取出来：`blend(这一帧,
-     * 下一帧, 0)`。循环时下一帧是第一帧，和播放时一模一样。
+     * 直接就是 [sample] 在那一刻的结果 —— 编辑器要摆的是**播放时那一刻的样子**，而"编辑器
+     * 另算一套"是这个仓库里最难查的一类错（摆好、存下、一播却不一样）。所以这里不自己插值。
      */
     fun framePose(a: AnimationSpec, index: Int): Map<String, Float> {
-        val here = a.frames.getOrNull(index) ?: return emptyMap()
-        val next = a.frames.getOrNull(index + 1)
-            ?: if (a.loop) a.frames.firstOrNull() else null
-        return if (next == null || next === here) here.angles else blend(here, next, 0f)
+        if (a.frames.getOrNull(index) == null) return emptyMap()
+        return sample(a, startSeconds(a, index) / speedOf(a))?.angles ?: emptyMap()
     }
 
     /** 第 [index] 帧在动画自己的时间里从第几秒开始（给"跳到这一帧"用）。 */
@@ -187,10 +180,7 @@ object Anim {
             val last = i == frames.lastIndex
             // `t < acc + d` 落在帧内；最后一帧兜住 total（浮点加起来可能差一点点）。
             if (t < acc + d || last) {
-                val f = if (d <= 0f) 0f else ((t - acc) / d).coerceIn(0f, 1f)
-                val here = frames[i]
-                val next = frames.getOrNull(i + 1) ?: if (a.loop) frames[0] else here
-                return AnimSample(blend(here, next, f), here.state, i, frames.size)
+                return AnimSample(poseAt(a, t), frames[i].state, i, frames.size)
             }
             acc += d
         }
@@ -200,20 +190,83 @@ object Anim {
     }
 
     /**
-     * 两帧之间插值：每一根骨头各自算，而且**没有写到的那一侧保持另一侧的值**。
+     * 某一刻的姿势：**每根骨头各自在"提到过它的帧"之间插值**。
      *
-     * 那不是顺手，是刻意的：一个只动手臂的两帧动画，如果"帧里没提腿"就当成腿是 0 度，
-     * 那第二帧一到，整只宠物的腿会瞬间弹回站姿 —— 用户看到的是"动画把姿势弄坏了"。
-     * 只写要动的那几节，是写动画最自然的方式。
+     * 这条规矩是这一版改的（1.24.2），而它修的是用户报的「部位的关键帧像是在瞬移」：
+     *
+     *  * 老规矩只看**相邻的两帧**：一根骨头只要有一边没写到，那一对帧里它就被当成"回站姿"。
+     *    于是"第 1 帧写了手臂、第 2 帧啥都没写、第 3 帧又写了"这种动画，手臂在第 2 帧会
+     *    **啪一下回 0 度**（一帧之内 80 度的跳变），再慢慢走回来；
+     *  * 新规矩看**提到过它的那几帧**：从上一个写了它的帧，平滑走到下一个写了它的帧，中间
+     *    隔多少帧都一样。第一次写它之前保持第一个值，最后一次之后保持最后一个值
+     *    （循环时从最后一个平滑走回第一个 —— 走路那种循环因此是闭合的）。
+     *
+     * 这也正是 `Animation.kt` 一直写在注释里的**本意**（"只写要动的那几节，不该让没写的骨头
+     * 弹回站姿"）—— 老实现只在"相邻两帧"里做到了它。新的规矩还让帧和通道长得一模一样
+     * （[Timeline] 的通道就是同一件事），于是「转成时间轴」不用再靠阶跃去凑，烘出来就是平滑的。
      */
-    private fun blend(a: AnimFrame, b: AnimFrame, f: Float): Map<String, Float> {
-        if (a.angles.isEmpty() && b.angles.isEmpty()) return emptyMap()
+    private fun poseAt(a: AnimationSpec, t: Float): Map<String, Float> {
+        val frames = a.frames
+        val starts = FloatArray(frames.size)
+        var acc = 0f
+        for (i in frames.indices) {
+            starts[i] = acc
+            acc += frameSeconds(frames[i])
+        }
+        val total = acc
+        val names = LinkedHashSet<String>()
+        for (f in frames) names.addAll(f.angles.keys)
         val out = LinkedHashMap<String, Float>()
-        for (name in a.angles.keys + b.angles.keys) {
-            val from = a.angles[name] ?: b.angles[name] ?: 0f
-            val to = b.angles[name] ?: a.angles[name] ?: 0f
-            out[name] = from + (to - from) * f
+        for (name in names) {
+            val mentions = ArrayList<Int>(frames.size)
+            for (i in frames.indices) {
+                if (frames[i].angles.containsKey(name)) mentions.add(i)
+            }
+            if (mentions.isEmpty()) continue
+            out[name] = valueOf(name, mentions, frames, starts, total, a.loop, t)
         }
         return out
     }
+
+    /** 一根骨头在 [t] 时刻的值：在"提到过它的帧"之间线性插值，两头保持。 */
+    private fun valueOf(
+        name: String,
+        mentions: List<Int>,
+        frames: List<AnimFrame>,
+        starts: FloatArray,
+        total: Float,
+        loop: Boolean,
+        t: Float,
+    ): Float {
+        val first = mentions.first()
+        val last = mentions.last()
+        val firstValue = frames[first].angles[name] ?: 0f
+        if (mentions.size == 1 || t <= starts[first]) return firstValue
+
+        var lo = first
+        var hi = -1
+        for (m in mentions) {
+            if (starts[m] <= t) lo = m else {
+                hi = m
+                break
+            }
+        }
+        val loValue = frames[lo].angles[name] ?: 0f
+        if (hi < 0) {
+            // 落在最后一个写了它的帧之后：不循环就停在那个值上；循环就平滑走回第一个。
+            if (!loop || lo != last) return loValue
+            // 跨度就是"从最后一个写了它的帧，到动画末尾"：绕回第一帧时刚好接上，
+            // 中间不留跳变（把第一帧的位置也算进跨度，末尾就会差一截，绕回时抖一下）。
+            val span = total - starts[last]
+            if (span <= 0f) return firstValue
+            val f = ((t - starts[last]) / span).coerceIn(0f, 1f)
+            return loValue + (firstValue - loValue) * f
+        }
+        val span = starts[hi] - starts[lo]
+        if (span <= 0f) return frames[hi].angles[name] ?: 0f
+        val f = ((t - starts[lo]) / span).coerceIn(0f, 1f)
+        val hiValue = frames[hi].angles[name] ?: 0f
+        return loValue + (hiValue - loValue) * f
+    }
+
 }

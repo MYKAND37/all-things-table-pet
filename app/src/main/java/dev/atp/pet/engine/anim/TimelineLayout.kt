@@ -110,6 +110,25 @@ object TimelineLayout {
         return best
     }
 
+    /**
+     * 手指在这一行上碰到了哪个关键帧：**只看横向**。
+     *
+     * 关键帧在时间轴上是一条带子上的点，值不是在这里调的（旋转的值来自"你把这一节摆成什么样"），
+     * 所以命中只需要问"离哪个最近"，而且整行的高度都算数 —— 用户不用正好按在那个小菱形上。
+     */
+    fun hitKeyInRow(keys: List<AnimKey>, lane: Lane, px: Float, radiusPx: Float): Int {
+        var best = -1
+        var bestD = radiusPx
+        for ((i, k) in keys.withIndex()) {
+            val d = abs(timeToX(lane, k.t) - px)
+            if (d <= bestD) {
+                bestD = d
+                best = i
+            }
+        }
+        return best
+    }
+
     /** 拖出来的时间吸附到 0.01 秒的格子上，并夹在 [0, duration] 里。 */
     fun snapTime(t: Float, duration: Float): Float {
         val clamped = t.coerceIn(0f, max(0f, duration))

@@ -423,6 +423,17 @@
                         android:paddingTop="6dp"
                         android:paddingBottom="6dp">
 
+                        <!-- 撤销 / 重做（1.25.0）：这里每一次点按都立刻落盘，所以退路要在手边。 -->
+                        <TextView
+                            android:id="@+id/animUndo"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_undo" />
+
+                        <TextView
+                            android:id="@+id/animRedo"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_redo" />
+
                         <TextView
                             android:id="@+id/animPlay"
                             style="@style/AlignButton"
@@ -470,6 +481,11 @@
                             android:id="@+id/animKeyAdd"
                             style="@style/AlignButton"
                             android:text="@string/anim_key_add" />
+
+                        <TextView
+                            android:id="@+id/animKeySave"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_key_save" />
 
                         <TextView
                             android:id="@+id/animKeyDrop"

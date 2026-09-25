@@ -65,16 +65,12 @@ def join_states(states):
 
 
 def frame_pose(a, index):
-    """第 index 帧**开始那一刻**的姿势 —— 编辑器和播放器必须看到同一个东西。"""
+    """第 index 帧**开始那一刻**的姿势 = 采样在那一刻（和 Kotlin 的 Anim.framePose 同一句话）。"""
     frames = a["frames"]
     if index < 0 or index >= len(frames):
         return {}
-    here = frames[index]
-    nxt = frames[index + 1] if index + 1 < len(frames) else (
-        frames[0] if a.get("loop", True) else None)
-    if nxt is None or nxt is here:
-        return dict(here.get("angles", {}))
-    return blend(here, nxt, 0.0)
+    s = sample(a, start_seconds(a, index) / speed_of(a))
+    return dict(s["angles"]) if s else {}
 
 
 def start_seconds(a, index):
@@ -95,22 +91,60 @@ def real_duration(a):
     return duration(a) / speed_of(a)
 
 
-def blend(x, y, f):
-    """两帧之间插值：每根骨头各自算，没写到的那一侧保持另一侧的值。
+def pose_at(spec, t):
+    """某一刻的姿势：**每根骨头各自在"提到过它的帧"之间插值**（镜像 Anim.poseAt，1.25.0）。
 
-    这条规矩是刻意的（见 Animation.kt）：只写要动的那几节是写动画最自然的方式，而"帧里没提
-    腿"当成 0 度，会让第二帧一到整只宠物的腿弹回站姿。
+    老规矩只看相邻两帧：一根骨头只要有一边没写，那一对帧里它就被当成"回站姿"。于是
+    「第 1 帧写了手臂、第 2 帧什么都没写、第 3 帧又写了」会让手臂在第 2 帧**啪一下回 0 度**
+    （用户报的「部位像是在瞬移」）。新规矩看**提到过它的那几帧**：隔着多少帧都平滑走过去；
+    第一次写它之前保持第一个值，最后一次之后保持最后一个值（循环时从最后一个平滑回到第一个）。
     """
-    if not x.get("angles") and not y.get("angles"):
-        return {}
-    names = list(x.get("angles", {}).keys()) + [n for n in y.get("angles", {})
-                                                if n not in x.get("angles", {})]
+    frames = spec["frames"]
+    starts, acc = [], 0.0
+    for f in frames:
+        starts.append(acc)
+        acc += frame_seconds(f)
+    total = acc
+    names = []
+    for f in frames:
+        for n in f.get("angles", {}):
+            if n not in names:
+                names.append(n)
     out = {}
     for name in names:
-        a = x["angles"].get(name, y["angles"].get(name, 0.0))
-        b = y["angles"].get(name, x["angles"].get(name, 0.0))
-        out[name] = a + (b - a) * f
+        mentions = [i for i, f in enumerate(frames) if name in f.get("angles", {})]
+        if mentions:
+            out[name] = value_of(name, mentions, frames, starts, total, spec.get("loop", True), t)
     return out
+
+
+def value_of(name, mentions, frames, starts, total, loop, t):
+    first, last = mentions[0], mentions[-1]
+    first_value = frames[first]["angles"][name]
+    if len(mentions) == 1 or t <= starts[first]:
+        return first_value
+    lo, hi = first, -1
+    for m in mentions:
+        if starts[m] <= t:
+            lo = m
+        else:
+            hi = m
+            break
+    lo_value = frames[lo]["angles"][name]
+    if hi < 0:
+        if not loop or lo != last:
+            return lo_value
+        span = total - starts[last]
+        if span <= 0:
+            return first_value
+        f = min(1.0, max(0.0, (t - starts[last]) / span))
+        return lo_value + (first_value - lo_value) * f
+    span = starts[hi] - starts[lo]
+    if span <= 0:
+        return frames[hi]["angles"][name]
+    f = min(1.0, max(0.0, (t - starts[lo]) / span))
+    hi_value = frames[hi]["angles"][name]
+    return lo_value + (hi_value - lo_value) * f
 
 
 def sample(a, seconds):
@@ -127,10 +161,8 @@ def sample(a, seconds):
     for i, f in enumerate(frames):
         d = frame_seconds(f)
         if t < acc + d or i == len(frames) - 1:
-            frac = 0.0 if d <= 0 else min(1.0, max(0.0, (t - acc) / d))
-            nxt = frames[i + 1] if i + 1 < len(frames) else (frames[0] if a.get("loop", True) else f)
             return {
-                "angles": blend(f, nxt, frac),
+                "angles": pose_at(a, t),
                 "state": f.get("state", ""),
                 "frame": i,
                 "frames": len(frames),
@@ -230,6 +262,24 @@ def main():
            abs(sample(f2, 0.5)["angles"]["leg"] - 40.0) < 1e-4)
     report("两帧都没有角度时不做无谓的插值", sample(anim([frame({}, seconds=1.0),
                                                    frame({}, seconds=1.0)]), 0.5)["angles"] == {})
+
+    print("\n隔着一帧没写到的骨头：平滑走过去，不瞬移（1.25.0 改的规矩）")
+    gap = anim([frame({"arm": 80.0}, seconds=1.0), frame({}, seconds=1.0),
+                frame({"arm": 0.0}, seconds=1.0)])
+    vals = [sample(gap, i / 20.0)["angles"].get("arm") for i in range(61)]
+    steps = [abs(vals[i + 1] - vals[i]) for i in range(len(vals) - 1)]
+    report("三帧里只有第 1、3 帧写了手臂：最大一步只有 4 度（原来是 80 度的瞬移）",
+           max(steps) <= 4.001, "最大一步 %.1f 度" % max(steps))
+    # 两个 mention 在 t=0（80）和 t=2（0），所以那一段就是 80 → 0 的一条直线：
+    # t=0.5 是 60、t=1.0 是 40、t=1.5 是 20、t=2.0 是 0。中间那一帧（本来什么都没写）
+    # 不再是"啪一下回 0"，而是接着走。
+    report("而且中间那一帧就是接着走的（80 → 0 是一条直线）",
+           abs(vals[10] - 60.0) < 1e-3 and abs(vals[20] - 40.0) < 1e-3
+           and abs(vals[30] - 20.0) < 1e-3 and abs(vals[40] - 0.0) < 1e-3,
+           "%.1f / %.1f / %.1f / %.1f" % (vals[10], vals[20], vals[30], vals[40]))
+    report("第一次写它之前保持第一个值（不是 0）",
+           abs(sample(anim([frame({}, seconds=1.0), frame({"arm": 55.0}, seconds=1.0)]),
+                      0.1)["angles"].get("arm", 0.0) - 55.0) < 1e-4)
 
     print("\n一帧的动画")
     one = anim([frame({"arm": 33.0}, state="帧1", seconds=0.4)])

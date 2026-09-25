@@ -43,6 +43,10 @@
     <string name="anim_channel_x">Channel: pos X</string>
     <string name="anim_channel_y">Channel: pos Y</string>
     <string name="anim_channel_scale">Channel: scale</string>
+    <string name="anim_undo_none">Nothing left to undo</string>
+    <string name="anim_redo_none">Nothing left to redo</string>
+    <string name="anim_undo">↶ Undo</string>
+    <string name="anim_redo">↷ Redo</string>
     <string name="anim_anchor_add">＋ Anchor</string>
     <string name="anim_bind_title">Which rule does this anchor fire</string>
     <string name="anim_bind_none">Bind nothing</string>
@@ -51,6 +55,7 @@
     <string name="anim_bind">Bind rule</string>
     <string name="anim_and_bind">Pose anchor</string>
     <string name="anim_key_add">＋ Keyframe</string>
+    <string name="anim_key_save">Save keyframe</string>
     <string name="anim_key_drop">Delete keyframe</string>
     <string name="anim_bake">Bake to timeline</string>
     <string name="anim_pick_one">Pick an animation on the left</string>

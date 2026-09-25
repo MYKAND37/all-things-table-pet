@@ -239,6 +239,38 @@ class MainActivity : AppCompatActivity() {
     private var animBone: String? = null
 
     /**
+     * 播放头停在动画的第几秒。
+     *
+     * 工作台必须**记住它**：任何一次编辑（打关键帧、存帧、删帧、改时长）都会重建界面，而重建
+     * 之后如果一律回到"选中那一帧的起点"，用户刚摆好的姿势就会**突然变成另一个样子** ——
+     * 用户报的「添加新关键帧时会莫名其妙变一个动作」就是这个。编辑完回到**播放头**那一刻。
+     */
+    private var animPlayhead = 0f
+
+    /**
+     * 撤销 / 重做（1.25.0）。
+     *
+     * 存的不是"一个字段的旧值"，而是**那一刻整个工作台的样子**：这一段动画、播放头在哪、
+     * 选中的是哪根骨头/哪个关键帧/哪一帧/哪条通道。理由是这里每一次点按都会**立刻落盘**
+     * （没有"确定/取消"），而"撤销之后停在别的地方"跟没撤销差不多 —— 用户要的是回到刚才那一眼。
+     *
+     * 两个栈都封顶（[UNDO_LIMIT] 步）：一路点下去不封顶，就是拿内存换一个没人会用的历史。
+     * 换一段动画、换一只桌宠都会清空 —— 撤销跨动画地回退是另一件事，不是这一版要的。
+     */
+    private class StudioStep(
+        val spec: AnimationSpec,
+        val playhead: Float,
+        val channel: Int,
+        val bone: String?,
+        val key: Int,
+        val frame: Int,
+    )
+
+    private val animUndo = ArrayDeque<StudioStep>()
+    private val animRedo = ArrayDeque<StudioStep>()
+    private var animHistoryId: String? = null
+
+    /**
      * 拖动菱形时的那一份**内存版本**。
      *
      * 手指每动一下都写一次文件是不行的（一秒几十次 I/O），但界面必须立刻跟着动。所以拖动
@@ -393,6 +425,8 @@ class MainActivity : AppCompatActivity() {
         animBonesChip = findViewById(R.id.animBones)
         animEditBones = findViewById(R.id.animEditBones)
         animSaveBones = findViewById(R.id.animSaveBones)
+        findViewById<View>(R.id.animUndo).setOnClickListener { undoStudio() }
+        findViewById<View>(R.id.animRedo).setOnClickListener { redoStudio() }
         animPlay.setOnClickListener { toggleStudioPlay() }
         findViewById<View>(R.id.animFrameAdd).setOnClickListener { addStudioAnchor() }
         findViewById<View>(R.id.animBind).setOnClickListener { bindStudioRule() }
@@ -406,6 +440,7 @@ class MainActivity : AppCompatActivity() {
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
         findViewById<View>(R.id.animKeyAdd).setOnClickListener { addStudioKey() }
+        findViewById<View>(R.id.animKeySave).setOnClickListener { saveStudioKey() }
         findViewById<View>(R.id.animKeyDrop).setOnClickListener { dropStudioKey() }
         findViewById<View>(R.id.animChannel).setOnClickListener { cycleStudioChannel() }
         findViewById<View>(R.id.animBake).setOnClickListener { bakeStudioTimeline() }
@@ -5864,7 +5899,27 @@ class MainActivity : AppCompatActivity() {
             clearAnimationStudio()
             return
         }
-        showStudioFrame(folder, anim, animFrameIndex)
+        showStudioMoment(folder, anim, animPlayhead)
+    }
+
+    /**
+     * 把**动画的第 [t] 秒**摆到右边（播放头也挪过去）。工作台里所有"编辑完再显示"都走这里。
+     *
+     * 和 [showStudioFrame]（按帧号、摆的是帧起点）的分工：那一句是"我选中了第 3 帧"，
+     * 这一句是"我停在 1.7 秒" —— 而编辑之后要回到的是后者，否则姿势会跳。
+     */
+    private fun showStudioMoment(folder: CharacterFolder, anim: AnimationSpec, t: Float) {
+        val clamped = t.coerceIn(0f, Timeline.maxTime(anim))
+        animPlayhead = clamped
+        animFrameIndex = TimelineLayout.frameAt(anim, clamped)
+        animLiveStates.clear()
+        animLiveStates.addAll(Anim.statesOf(anim.frames.getOrNull(animFrameIndex)?.state ?: ""))
+        val sample = Timeline.sample(anim, frameClock(anim, clamped)) ?: return
+        applyStudioSample(sample)
+        applyStudioStates()
+        buildStateChips(folder)
+        refreshTimeline(folder, anim, clamped)
+        animStatus.text = frameStatusText(anim, animFrameIndex)
     }
 
     /**
@@ -5876,16 +5931,9 @@ class MainActivity : AppCompatActivity() {
      * 摆出一个引擎演不出来的姿势（摆好、存下、一播就变样）。
      */
     private fun showStudioFrame(folder: CharacterFolder, anim: AnimationSpec, index: Int) {
-        val frames = anim.frames
-        animFrameIndex = index.coerceIn(0, max(0, frames.size - 1))
-        animLiveStates.clear()
-        animLiveStates.addAll(Anim.statesOf(frames.getOrNull(animFrameIndex)?.state ?: ""))
-        val here = TimelineLayout.frameStarts(anim).getOrNull(animFrameIndex) ?: 0f
-        applyStudioSample(Timeline.sample(anim, frameClock(anim, here)) ?: return)
-        applyStudioStates()
-        buildStateChips(folder)
-        refreshTimeline(folder, anim, here)
-        animStatus.text = frameStatusText(anim, animFrameIndex)
+        val here = TimelineLayout.frameStarts(anim)
+            .getOrElse(index.coerceIn(0, max(0, anim.frames.size - 1))) { 0f }
+        showStudioMoment(folder, anim, here)
     }
 
     /**
@@ -5918,6 +5966,7 @@ class MainActivity : AppCompatActivity() {
         val ordered = rigBoneOrder().filter { it in rows } + rows.filter { it !in rigBoneOrder() }
         animTimeline.setData(anim.copy(tracks = animPending ?: anim.tracks), ordered.toList(), animChannel)
         animTimeline.setPlayhead(playhead)
+        animPlayhead = playhead
         animTimeline.setSelection(animBone, animKeyIndex, animFrameIndex)
     }
 
@@ -5991,23 +6040,61 @@ class MainActivity : AppCompatActivity() {
      */
     private fun studioBone(): String? = animBone ?: animView.selected
 
-    /** 「＋关键帧」：把**这一刻、这一节的当前值**记成一个关键帧。 */
+    /**
+     * 「＋关键帧」：把**这一刻、这一节的当前值**记成一个关键帧。
+     *
+     * 同一个时刻已经有一个就直接改它（[Timeline.withKey] 的规矩），所以这一下不会插出两个
+     * 时刻相同的关键帧。加完**回到播放头那一刻**（不是帧起点）—— 否则用户会看到姿势自己变了。
+     */
     private fun addStudioKey() {
         val (folder, anim) = studioEdit() ?: return
         val bone = studioBone() ?: run {
             Toast.makeText(this, R.string.anim_need_bone, Toast.LENGTH_SHORT).show()
             return
         }
+        haltStudioPlay()
+        pushStudioUndo(anim)
         val t = animTimeline.playhead
         val value = studioKeyValue(anim, bone, t)
         val track = anim.tracks[bone] ?: BoneTrack()
-        val next = track.withKeys(animChannel, Timeline.withKey(track.keys(animChannel), t, value))
+        val keys = Timeline.withKey(track.keys(animChannel), t, value)
+        val next = track.withKeys(animChannel, keys)
+        if (!writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))) return
         animBone = bone
-        animKeyIndex = Timeline.withKey(track.keys(animChannel), t, value).indexOfLast { it.t <= t + Timeline.TIME_EPSILON }
-        writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
+        animKeyIndex = keys.indexOfFirst { abs(it.t - t) < Timeline.TIME_EPSILON }
         buildAnimList()
         animStatus.text = getString(
-            R.string.anim_key_added, bone, channelLabel(), "%.2f".format(t), formatValue(value),
+            R.string.anim_key_added, bone, channelLabel(), formatValue(value), "%.2f".format(t),
+        )
+    }
+
+    /**
+     * 「存入关键帧」：把现在的姿势写进**选中的那一个**关键帧（和「存入这一帧」是一对）。
+     *
+     * 上一版只有「＋关键帧」：想改一个已经打好的关键帧，只能把它删了重打 —— 用户报的
+     * 「没有存关键帧这个按钮，只能添加新关键帧」就是这个。这里写的是**选中那个关键帧的值**
+     * （它的时刻不变），旋转取预览里那一节现在的角度，位置/缩放取当前通道在这条轨道上的值。
+     */
+    private fun saveStudioKey() {
+        val (folder, anim) = studioEdit() ?: return
+        val bone = animBone
+        val track = bone?.let { anim.tracks[it] }
+        val keys = track?.keys(animChannel) ?: emptyList()
+        if (bone == null || track == null || animKeyIndex !in keys.indices) {
+            Toast.makeText(this, R.string.anim_need_key, Toast.LENGTH_SHORT).show()
+            return
+        }
+        haltStudioPlay()
+        pushStudioUndo(anim)
+        val key = keys[animKeyIndex]
+        val value = studioKeyValue(anim, bone, key.t)
+        val next = track.withKeys(
+            animChannel, Timeline.moved(keys, animKeyIndex, key.t, value),
+        )
+        if (!writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))) return
+        buildAnimList()
+        animStatus.text = getString(
+            R.string.anim_key_saved, bone, channelLabel(), formatValue(value), "%.2f".format(key.t),
         )
     }
 
@@ -6023,7 +6110,7 @@ class MainActivity : AppCompatActivity() {
         }
         val next = track.withKeys(animChannel, Timeline.removed(track.keys(animChannel), index))
         animKeyIndex = -1
-        writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
+        if (!writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))) return
         buildAnimList()
         animStatus.text = getString(R.string.anim_key_dropped, bone, channelLabel())
     }
@@ -6096,6 +6183,7 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.anim_bake_done, Toast.LENGTH_SHORT).show()
             return
         }
+        pushStudioUndo(anim)
         if (!writeStudioAnimation(folder, anim.copy(tracks = baked))) return
         animKeyIndex = -1
         buildAnimList()
@@ -6105,6 +6193,7 @@ class MainActivity : AppCompatActivity() {
     /** 拖播放头：把这一刻的样子摆到右边，并选中"这一刻落在哪一帧"。 */
     private fun scrubStudioTo(t: Float) {
         haltStudioPlay()
+        pushStudioUndo(anim)
         val folder = studioFolder() ?: return
         val anim = studioAnimation(folder) ?: return
         val sample = Timeline.sample(anim, frameClock(anim, t)) ?: return
@@ -6168,8 +6257,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         animPending = null
+        pushStudioUndo(anim)
         if (!writeStudioAnimation(folder, anim.copy(tracks = tracks))) return
         animKeyIndex = -1
+        // 挪的只是**时间**：值没变，所以姿势不该变。回到播放头那一刻重新摆一次。
         buildAnimList()
     }
 
@@ -6325,6 +6416,7 @@ class MainActivity : AppCompatActivity() {
     private fun addStudioAnchor() {
         val (folder, anim) = studioEdit() ?: return
         haltStudioPlay()
+        pushStudioUndo(anim)
         val t = animTimeline.playhead
         val starts = TimelineLayout.frameStarts(anim)
         val pose = animView.currentAngles()
@@ -6427,6 +6519,7 @@ class MainActivity : AppCompatActivity() {
             val next = anim.frames.toMutableList().apply {
                 this[animFrameIndex] = frame.copy(rule = index)
             }
+            pushStudioUndo(anim)
             if (writeStudioAnimation(folder, anim.copy(frames = next))) {
                 buildAnimList()
                 Toast.makeText(
@@ -6494,6 +6587,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         haltStudioPlay()
+        pushStudioUndo(anim)
         val angles = animView.currentAngles()
         val state = Anim.joinStates(animLiveStates)
         val next = anim.frames.toMutableList().apply {
@@ -6527,6 +6621,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         haltStudioPlay()
+        pushStudioUndo(anim)
         val seconds = (frame.seconds + delta).coerceIn(MIN_FRAME_SECONDS, MAX_FRAME_SECONDS)
         val next = anim.frames.toMutableList().apply {
             this[animFrameIndex] = frame.copy(seconds = seconds)
@@ -6556,6 +6651,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         haltStudioPlay()
+        pushStudioUndo(anim)
         val gone = animFrameIndex
         val next = anim.frames.toMutableList().apply { removeAt(gone.coerceIn(0, size - 1)) }
         val starts = TimelineLayout.frameStarts(anim)
@@ -6639,6 +6735,78 @@ class MainActivity : AppCompatActivity() {
         applyAnimBoneMode()
         reloadSummoned(folder)
         buildAnimList()
+    }
+
+    // ── 撤销 / 重做（1.25.0）──────────────────────────────────────────────
+
+    /** 现在这一刻的工作台样子。**每次改之前**拍一张，压进撤销栈。 */
+    private fun studioStep(anim: AnimationSpec): StudioStep = StudioStep(
+        anim, animPlayhead, animChannel, animBone, animKeyIndex, animFrameIndex,
+    )
+
+    /**
+     * 要改动了：先把"改之前"记下来，并清空重做栈（新的分支开始了）。
+     *
+     * 放在**每一次写文件之前**。写完之后再记就晚了 —— 记下来的是改完的样子。
+     */
+    private fun pushStudioUndo(anim: AnimationSpec) {
+        if (animHistoryId != anim.id) {
+            // 换了动画：历史跟着换（跨动画回退是另一件事）。
+            animUndo.clear()
+            animRedo.clear()
+            animHistoryId = anim.id
+        }
+        animUndo.addLast(studioStep(anim))
+        while (animUndo.size > UNDO_LIMIT) animUndo.removeFirst()
+        animRedo.clear()
+        paintStudioHistory()
+    }
+
+    private fun undoStudio() {
+        val (folder, anim) = studioEdit() ?: return
+        haltStudioPlay()
+        val step = animUndo.removeLastOrNull() ?: run {
+            Toast.makeText(this, R.string.anim_undo_none, Toast.LENGTH_SHORT).show()
+            return
+        }
+        animRedo.addLast(studioStep(anim))
+        applyStudioStep(folder, step)
+        animStatus.text = getString(R.string.anim_undone, animUndo.size)
+    }
+
+    private fun redoStudio() {
+        val (folder, anim) = studioEdit() ?: return
+        haltStudioPlay()
+        val step = animRedo.removeLastOrNull() ?: run {
+            Toast.makeText(this, R.string.anim_redo_none, Toast.LENGTH_SHORT).show()
+            return
+        }
+        animUndo.addLast(studioStep(anim))
+        applyStudioStep(folder, step)
+        animStatus.text = getString(R.string.anim_redone, animRedo.size)
+    }
+
+    /** 把一张快照变成当前状态：写回文件，然后**连选择一起**摆回去（含播放头那一刻）。 */
+    private fun applyStudioStep(folder: CharacterFolder, step: StudioStep) {
+        if (!writeStudioAnimation(folder, step.spec)) return
+        animChannel = step.channel
+        animBone = step.bone
+        animKeyIndex = step.key
+        animFrameIndex = step.frame
+        findViewById<TextView>(R.id.animChannel).text = channelLabel()
+        animPending = null
+        showStudioMoment(folder, step.spec, step.playhead)
+        paintStudioHistory()
+    }
+
+    /** 撤销/重做两个 chip 什么时候是有用的：上面没东西可退的时候把它们压暗。 */
+    private fun paintStudioHistory() {
+        val undo = findViewById<TextView>(R.id.animUndo)
+        val redo = findViewById<TextView>(R.id.animRedo)
+        undo.setTextColor(if (animUndo.isEmpty()) MUTED else INK)
+        redo.setTextColor(if (animRedo.isEmpty()) MUTED else INK)
+        undo.text = getString(R.string.anim_undo) + if (animUndo.isEmpty()) "" else " " + animUndo.size
+        redo.text = getString(R.string.anim_redo) + if (animRedo.isEmpty()) "" else " " + animRedo.size
     }
 
     /** 存一段动画。存不下就说出来，不假装成功 —— 界面上的数字会立刻对不上。 */
@@ -9447,6 +9615,9 @@ class MainActivity : AppCompatActivity() {
          * "手感上还有意义"的下限。工作台的 ±0.1 秒和那个输入秒数的弹窗共用这两个数 ——
          * 两个地方各写一遍 0.1 和 30，就会出现"弹窗里能填 0.05、工作台回不去"这种不一致。
          */
+        /** 撤销栈最多记这么多步。 */
+        const val UNDO_LIMIT = 40
+
         const val MIN_FRAME_SECONDS = 0.1f
         const val MAX_FRAME_SECONDS = 30f
 

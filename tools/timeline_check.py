@@ -75,29 +75,60 @@ def speed_of(spec):
     return min(MAX_SPEED, max(MIN_SPEED, float(spec.get("speed", 1.0))))
 
 
-def blend(x, y, f):
-    if not x.get("angles") and not y.get("angles"):
-        return {}
-    names = list(x.get("angles", {}).keys()) + [n for n in y.get("angles", {})
-                                                if n not in x.get("angles", {})]
+def pose_at(spec, t):
+    """某一刻的姿势：**每根骨头各自在"提到过它的帧"之间插值**（镜像 Anim.poseAt）。
+
+    老规矩只看相邻两帧（一根骨头只要有一边没写就当成回站姿），于是"第 1 帧写了手臂、
+    第 2 帧啥都没写、第 3 帧又写了"会让手臂在第 2 帧啪一下回 0 度 —— 用户报的
+    「部位像是在瞬移」就是它。新规矩看**提到过它的那几帧**：隔着多少帧都平滑走过去。
+    """
+    frames = spec["frames"]
+    starts, acc = [], 0.0
+    for f in frames:
+        starts.append(acc)
+        acc += frame_seconds(f)
+    total = acc
+    names = []
+    for f in frames:
+        for n in f.get("angles", {}):
+            if n not in names:
+                names.append(n)
     out = {}
     for name in names:
-        a = x["angles"].get(name, y["angles"].get(name, 0.0))
-        b = y["angles"].get(name, x["angles"].get(name, 0.0))
-        out[name] = a + (b - a) * f
+        mentions = [i for i, f in enumerate(frames) if name in f.get("angles", {})]
+        if not mentions:
+            continue
+        out[name] = value_of(name, mentions, frames, starts, total, spec.get("loop", True), t)
     return out
 
 
-def frame_pose(spec, index):
-    frames = spec["frames"]
-    if index < 0 or index >= len(frames):
-        return {}
-    here = frames[index]
-    nxt = frames[index + 1] if index + 1 < len(frames) else (
-        frames[0] if spec.get("loop", True) else None)
-    if nxt is None or nxt is here:
-        return dict(here.get("angles", {}))
-    return blend(here, nxt, 0.0)
+def value_of(name, mentions, frames, starts, total, loop, t):
+    first, last = mentions[0], mentions[-1]
+    first_value = frames[first]["angles"][name]
+    if len(mentions) == 1 or t <= starts[first]:
+        return first_value
+    lo, hi = first, -1
+    for m in mentions:
+        if starts[m] <= t:
+            lo = m
+        else:
+            hi = m
+            break
+    lo_value = frames[lo]["angles"][name]
+    if hi < 0:
+        if not loop or lo != last:
+            return lo_value
+        span = total - starts[last]
+        if span <= 0:
+            return first_value
+        f = min(1.0, max(0.0, (t - starts[last]) / span))
+        return lo_value + (first_value - lo_value) * f
+    span = starts[hi] - starts[lo]
+    if span <= 0:
+        return frames[hi]["angles"][name]
+    f = min(1.0, max(0.0, (t - starts[lo]) / span))
+    hi_value = frames[hi]["angles"][name]
+    return lo_value + (hi_value - lo_value) * f
 
 
 def anim_sample(spec, seconds):
@@ -114,10 +145,7 @@ def anim_sample(spec, seconds):
     for i, f in enumerate(frames):
         d = frame_seconds(f)
         if t < acc + d or i == len(frames) - 1:
-            frac = 0.0 if d <= 0 else min(1.0, max(0.0, (t - acc) / d))
-            nxt = frames[i + 1] if i + 1 < len(frames) else (
-                frames[0] if spec.get("loop", True) else f)
-            return {"angles": blend(f, nxt, frac), "state": f.get("state", ""),
+            return {"angles": pose_at(spec, t), "state": f.get("state", ""),
                     "frame": i, "frames": len(frames)}
         acc += d
     return None
@@ -186,50 +214,34 @@ def removed(keys, index):
 
 
 def bake(spec):
-    """帧 → 通道。要**精确**，就得照着帧模型真正的三条规矩来：
+    """帧 → 通道。每个"提到过它的帧"打一个关键帧，全部匀速（帧模型本身就是分段直线）。
 
-      * 两根相邻的帧都写了这根骨头 → 斜坡（EASE_LINEAR）；
-      * 只有一侧写了 → 这一段保持写了那一侧的值，到下一个边界才变（EASE_STEP），
-        否则烘出来会是一段斜坡，而原来是一动不动然后一跳；
-      * 两根都没写 → 这一段里这根骨头**不存在**，而"不存在"在消费端等于回站姿（0），
-        所以边界上要写一个 0，不能沿用上一个值（第一版就是这么错的：烘完差 168 度）。
-
-    已经有过旋转通道的骨头不重烘（用户手调过的不该被一次转换覆盖）。
+    上一版要用**阶跃**去凑"只写一侧时保持不动"，于是烘完的动作会在关键帧处一下子跳过去
+    （用户报的「瞬移」）。帧模型自己平滑之后，阶跃这一半就没有存在的理由了。
     """
     frames = spec["frames"]
     if not frames:
         return {b: dict(t) for b, t in spec.get("tracks", {}).items()}
     out = {b: dict(t) for b, t in spec.get("tracks", {}).items()}
-    n = len(frames)
     starts, acc = [], 0.0
     for f in frames:
         starts.append(acc)
         acc += frame_seconds(f)
-    starts.append(acc)
-
+    total = acc
     names = []
     for f in frames:
         for nm in f.get("angles", {}):
             if nm not in names:
                 names.append(nm)
-
     for name in names:
         if out.get(name, {}).get("rot"):
             continue
         keys = list(out.get(name, {}).get("rot", []))
-        for i in range(n):
-            here = frames[i]
-            nxt = frames[i + 1] if i + 1 < n else (frames[0] if spec.get("loop", True) else here)
-            mine = here.get("angles", {}).get(name)
-            theirs = nxt.get("angles", {}).get(name)
-            value = mine if mine is not None else (theirs if theirs is not None else 0.0)
-            ramps = mine is not None and theirs is not None
-            keys = with_key(keys, starts[i], value, EASE_LINEAR if ramps else EASE_STEP)
-        if spec.get("loop", True):
-            end_value = frame_pose(spec, 0).get(name, 0.0)
-        else:
-            end_value = frames[n - 1].get("angles", {}).get(name, 0.0)
-        keys = with_key(keys, starts[n], end_value, EASE_LINEAR)
+        mentions = [i for i, f in enumerate(frames) if name in f.get("angles", {})]
+        for m in mentions:
+            keys = with_key(keys, starts[m], frames[m]["angles"][name], EASE_LINEAR)
+        if spec.get("loop", True) and mentions:
+            keys = with_key(keys, total, frames[mentions[0]]["angles"][name], EASE_LINEAR)
         track = dict(out.get(name, {}))
         track["rot"] = keys
         out[name] = track
@@ -248,6 +260,7 @@ def shift_keys(keys, frm, delta, max_t):
 
 
 def shifted(tracks, frm, delta, max_t):
+    """在 frm 这一刻插了一段 delta 秒：之后的关键帧整体后移（镜像 Timeline.shifted）。"""
     if not tracks or delta == 0:
         return tracks
     return {b: {c: shift_keys(v, frm, delta, max_t) for c, v in tr.items()}
@@ -268,6 +281,7 @@ def drop_keys(keys, frm, to, max_t):
 
 
 def dropped(tracks, frm, to, max_t):
+    """删掉 frm→to 这一段：区间里的关键帧没了，后面的往前挪（镜像 Timeline.dropped）。"""
     if not tracks or to <= frm:
         return tracks
     return {b: {c: drop_keys(v, frm, to, max_t) for c, v in tr.items()}
@@ -365,6 +379,16 @@ def hit_key(keys, lane, lo, hi, px, py, radius):
         dx = time_to_x(lane, k["t"]) - px
         dy = value_to_y(k["v"], lo, hi, lane) - py
         d = (dx * dx + dy * dy) ** 0.5
+        if d <= best_d:
+            best, best_d = i, d
+    return best
+
+
+def hit_key_in_row(keys, lane, px, radius):
+    """只看横向的命中：关键帧是时间轴上一条带子上的点（镜像 TimelineLayout.hitKeyInRow）。"""
+    best, best_d = -1, radius
+    for i, k in enumerate(keys):
+        d = abs(time_to_x(lane, k["t"]) - px)
         if d <= best_d:
             best, best_d = i, d
     return best
@@ -608,6 +632,10 @@ def main():
     report("按在菱形上就选中它", hit_key(ks2, lane, lo2, hi2, here[0], here[1], HIT_RADIUS_DP) == 1)
     report("挨着但没按到 = 没选中（不是随便选一个）",
            hit_key(ks2, lane, lo2, hi2, here[0] + HIT_RADIUS_DP + 2, here[1] + 40, HIT_RADIUS_DP) == -1)
+    report("整行的高度都算数：纵坐标差多少都能选中（只看横向）",
+           hit_key_in_row(ks2, lane, time_to_x(lane, 1.0), HIT_RADIUS_DP) == 1)
+    report("横着离太远就不选（不是随便选一个）",
+           hit_key_in_row(ks2, lane, time_to_x(lane, 1.0) + HIT_RADIUS_DP + 3, HIT_RADIUS_DP) == -1)
     report("两个挨在一起时选**近的**那一个",
            hit_key([key(1.0, 0.0, EASE_LINEAR), key(1.02, 0.0, EASE_LINEAR)], lane, lo2, hi2,
                    time_to_x(lane, 1.005), value_to_y(0.0, lo2, hi2, lane), HIT_RADIUS_DP) in (0, 1))

@@ -790,12 +790,51 @@ def main():
            "@+id/animBind" in layout_text and "private fun bindStudioRule(" in activity
            and "anim_bind_where" in activity)
 
+    print("== 撤销 / 重做（1.25.0）==")
+    report("两个 chip 在底栏，而且是**动作**不是装饰（空的时候压暗 + 说一句）",
+           "@+id/animUndo" in layout_text and "@+id/animRedo" in layout_text
+           and "private fun undoStudio(" in activity and "private fun redoStudio(" in activity
+           and "R.string.anim_undo_none" in activity and "private fun paintStudioHistory(" in activity)
+    report("存的是**整个工作台的样子**（动画 + 播放头 + 选中的骨头/关键帧/帧/通道）",
+           "private class StudioStep(" in activity and "val playhead: Float," in activity
+           and "val channel: Int," in activity and "private fun studioStep(" in activity)
+    report("每一次**写文件之前**记一笔（写完之后再记就晚了）",
+           activity.count("pushStudioUndo(anim)") >= 10
+           and "private fun pushStudioUndo(anim: AnimationSpec)" in activity)
+    report("新的改动会清空重做栈（新的分支开始了），换动画也重新记",
+           "animRedo.clear()" in activity and "if (animHistoryId != anim.id)" in activity)
+    report("撤销栈封顶，不是无限长",
+           "while (animUndo.size > UNDO_LIMIT) animUndo.removeFirst()" in activity
+           and "const val UNDO_LIMIT = 40" in activity)
+    report("撤销之后连选择一起摆回去（回到刚才那一眼）",
+           "private fun applyStudioStep(" in activity
+           and "showStudioMoment(folder, step.spec, step.playhead)" in activity)
+
+    print("== 关键帧用起来该有的样子（1.25.0，四条都是用户报的）==")
+    report("① 有关键帧也能存（不只是 ＋）：把现在的姿势写进选中的那一个",
+           "private fun saveStudioKey(" in activity and "@+id/animKeySave" in layout_text
+           and "Timeline.moved(keys, animKeyIndex, key.t, value)" in activity)
+    report("② 编辑之后回到**播放头那一刻**，不是帧起点（否则姿势会自己变）",
+           "private var animPlayhead = 0f" in activity
+           and "private fun showStudioMoment(" in activity
+           and "showStudioMoment(folder, anim, animPlayhead)" in activity)
+    report("③ 菱形只在时间轴上拖：旋转通道竖拖不改值（值来自你把这一节摆成什么样）",
+           "channel == Timeline.ROTATION" in view_kt
+           and "fun hitKeyInRow(keys: List<AnimKey>, lane: Lane, px: Float, radiusPx: Float): Int" in tl_layout
+           and "TimelineLayout.hitKeyInRow(" in view_kt)
+    report("④ 帧模型改成每根骨头各自在提到过它的帧之间插值（跨帧不再瞬移）",
+           "private fun poseAt(a: AnimationSpec, t: Float)" in anim_kt
+           and "private fun valueOf(" in anim_kt and "private fun blend(" not in anim_kt)
+    report("而且烘培不再用阶跃去凑（烘出来就是平滑的，仍然逐点无损）",
+           "AnimKey.EASE_STEP" not in tl_kt.split("fun bake(")[1].split("fun trackedBones")[0]
+           and "AnimKey.EASE_LINEAR," in tl_kt)
+
     report("两根骨头之间的插值在引擎里，界面不算数学",
            "fun valueAt(keys: List<AnimKey>, time: Float)" in tl_kt
            and "fun ease(f: Float, kind: Int)" in tl_kt and "fun withKey(" in tl_kt)
-    report("选中一帧就摆上去，而且姿势取的是时间轴在**帧起点**的采样（和播放器同一刻）",
-           "applyStudioSample(Timeline.sample(anim, frameClock(anim, here))" in activity
-           and "private fun frameClock(" in activity
+    report("选中一帧/某一刻就摆上去，而且姿势取的是时间轴的采样（和播放器同一刻）",
+           "val sample = Timeline.sample(anim, frameClock(anim, clamped)) ?: return" in activity
+           and "private fun showStudioMoment(" in activity and "private fun frameClock(" in activity
            and "fun sample(spec: AnimationSpec, seconds: Float)" in tl_kt
            and "fun framePose(a: AnimationSpec, index: Int)" in anim_kt)
     report("改姿势就地改：拖关节 → onPoseEdited → 提示「存入这一帧」",
@@ -820,23 +859,30 @@ def main():
            "val keys = previewStateKeys(folder)" in activity)
     report("一帧什么开关都不开也是合法的一帧（有「底图」这条路回去）",
            "R.string.anim_state_plain" in activity and "animLiveStates.clear()" in activity)
-    report("旋转 / 放大 / 平移都在：视图旋转、双指旋转的增量、以及聚焦时的反变换",
-           "var viewRotation = 0f" in skel_kt and "fun rotateBy(" in skel_kt
-           and "private fun angleOf(" in skel_kt and "private fun anchorAt(" in skel_kt)
-    report("旋转是视图的（骨架/图/参考图一起转），所以画布只转一次",
-           "canvas.rotate(viewRotation, pivotX, pivotY)" in skel_kt and "val turned = viewRotation != 0f" in skel_kt)
+    # 视角**定死**（1.25.0）：曾经能转，但骨头走 vx/vy、图走 canvas 变换，两边各转一次，
+    # 骨头被转了两遍 —— 用户看到"骨骼和图片错位"。所以旋转整个拿掉，只剩缩放和平移。
+    report("视角只剩缩放和平移：没有旋转、没有旋转手势、也没有那个按钮",
+           "viewRotation" not in skel_kt and "rotateBy" not in skel_kt
+           and "angleOf" not in skel_kt and "private fun anchorAt(" in skel_kt
+           and "animTurn" not in layout_text)
+    report("骨头和图共用同一套变换（所以不可能错位）",
+           "private fun vx(p: Vec2): Float = offsetX + p.x * scale" in skel_kt
+           and "canvas.rotate(" not in skel_kt and "private fun toCanvas(x: Float, y: Float): Vec2 =\n" in skel_kt)
+    report("提示语也跟着改了（不再说双指缩放加旋转）",
+           "双指缩放/旋转" not in skel_kt and "双指缩放" in skel_kt)
     # 看的是 resetView 的**函数体**：旋转归零、重新算 fit、重新摆位，三件事都得在它里面。
     reset_body = skel_kt[skel_kt.find("fun resetView()"):]
     reset_body = reset_body[:reset_body.find("\n    }")]
-    report("「摆正视角」把旋转、缩放、偏移一起收回来",
-           "applyViewRotation(0f)" in reset_body and "computeFit(" in reset_body
-           and "placeFitted()" in reset_body)
+    report("「摆正视角」把缩放和偏移一起收回来",
+           "computeFit(" in reset_body and "placeFitted()" in reset_body
+           and "zoomed = false" in reset_body)
     report("工作台里也能播（不是只能跑去测试场）",
            "private fun toggleStudioPlay(" in activity and "private val studioTick" in activity
            and "Anim.startSeconds(anim, animFrameIndex)" in activity)
-    report("关键帧四件事各有一个人：加锚点、存、删、改时长",
+    report("帧与关键帧各有一个人：加锚点、存这一帧、存关键帧、删、改时长",
            "private fun addStudioAnchor(" in activity and "private fun saveStudioFrame(" in activity
-           and "private fun dropStudioFrame(" in activity and "private fun nudgeStudioFrame(" in activity)
+           and "private fun saveStudioKey(" in activity and "private fun dropStudioFrame(" in activity
+           and "private fun nudgeStudioFrame(" in activity)
     report("锚点落在播放头那一刻（不是永远加在末尾）",
            "val t = animTimeline.playhead" in activity
            and "val i = TimelineLayout.frameAt(anim, t)" in activity)
@@ -848,19 +894,19 @@ def main():
            and "const val MIN_FRAME_SECONDS = 0.1f" in activity)
     report("底下那条每个 chip 都挂上了自己那一件事",
            all(("R.id.%s" % i) in activity and ("setOnClickListener { %s" % fn) in activity
-               for i, fn in (("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "addStudioAnchor()"),
+               for i, fn in (("animUndo", "undoStudio()"), ("animRedo", "redoStudio()"),
+                             ("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "addStudioAnchor()"),
                              ("animBind", "bindStudioRule()"),
-                             ("animSaveFrame", "saveStudioFrame()"), ("animSlower", "nudgeStudioFrame(-0.1f)"),
+                             ("animSaveFrame", "saveStudioFrame()"), ("animKeySave", "saveStudioKey()"), ("animSlower", "nudgeStudioFrame(-0.1f)"),
                              ("animLonger", "nudgeStudioFrame(0.1f)"), ("animDropFrame", "dropStudioFrame()"),
                              ("animResetPose", "animView.resetPose()"),
                              ("animFit", "animView.resetView()"), ("animBones", "toggleStudioBones()"),
                              ("animEditBones", "toggleStudioBoneMode()"))))
-    # 「转 90°」那个按钮删掉了（1.22.1）：它和双指旋转走的是同一条画布旋转的代码，而那段代码
-    # 漏了 canvas.save()，点了就闪退。删按钮只是把入口拿掉，真因是绘制那一层 —— 所以这里同时
-    # 钉住"按钮确实没了"和"手势那条路还在"。
-    report("「转 90°」按钮已删，旋转只剩双指手势（画布那一段的 save 由 kotlin_check 第十条盯着）",
+    # 「转 90°」那个按钮 1.22.1 删过一次（它和双指旋转共用一段漏了 canvas.save() 的代码，
+    # 点了就闪退）；1.25.0 把旋转整个拿掉，于是"按钮"和"手势"两条路都没有了。
+    report("旋转两条路都没了：没有那个按钮，也没有双指旋转的手势",
            "animTurn" not in layout_text and "animTurn" not in activity
-           and "applyViewRotation(viewRotation + (ang - twistAngle))" in skel_kt)
+           and "applyViewRotation" not in skel_kt and "twistAngle" not in skel_kt)
     report("离开这一页就把它那套图解掉（两个实例不同时压在内存里）",
            "private fun leaveAnimationStudio(" in activity and "animView.release()" in activity
            and "if (currentPane == Pane.ANIMS && pane != Pane.ANIMS) leaveAnimationStudio()" in activity)
