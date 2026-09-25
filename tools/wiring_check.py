@@ -881,6 +881,11 @@ def main():
     # 图只进"画图用的"那张开关表 —— 不进引擎，所以不会变成一只关不掉的开关。
     step_anim = bench[bench.find("private fun stepAnimation("):]
     step_anim = step_anim[:step_anim.find("\n    }")]
+    # 一个动画只能有一条播放路径：宿主（工作台 + 测试场）都得走 Timeline.sample。直接调
+    # Anim.sample 会拿到一个没有画面偏移的采样 —— 编译能过，但通道里的位置/缩放演不出来。
+    report("两个宿主都只从 Timeline.sample 取这一刻（没有第二条播放路径）",
+           "Anim.sample(" not in activity and "Anim.sample(" not in bench
+           and activity.count("Timeline.sample(") >= 2 and "Timeline.sample(" in bench)
     report("每帧按时间采样，姿势交给求解器当目标（没有通道时 Timeline.sample 就是 Anim.sample）",
            "Timeline.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim
            and "if (spec.tracks.isEmpty())" in tl_kt)

@@ -132,8 +132,10 @@ class TimelineView @JvmOverloads constructor(
         val w = MeasureSpec.getSize(widthMeasureSpec)
         // 高度只由"有几行"决定：行数是内容，不是布局参数 —— 一只手和十九根骨头的时间轴
         // 不该一样高，而外面那个 ScrollView 负责更长的情况。
+        // dp() 给的是像素的浮点数，而 setMeasuredDimension 要的是整数 —— 这里向上取整，
+        // 最后一行不会因为少了半个像素被切掉。
         val h = dp(RULER_DP) + dp(ART_ROW_DP) + bones.size * dp(ROW_DP) + dp(BOTTOM_PAD_DP)
-        setMeasuredDimension(w, h)
+        setMeasuredDimension(w, Math.ceil(h.toDouble()).toInt())
     }
 
     // ── 画 ─────────────────────────────────────────────────────────────────

@@ -6250,7 +6250,9 @@ class MainActivity : AppCompatActivity() {
                 stopStudioPlay()
                 return
             }
-            val s = Anim.sample(anim, animClock)
+            // 和测试场同一个入口（Timeline.sample）：没有通道时它就是 Anim.sample，
+            // 有通道时多带回偏移与缩放 —— 一个动画只有一条播放路径。
+            val s = Timeline.sample(anim, animClock)
             if (s == null) {
                 stopStudioPlay()
                 return
