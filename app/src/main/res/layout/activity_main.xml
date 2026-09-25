@@ -412,8 +412,7 @@
                     android:layout_height="wrap_content"
                     android:paddingStart="8dp"
                     android:paddingEnd="8dp"
-                    android:scrollbars="none"
-                    android:visibility="gone">
+                    android:scrollbars="none">
 
                     <LinearLayout
                         android:id="@+id/animBar"

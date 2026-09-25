@@ -101,6 +101,27 @@ def layout_parents():
     return out
 
 
+def layout_visibility():
+    """id -> 布局里自己写着的 visibility（没写 = 跟着父容器）。"""
+    out = {}
+    base = os.path.join(RES, "layout")
+    for n in os.listdir(base):
+        if not n.endswith(".xml"):
+            continue
+        try:
+            root = ET.parse(os.path.join(base, n)).getroot()
+        except ET.ParseError:
+            continue
+        for el in root.iter():
+            vid = el.get("{http://schemas.android.com/apk/res/android}id") or ""
+            if not vid.startswith("@+id/"):
+                continue
+            vis = el.get("{http://schemas.android.com/apk/res/android}visibility")
+            if vis:
+                out[vid[len("@+id/"):]] = vis
+    return out
+
+
 def kotlin_text():
     parts = {}
     for base, _, names in os.walk(SRC):
@@ -675,6 +696,14 @@ def main():
            and parents.get("animRow") == "animPane"
            and parents.get("animPane") == "content"
            and "layout_gravity" not in layout_text.split('@+id/animBarScroll')[0].split("<HorizontalScrollView")[-1])
+    # 这一条是用户报的 bug 逼出来的：「怎么按钮都不见了」—— 底栏从根布局搬进动画页时，
+    # 我只搬了父子关系，**忘了它自己还写着 visibility="gone"**（原来由 show() 打开它，现在
+    # 只开关整页）。所以"谁是谁的孩子"不够，还得问"它自己藏没藏起来"。
+    vis = layout_visibility()
+    report("动画页的子控件没有自己藏着（整页开关之外没人再写 gone）",
+           vis.get("animBarScroll") is None and vis.get("animStatus") is None
+           and vis.get("animRow") is None and vis.get("animPane") == "gone",
+           str({k: v for k, v in vis.items() if k.startswith("anim")}))
     report("根布局那条状态行在动画页藏起来（否则它盖底栏、底栏盖时间轴）",
            "animPane.visibility = if (pane == Pane.ANIMS)" in activity
            and not re.search(r"pane == Pane\.ANIMS\s*\n\s*\) View\.VISIBLE", activity))
