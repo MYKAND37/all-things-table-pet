@@ -1,5 +1,6 @@
 package dev.atp.pet.engine.skeleton
 
+import dev.atp.pet.engine.anim.Anim
 import dev.atp.pet.engine.math.Vec2
 import dev.atp.pet.engine.math.normalizeAngle
 import org.json.JSONArray
@@ -78,6 +79,14 @@ data class NodeSpec(
     var radius: Float = 26f,
     /** A prop carried at this point, by id. Empty means nothing is worn here. */
     var prop: String = "",
+    /**
+     * 手指能不能抓住这个点（1.26.0）。
+     *
+     * 关掉之后它**照样存在**：道具还挂在这儿、绳子还系在这儿、物理照样看得见它 —— 只是
+     * 手指按上去不再把这一节拽走。给的是"这一节我不想让人拖"的场合（比如一整条手臂挂在
+     * 肩上时，指尖那个点会抢走手指），而不是"把这个点删掉"。
+     */
+    var draggable: Boolean = true,
 )
 
 /** A limb the user can drag by its end, solved as a two-segment chain. */
@@ -94,21 +103,46 @@ data class LayerSpec(
     val bone: String,
     val z: Int,
     /**
-     * Drawn only while this state is on — or, written with a leading "!", only while it is
-     * OFF. That is what makes a replacement work: the plain arm says "!mech" and the
-     * mechanical one says "mech", and exactly one of them is ever drawn.
+     * Drawn only while these switches are as written — **all of them** (they are joined with
+     * `+`, and a leading "!" flips one). That is what makes a replacement work: the plain arm
+     * says `!mech` and the mechanical one says `mech`, and exactly one of them is ever drawn.
+     *
+     * 为什么是**一串**（1.26.0）：一根骨头可以有好几套替换图（三件衣服），而"平时那张"
+     * 必须在**它们任何一个**开着的时候都让位。一个 `state` 只能写一个开关，于是老实现里
+     * 只有第一次替换真的生效 —— 用户报的「导入了三个部位状态结果只显示第一个」就是它。
      */
     val state: String = "",
     /** Which artwork file, without .png. Empty means "the one named after the bone". */
     val art: String = "",
+    /**
+     * 同一根骨头上，**只有最高那一档会画**（1.26.0）。
+     *
+     * 「当多个状态开启时优先显示哪个」：三件替换衣服同时开着时，画权重最大的那一件。
+     * 默认 0 —— 也就是所有旧数据、以及"叠加"那一类图（它们和底图同档，所以照旧一起画）。
+     */
+    val prio: Int = 0,
 ) {
     val artKey: String get() = if (art.isEmpty()) bone else art
 
-    /** Does this layer draw, given the states that are on? Unknown states read as off. */
+    /** 这一层写着的开关，拆成一个个（和动画帧那一半同一个分隔符）。 */
+    val states: List<String> get() = Anim.statesOf(state)
+
+    /**
+     * Does this layer draw, given the states that are on? Unknown states read as off.
+     *
+     * 一串开关是**与**：每一个都要满足（`!a+!b` = "a 关着而且 b 也关着"）。
+     */
     fun visible(states: Map<String, Boolean>): Boolean {
         if (state.isEmpty()) return true
-        val on = states[state.removePrefix("!")] == true
-        return if (state.startsWith("!")) !on else on
+        for (one in this.states) {
+            val on = states[one.removePrefix("!")] == true
+            if (one.startsWith("!")) {
+                if (on) return false
+            } else if (!on) {
+                return false
+            }
+        }
+        return true
     }
 }
 
@@ -397,6 +431,8 @@ class CharacterSpec(
                     at = n.optDouble("at", 0.0).toFloat(),
                     radius = n.optDouble("radius", 26.0).toFloat(),
                     prop = n.optString("prop", ""),
+                    // 缺键 = 能拖 = 老行为。
+                    draggable = n.optBoolean("draggable", true),
                 )
             }.toMutableList()
 
@@ -412,6 +448,7 @@ class CharacterSpec(
                 LayerSpec(
                     l.getString("bone"), l.getInt("z"),
                     l.optString("state", ""), l.optString("art", ""),
+                    l.optInt("prio", 0),
                 )
             }.toMutableList()
 

@@ -34,6 +34,13 @@ data class Settings(
     val showBalance: Boolean = true,
     /** The rig itself, over the artwork. For lining a drawing up against a bone. */
     val showBones: Boolean = false,
+    /**
+     * 画不画**节点**（1.26.0）：那些钉在骨头上的点（指尖、肩膀……道具和绳子挂在那儿）。
+     *
+     * 默认开 = 现在的样子（世界一直画着它们）。关掉是给"只想看宠物"的时候用的：
+     * 节点是编辑用的家具，玩的时候它们只是几个圈。
+     */
+    val showNodes: Boolean = true,
     /** Particles and liquid. Off is for a slow phone, and for seeing the physics alone. */
     val particles: Boolean = true,
     val liquid: Boolean = true,
@@ -125,6 +132,7 @@ data class Settings(
             showGround = flag(o, "showGround", true),
             showBalance = flag(o, "showBalance", true),
             showBones = flag(o, "showBones", false),
+            showNodes = flag(o, "showNodes", true),
             particles = flag(o, "particles", true),
             liquid = flag(o, "liquid", true),
             followPet = flag(o, "followPet", true),
@@ -157,6 +165,7 @@ data class Settings(
             .put("showGround", s.showGround)
             .put("showBalance", s.showBalance)
             .put("showBones", s.showBones)
+            .put("showNodes", s.showNodes)
             .put("particles", s.particles)
             .put("liquid", s.liquid)
             .put("followPet", s.followPet)

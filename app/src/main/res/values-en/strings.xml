@@ -137,6 +137,8 @@
     <string name="import_failed">Import failed — maybe not an image</string>
     <string name="liquid_clear">Clear the liquid</string>
     <string name="liquid_cleared">Liquid cleared</string>
+    <string name="liquid_behind">Behind</string>
+    <string name="liquid_front">In front</string>
     <string name="liquid_collides_off">Passes through the pet</string>
     <string name="liquid_collides_on">Collides with the pet</string>
     <string name="liquid_drops">%1$d drops on the bench</string>
@@ -318,6 +320,8 @@
     <string name="particle_on_bench">%1$d on the bench</string>
     <string name="particle_size">Size</string>
     <string name="particle_sprayed">Sprayed %1$s · look at the bench</string>
+    <string name="particle_front">In front</string>
+    <string name="particle_behind">Behind</string>
     <string name="particle_stains_off">No mark</string>
     <string name="particle_stains_on">Leaves a mark</string>
     <string name="pet_back">Back</string>
@@ -426,6 +430,10 @@
     <string name="rig_node_none">(none)</string>
     <string name="rig_node_on">on</string>
     <string name="rig_node_place">Where on that bone</string>
+    <string name="rig_node_drag">Draggable</string>
+    <string name="rig_node_drag_on">A finger can drag this part</string>
+    <string name="rig_node_drag_off">A finger cannot drag this part</string>
+    <string name="settings_show_nodes">Show nodes</string>
     <string name="rig_node_prop">Wears a prop</string>
     <string name="rig_node_radius">Touch radius</string>
     <string name="rig_node_saved">Node placed and saved</string>
@@ -608,5 +616,7 @@ The full text (licence status, how to report, applicable law) is in the reposito
     <string name="part_variant_mode_hint">Overlay: bandages, wounds, sweat, accessories — both are drawn, and the transparent parts of the top one show the one underneath. Replace: a mechanical arm, another outfit — the other drawing of the same bone, and the original is not drawn while the state is on.</string>
     <string name="part_variant_to_overlay">Make it an overlay</string>
     <string name="part_variant_to_replace">Make it a replacement</string>
+    <string name="part_variant_prio">Prio %1$d</string>
+    <string name="part_variant_prio_title">Where %1$s's drawing ranks</string>
     <string name="part_variant_switched">Changed</string>
 </resources>

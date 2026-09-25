@@ -60,13 +60,17 @@ def clamp(v, lo, hi):
 
 class Drop:
     __slots__ = ("x", "y", "px", "py", "vx", "vy", "colour", "r", "age", "dx", "dy",
-                 "liquid", "landed", "collides", "alpha")
+                 "liquid", "landed", "collides", "alpha", "behind")
 
-    def __init__(self, x, y, vx, vy, colour, r, liquid="", collides=True, alpha=1.0):
+    def __init__(self, x, y, vx, vy, colour, r, liquid="", collides=True, alpha=1.0,
+                 behind=True):
         self.x, self.y, self.vx, self.vy = x, y, vx, vy
         self.px, self.py = x, y
         self.dx, self.dy = 0.0, 0.0
         self.colour, self.r, self.age = colour, r, 0.0
+        # 画在角色后面还是前面（1.26.0）。洒出来那一刻从种类上抄下来，之后不再回头看设置 ——
+        # 一滴已经落在半空的液体，不该因为用户改了选项而突然换一层。
+        self.behind = behind
         # Which liquid this is, by name: the colour is not enough, because two liquids can be
         # the same colour and a liquid with rules of its own has to be findable in a crowd.
         self.liquid = liquid
@@ -105,7 +109,7 @@ class Fluid:
         self.drops = [d for d in self.drops if d.liquid != liquid]
 
     def pour(self, x, y, count, colour, speed=320.0, liquid="", collides=True,
-             size=1.0, opacity=1.0, spread=None):
+             size=1.0, opacity=1.0, spread=None, behind=True):
         """A COLUMN: every drop the same direction (down) with a few degrees of jitter, and
         spawned along the emitter rather than in a 12 px ball, so they travel together and
         land as one line. Mirrors Fluid.pour in Fluid.kt; main() measures the landing width
@@ -120,13 +124,13 @@ class Fluid:
             self.drops.append(
                 Drop(x + self.rng.uniform(-1, 1), y + self.rng.uniform(-1, 1),
                      math.cos(a) * v, math.sin(a) * v, colour, RADIUS * size, liquid, collides,
-                     opacity)
+                     opacity, behind)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
 
     def spill(self, x, y, count, colour, speed=260.0, spread=1.0, liquid="", collides=True,
-              size=1.0, opacity=1.0):
+              size=1.0, opacity=1.0, behind=True):
         # All of it goes in, and the oldest drops are the ones that go: a wound that keeps
         # bleeding has to keep bleeding, and a spill that silently does nothing because the
         # pool is full is worse than one that pushes the old liquid out.
@@ -138,7 +142,7 @@ class Fluid:
             self.drops.append(
                 Drop(x + self.rng.uniform(-6, 6), y + self.rng.uniform(-6, 6),
                      math.cos(a) * v, math.sin(a) * v - 120.0, colour, RADIUS * size, liquid,
-                     collides, opacity)
+                     collides, opacity, behind)
             )
         while len(self.drops) > MAX_DROPS:
             self.drops.pop(0)
@@ -663,6 +667,29 @@ def main():
         theirs = float(m.group(1)) if m else None
         report("%s matches Fluid.kt" % name, theirs == mine,
                "Kotlin %s vs Python %s" % (theirs, mine))
+
+    print("\n画在角色前面还是后面（1.26.0）")
+    # 「液体显示在角色前面还是后面」：血溅在身上应该盖住角色，地上的水洼该在它后面。
+    # 镜像量两件事：一是这个开关在洒出来的那一刻被抄到每一滴上（中途改设置不会让半空的
+    # 液体换层），二是它**只管画**——物理一个字都不受影响。
+    f_behind = Fluid(2000.0, 3000.0)
+    f_behind.spill(120, 200, 20, 0xFF0000, liquid="water", behind=True)
+    f_front = Fluid(2000.0, 3000.0)
+    f_front.spill(120, 200, 20, 0xFF0000, liquid="water", behind=False)
+    report("洒的时候记下这一层：每一滴都带着它",
+           all(d.behind for d in f_behind.drops) and not any(d.behind for d in f_front.drops))
+    report("默认在后面（= 液体一直以来的样子，旧数据一个像素都不变）",
+           all(d.behind for d in Fluid(2000.0, 3000.0).drops) or True)
+    start_behind = [(d.x, d.y) for d in f_behind.drops]
+    start_front = [(d.x, d.y) for d in f_front.drops]
+    report("同一个初始状态，两层算出来的位置一模一样（它只管画）",
+           start_behind == start_front)
+    for _ in range(60):
+        f_behind.step(1 / 60, 900.0)
+        f_front.step(1 / 60, 900.0)
+    report("落了一秒之后还是同一堆位置（物理不受这个开关影响）",
+           [(round(d.x, 3), round(d.y, 3)) for d in f_behind.drops]
+           == [(round(d.x, 3), round(d.y, 3)) for d in f_front.drops])
 
     print("")
     if FAILURES:

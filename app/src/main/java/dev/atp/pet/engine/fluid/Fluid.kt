@@ -52,6 +52,16 @@ data class LiquidSpec(
      * the way to zero: a drop nobody can see is a drop somebody will swear is not there.
      */
     val opacity: Float = 1f,
+    /**
+     * 画在角色的**后面**（true，默认）还是**前面**（false）。
+     *
+     * 「液体显示在角色前面还是后面」：血溅在身上、水淋在毛上，应该盖住角色；而地上的水洼、
+     * 雨丝、身后的黏液该在它后面。默认 true —— 这正是液体一直以来的样子（世界先画液体、
+     * 再画角色），所以旧数据一个像素都不变。
+     *
+     * 注意它和粒子的默认值**相反**（粒子默认在前面）：各按各的老行为来，升级不会偷偷换样子。
+     */
+    val behind: Boolean = true,
 )
 
 /** One blob of liquid. Drawn as a circle; only the crowding between them makes it fluid. */
@@ -73,6 +83,8 @@ class Drop(
     val liquid: String = "",
     /** Whether the body pushes this drop around. Copied from the kind when it is spilled. */
     val collides: Boolean = true,
+    /** 画在角色后面还是前面。也是洒出来的那一刻从种类上抄下来的。 */
+    val behind: Boolean = true,
     /**
      * How solid this one drop is drawn, 0..1. Copied from the kind when it is spilled.
      *
@@ -218,7 +230,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
     private fun add(
         colour: Int, x: Float, y: Float, vx: Float, vy: Float,
         viscosity: Float, liquid: String, collides: Boolean,
-        size: Float = 1f, opacity: Float = 1f,
+        size: Float = 1f, opacity: Float = 1f, behind: Boolean = true,
     ) {
         drops.add(
             Drop(
@@ -226,6 +238,9 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 colour = colour, radius = RADIUS * size.coerceIn(MIN_SIZE, MAX_SIZE),
                 viscosity = viscosity, liquid = liquid, collides = collides,
                 alpha = opacity.coerceIn(MIN_OPACITY, 1f),
+                // 画在角色后面还是前面，洒出来的那一刻就从种类上抄下来（和 collides 一样）：
+                // 一滴已经落在半空的液体，不该因为用户改了设置而突然换一层。
+                behind = behind,
             )
         )
     }

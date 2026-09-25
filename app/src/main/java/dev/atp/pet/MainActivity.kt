@@ -2418,6 +2418,35 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 row.addView(swap)
+
+                // 权重（1.26.0）：几件替换图同时开着时，只有**最高那一档**会画。
+                // 只在"替换"上出现：叠加和底图同档（一起画），给叠加调权重是没有意义的。
+                if (!overlayNow) {
+                    val prioNow = CharacterSpec.parseOrNull(folder.specText())?.layers
+                        ?.firstOrNull { it.bone == bone && it.state == layer.state }?.prio ?: 0
+                    val prioChip = label(getString(R.string.part_variant_prio, prioNow), 11f, MUTED)
+                    prioChip.setPadding(dp(8), dp(6), dp(8), dp(6))
+                    prioChip.setOnClickListener {
+                        askNumber(
+                            getString(R.string.part_variant_prio_title, boneLabel(bone)),
+                            prioNow.toFloat(),
+                            CharacterFolder.MIN_PRIO.toFloat(),
+                            CharacterFolder.MAX_PRIO.toFloat(),
+                        ) { v ->
+                            val state = Subjects.tagState(layer.state)
+                            if (store.setVariantPriority(folder, bone, state, v.toInt())) {
+                                buildPartFiles(folder)
+                                reloadSummoned(folder)
+                            } else {
+                                Toast.makeText(
+                                    this, R.string.rig_save_failed, Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                            true
+                        }
+                    }
+                    row.addView(prioChip)
+                }
             }
 
             val del = label(getString(R.string.part_files_delete), 11f, MUTED)
@@ -3673,6 +3702,7 @@ class MainActivity : AppCompatActivity() {
         var place = existing?.let { n -> bones.firstOrNull { it.name == n.bone }?.let { RigEdit.placeOf(it, n.at) } }
             ?: "joint"
         var prop = existing?.prop ?: ""
+        var draggable = existing?.draggable ?: true
 
         val nameInput = EditText(this).apply {
             setText(existing?.name ?: RigEdit.freeNodeName(bones, skeletonView.rigNodes()))
@@ -3757,6 +3787,24 @@ class MainActivity : AppCompatActivity() {
         box.addView(propChip)
         box.addView(label(getString(R.string.rig_node_prop_hint), 10f, MUTED, top = 4))
 
+        // 能不能拖（1.26.0）：关掉之后这个点照样挂道具、照样系绳子、照样有碰撞，
+        // 只是手指按上去不再把这一节拽走。给"一整条手臂挂在肩上时，指尖那个点会抢走手指"用。
+        val dragChip = label(getString(R.string.rig_node_drag_on), 12f, INK)
+        dragChip.setPadding(dp(12), dp(8), dp(12), dp(8))
+        fun paintDrag() {
+            dragChip.background = getDrawable(
+                if (draggable) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            dragChip.setTextColor(if (draggable) INK else MUTED)
+            dragChip.text = getString(
+                if (draggable) R.string.rig_node_drag_on else R.string.rig_node_drag_off
+            )
+        }
+        dragChip.setOnClickListener { draggable = !draggable; paintDrag() }
+        box.addView(label(getString(R.string.rig_node_drag), 11f, MUTED, top = 12, bottom = 6))
+        box.addView(dragChip)
+        box.addView(label(getString(R.string.rig_node_drag_hint), 10f, MUTED, top = 4))
+
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.rig_node_new else R.string.rig_node_edit)
             .setView(scrolling(box))
@@ -3766,7 +3814,7 @@ class MainActivity : AppCompatActivity() {
                     .ifEmpty { RigEdit.freeNodeName(bones, skeletonView.rigNodes()) }
                 val ok = skeletonView.saveNode(
                     existing?.name, name, bone, RigEdit.placeAt(boneSpec, place),
-                    radiusOf(), prop,
+                    radiusOf(), prop, draggable,
                 )
                 if (!ok) Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
                 persistRig()
@@ -3775,6 +3823,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
         paintChips(placeViews, listOf("joint", "mid", "tip"), { place })
+        paintDrag()
     }
 
     private fun boneRow(
@@ -7014,6 +7063,8 @@ class MainActivity : AppCompatActivity() {
         toggle(R.string.settings_show_ground, settings.showGround) { put(settings.copy(showGround = it)) }
         toggle(R.string.settings_show_balance, settings.showBalance) { put(settings.copy(showBalance = it)) }
         toggle(R.string.settings_show_bones, settings.showBones) { put(settings.copy(showBones = it)) }
+        // 节点：编辑用的那几个圈（道具和绳子挂在上面的点）。关掉照样能拖，只是看不见。
+        toggle(R.string.settings_show_nodes, settings.showNodes) { put(settings.copy(showNodes = it)) }
         toggle(R.string.settings_follow, settings.followPet) { put(settings.copy(followPet = it)) }
 
         section(R.string.settings_effects, R.string.settings_effects_hint)
@@ -7221,6 +7272,7 @@ class MainActivity : AppCompatActivity() {
     private fun askEditLiquid(existing: LiquidSpec?, after: (() -> Unit)? = null) {
         var colour = existing?.colour ?: LIQUID_PALETTE[0]
         var collides = existing?.collides ?: true
+        var behind = existing?.behind ?: true
         val idInput = EditText(this).apply {
             setText(existing?.id ?: nextLiquidId())
             hint = getString(R.string.logic_stat_id)
@@ -7282,6 +7334,21 @@ class MainActivity : AppCompatActivity() {
         }
         collideChip.setOnClickListener { collides = !collides; paintCollide() }
 
+        // 画在角色**后面**还是**前面**（1.26.0）：地上的水洼在它后面，溅在身上、淋在毛上的
+        // 应该盖住它。默认"后面"= 液体一直以来的样子（世界先画液体再画角色）。
+        val depthChip = label(getString(R.string.liquid_behind), 12f, INK)
+        depthChip.setPadding(dp(10), dp(8), dp(10), dp(8))
+        fun paintDepth() {
+            depthChip.background = getDrawable(
+                if (behind) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            depthChip.setTextColor(if (behind) INK else MUTED)
+            depthChip.text = getString(
+                if (behind) R.string.liquid_behind else R.string.liquid_front
+            )
+        }
+        depthChip.setOnClickListener { behind = !behind; paintDepth() }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -7297,6 +7364,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(label(getString(R.string.logic_liquid_kind), 11f, MUTED, top = 10, bottom = 6))
         box.addView(collideChip)
         box.addView(label(getString(R.string.logic_liquid_collides_hint), 10f, MUTED, top = 6))
+        box.addView(depthChip)
+        box.addView(label(getString(R.string.liquid_depth_hint), 10f, MUTED, top = 6))
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.logic_add_liquid else R.string.logic_liquids)
@@ -7309,6 +7378,7 @@ class MainActivity : AppCompatActivity() {
                     LiquidSpec(
                         id, name, colour, viscosityOf(),
                         collides = collides, size = sizeOf(), opacity = opacityOf(),
+                        behind = behind,
                     )
                 )
                 saveLiquids()
@@ -7318,6 +7388,10 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
         paintSwatches(chipViews, LIQUID_PALETTE, colour)
+        // 打开时先把两个开关画对。原来 paintCollide() 一次都没被调用过 —— chip 上的字是 XML
+        // 里写死的，和这个液体真正的设置无关（正好是"看到的不等于真的"那类毛病）。
+        paintCollide()
+        paintDepth()
     }
 
     private fun paintSwatches(views: List<View>, colours: List<Int>, current: Int) {
@@ -7485,6 +7559,7 @@ class MainActivity : AppCompatActivity() {
         var colour = existing?.colour ?: LIQUID_PALETTE[0]
         var gravity = existing?.gravity ?: true
         var stains = existing?.stains ?: false
+        var behind = existing?.behind ?: false
 
         val idInput = EditText(this).apply {
             setText(existing?.id ?: nextParticleId())
@@ -7523,8 +7598,10 @@ class MainActivity : AppCompatActivity() {
 
         val gravityChip = label(getString(R.string.particle_gravity_on), 12f, INK)
         val stainChip = label(getString(R.string.particle_stains_on), 12f, INK)
+        // 面前还是后面（1.26.0）：火花、血在前面；灰尘、烟那种"在它后面的空气"放后面。
+        val depthChip = label(getString(R.string.particle_front), 12f, INK)
         val switchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        for (chip in listOf(gravityChip, stainChip)) {
+        for (chip in listOf(gravityChip, stainChip, depthChip)) {
             chip.setPadding(dp(10), dp(8), dp(10), dp(8))
             chip.layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
@@ -7533,7 +7610,9 @@ class MainActivity : AppCompatActivity() {
             switchRow.addView(chip)
         }
         fun paintSwitches() {
-            for ((chip, on) in listOf(gravityChip to gravity, stainChip to stains)) {
+            for ((chip, on) in listOf(
+                gravityChip to gravity, stainChip to stains, depthChip to !behind,
+            )) {
                 chip.background = getDrawable(
                     if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
                 )
@@ -7545,9 +7624,13 @@ class MainActivity : AppCompatActivity() {
             stainChip.text = getString(
                 if (stains) R.string.particle_stains_on else R.string.particle_stains_off
             )
+            depthChip.text = getString(
+                if (behind) R.string.particle_behind else R.string.particle_front
+            )
         }
         gravityChip.setOnClickListener { gravity = !gravity; paintSwitches() }
         stainChip.setOnClickListener { stains = !stains; paintSwitches() }
+        depthChip.setOnClickListener { behind = !behind; paintSwitches() }
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -7569,7 +7652,10 @@ class MainActivity : AppCompatActivity() {
                 val name = nameInput.text.toString().trim().ifEmpty { id }
                 logicParticles.removeAll { it.id == id || (existing != null && it.id == existing.id) }
                 logicParticles.add(
-                    ParticleSpec(id, name, colour, sizeOf(), gravity = gravity, stains = stains)
+                    ParticleSpec(
+                        id, name, colour, sizeOf(),
+                        gravity = gravity, stains = stains, behind = behind,
+                    )
                 )
                 saveParticles()
                 refreshParticles()

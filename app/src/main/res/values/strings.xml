@@ -16,6 +16,8 @@
     <string name="particle_gravity_on">受重力（会掉下来）</string>
     <string name="particle_gravity_off">不受重力（飘着）</string>
     <string name="particle_stains_on">会留印子</string>
+    <string name="particle_front">画在前面</string>
+    <string name="particle_behind">画在后面</string>
     <string name="particle_stains_off">不留印子</string>
     <string name="particle_size">大小</string>
     <string name="particle_colour">颜色</string>
@@ -163,6 +165,8 @@
     <string name="part_variant_mode_hint">叠加：绷带、伤口、汗、配件 —— 两张都画，上面那张透明的地方透出下面那张。替换：机械臂、另一套衣服 —— 同一根骨头的另一张画，状态开着时原来那张不画。</string>
     <string name="part_variant_to_overlay">改成叠加</string>
     <string name="part_variant_to_replace">改成替换</string>
+    <string name="part_variant_prio">权重 %1$d</string>
+    <string name="part_variant_prio_title">%1$s 的这张图排第几（大的盖住小的）</string>
     <string name="part_variant_switched">改好了</string>
     <string name="part_no_states">先去「逻辑管理」加一个状态。</string>
     <string name="part_hint">点部位名即可从设备里选图。图片按整张画布导出即可，命名由 App 决定。</string>
@@ -335,6 +339,11 @@
     <string name="rig_node_radius">判定半径</string>
     <string name="rig_node_radius_hint">别的东西离它多近算碰到。节点没有长度，这个数就是它全部的大小。</string>
     <string name="rig_node_prop">装一个道具</string>
+    <string name="rig_node_drag">能不能拖</string>
+    <string name="rig_node_drag_on">手指能拖这一节</string>
+    <string name="rig_node_drag_off">手指拖不动这一节</string>
+    <string name="rig_node_drag_hint">关掉之后这个点照样挂道具、照样系绳子、照样有碰撞，只是手指按上去不再把这一节拽走。</string>
+    <string name="settings_show_nodes">显示节点</string>
     <string name="rig_node_prop_hint">装上的道具会跟着这个点走：手里拿的东西、头上戴的东西。装了道具的节点画成蓝色。</string>
     <string name="rig_node_none">（无）</string>
     <string name="rig_node_on">挂在</string>
@@ -580,6 +589,9 @@
     <string name="logic_liquids_hint">液体是规则能"喷"出来的东西。黏度决定它是摊开还是抱成一团。</string>
     <string name="logic_liquid_kind">性质</string>
     <string name="liquid_collides_on">和角色碰撞</string>
+    <string name="liquid_behind">画在后面</string>
+    <string name="liquid_front">画在前面</string>
+    <string name="liquid_depth_hint">地上的水洼在角色后面；溅在身上、淋在毛上的盖住它。</string>
     <string name="liquid_collides_off">穿过角色</string>
     <string name="logic_liquid_collides_hint">「和角色碰撞」：水滴会绕着身体流、堆在脚上。「穿过角色」：身体对它不存在——水从身上穿过去（地面和墙照样拦得住它）。</string>
     <string name="logic_cond_kind">测什么</string>

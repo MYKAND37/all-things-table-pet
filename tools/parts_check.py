@@ -22,11 +22,21 @@ def report(label, ok, detail=""):
 
 
 def visible(state, states):
-    """LayerSpec.visible: empty always, "x" needs x on, "!x" needs x off."""
+    """LayerSpec.visible（1.26.0）：一串开关是**与**；`!x` 要 x 关着。
+
+    一串（`+` 连接）是这一版加的：一根骨头可以有好几件替换衣服，而"平时那张"必须在
+    **它们任何一个**开着的时候都让位。
+    """
     if not state:
         return True
-    on = states.get(state.lstrip("!"), False)
-    return (not on) if state.startswith("!") else on
+    for one in [s.strip() for s in state.split("+") if s.strip()]:
+        on = states.get(one.lstrip("!"), False)
+        if one.startswith("!"):
+            if on:
+                return False
+        elif not on:
+            return False
+    return True
 
 
 def art_key(layer):
@@ -81,12 +91,28 @@ def blank_reason(parts, can_draw, drew):
 
 
 def drawn(layers, states, library):
-    """Back to front, the layers that actually draw. Library: which files exist."""
-    out = []
-    for layer in sorted(layers, key=lambda l: l["z"]):
+    """Back to front, the layers that actually draw. Library: which files exist.
+
+    同一根骨头上**只有最高权重那一档会画**（1.26.0，镜像 PartRenderer.draw）：三件替换衣服
+    同时开着时画权重最大的那件；"叠加"和底图同档（0），所以照旧一起画。旧数据全是 0。
+    """
+    order = sorted(layers, key=lambda l: l["z"])
+    top = {}
+    for layer in order:
         if art_key(layer) not in library:
             continue
         if not visible(layer.get("state", ""), states):
+            continue
+        prio = layer.get("prio", 0)
+        if top.get(layer["bone"]) is None or prio > top[layer["bone"]]:
+            top[layer["bone"]] = prio
+    out = []
+    for layer in order:
+        if art_key(layer) not in library:
+            continue
+        if not visible(layer.get("state", ""), states):
+            continue
+        if layer.get("prio", 0) != top[layer["bone"]]:
             continue
         out.append(art_key(layer))
     return out
@@ -223,6 +249,44 @@ def main():
            drawn(overlay_pair + [{"bone": "chest", "z": 99, "art": "chest"}], {"绷带": True},
                  lib | {"chest"}) == ["arm", "arm__bandage", "chest"],
            "手臂的叠加层画在胸口**之前**")
+
+    print("\n一件骨头好几套替换图（1.26.0 修的 bug + 权重）")
+    # 用户报的：「导入了三个部位状态结果它只显示第一个，不管开关与否」。
+    # 根因是"平时那张"的让位标记只在 state 为空时才写 —— 第一次替换之后它就不是空的了，
+    # 于是第二件、第三件再也没让它让位。所以这里量的是"三件里任意一件开着，屏幕上几张"。
+    three = [
+        {"bone": "hand", "z": 10, "state": "!衣A+!衣B+!衣C", "art": "hand", "prio": 0},
+        {"bone": "hand", "z": 11, "state": "衣A", "art": "hand__a", "prio": 1},
+        {"bone": "hand", "z": 12, "state": "衣B", "art": "hand__b", "prio": 2},
+        {"bone": "hand", "z": 13, "state": "衣C", "art": "hand__c", "prio": 3},
+    ]
+    lib3 = {"hand", "hand__a", "hand__b", "hand__c"}
+    report("三件都不开：画平时那张",
+           drawn(three, {}, lib3) == ["hand"], str(drawn(three, {}, lib3)))
+    for on, want in (("衣A", "hand__a"), ("衣B", "hand__b"), ("衣C", "hand__c")):
+        report("只开 %s：只画那一件（底图让位）" % on,
+               drawn(three, {on: True}, lib3) == [want], str(drawn(three, {on: True}, lib3)))
+    report("两件同时开：只画**权重大的**那件",
+           drawn(three, {"衣A": True, "衣B": True}, lib3) == ["hand__b"],
+           str(drawn(three, {"衣A": True, "衣B": True}, lib3)))
+    report("三件全开：还是只画权重最大的那一件",
+           drawn(three, {"衣A": True, "衣B": True, "衣C": True}, lib3) == ["hand__c"],
+           str(drawn(three, {"衣A": True, "衣B": True, "衣C": True}, lib3)))
+    report("一串让位标记是**与**：任意一件开着，底图就不画",
+           not visible("!衣A+!衣B+!衣C", {"衣B": True})
+           and visible("!衣A+!衣B+!衣C", {"衣A": False, "衣B": False, "衣C": False}))
+    # 老文件的形状（一个 `!`、权重缺键）必须一个像素都不变。
+    legacy = [
+        {"bone": "arm", "z": 10, "state": "!机械", "art": "arm"},
+        {"bone": "arm", "z": 11, "state": "机械", "art": "arm__mech"},
+    ]
+    report("老文件（单个 !、没有权重）和以前一模一样",
+           drawn(legacy, {"机械": True}, lib) == ["arm__mech"]
+           and drawn(legacy, {}, lib) == ["arm"])
+    report("叠加那一类和底图同档，所以照旧一起画（权重不打断叠加）",
+           drawn([{"bone": "arm", "z": 10, "art": "arm", "prio": 0},
+                  {"bone": "arm", "z": 11, "state": "绷带", "art": "arm__bandage", "prio": 0}],
+                 {"绷带": True}, lib) == ["arm", "arm__bandage"])
 
     print("")
     if FAILURES:

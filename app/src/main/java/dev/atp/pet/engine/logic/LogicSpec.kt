@@ -621,6 +621,8 @@ class LogicSpec(
                             .coerceIn(Fluid.MIN_SIZE, Fluid.MAX_SIZE),
                         opacity = l.optDouble("opacity", 1.0).toFloat()
                             .coerceIn(Fluid.MIN_OPACITY, 1f),
+                        // 缺键 = 后面 = 老行为（那时液体就是先于角色画的）。
+                        behind = l.optBoolean("behind", true),
                     )
                 }
             }
@@ -641,6 +643,8 @@ class LogicSpec(
                         size = p.optDouble("size", 1.0).toFloat().coerceIn(0.2f, 4f),
                         gravity = p.optBoolean("gravity", true),
                         stains = p.optBoolean("stains", false),
+                        // 画在角色后面还是前面（1.26.0）。缺键 = 前面 = 老行为。
+                        behind = p.optBoolean("behind", false),
                     )
                 }
             }
@@ -761,6 +765,7 @@ class LogicSpec(
                         // throws.
                         .put("size", round3(l.size))
                         .put("opacity", round3(l.opacity))
+                        .put("behind", l.behind)
                 )
             }
             root.put("liquids", liquids)
@@ -774,6 +779,7 @@ class LogicSpec(
                         .put("size", p.size.toDouble())
                         .put("gravity", p.gravity)
                         .put("stains", p.stains)
+                        .put("behind", p.behind)
                 )
             }
             root.put("particles", particles)

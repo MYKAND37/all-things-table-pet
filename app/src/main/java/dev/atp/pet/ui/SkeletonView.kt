@@ -453,10 +453,11 @@ class SkeletonView @JvmOverloads constructor(
         at: Float,
         radius: Float,
         prop: String,
+        draggable: Boolean = true,
     ): Boolean {
         val parsed = spec ?: return false
         val others = parsed.nodes.filter { it.name != original }
-        val mine = NodeSpec(name, bone, at, radius, prop)
+        val mine = NodeSpec(name, bone, at, radius, prop, draggable)
         val problem = RigEdit.nodeProblem(parsed.bones, others + mine)
         if (problem != null) {
             onInfo?.invoke(problem)
@@ -469,6 +470,7 @@ class SkeletonView @JvmOverloads constructor(
             existing.at = at
             existing.radius = radius
             existing.prop = prop
+            existing.draggable = draggable
         }
         onInfo?.invoke(if (existing == null) "加了节点 " + name else "改好了 " + name)
         onRigChanged?.invoke()

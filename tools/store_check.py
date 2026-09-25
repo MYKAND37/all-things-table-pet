@@ -334,6 +334,53 @@ def bones_of(root):
             for b in root["bones"]]
 
 
+def kotlin_body(text, name):
+    """某个函数的正文（花括号配平，字符串和注释里的花括号不算）。空串 = 没找到这个函数。
+
+    **只认"行首 4 个空格 + fun 名字("**，这是刻意的：上一版是"扫到任何一个 fun 就往下配平"，
+    而 `fun particleDir(...) = File(...) { ... }` 这种**表达式体**函数里也有花括号 ——
+    它把配对起点选在了表达式里，之后大半个文件都丢了（78 个函数只找到 4 个）。
+
+    正文里也必须跳过字符串和注释：一个带花括号的字符串会让配平跑偏到别的 `}` 上。
+    """
+    n = len(text)
+    m = re.search(r"^    (?:private |internal |public )?fun %s\s*\(" % re.escape(name), text, re.M)
+    if not m:
+        return ""
+    b = text.find("{", m.end())
+    if b < 0:
+        return ""
+
+    def skip_trivia(k):
+        if text.startswith("//", k):
+            j = text.find("\n", k)
+            return n if j < 0 else j
+        if text.startswith("/*", k):
+            j = text.find("*/", k + 2)
+            return n if j < 0 else j + 2
+        if text[k] == '"':
+            k += 1
+            while k < n and text[k] != '"':
+                k += 2 if text[k] == "\\" else 1
+            return k + 1
+        return k
+
+    depth, j = 0, b
+    while j < n:
+        moved = skip_trivia(j)
+        if moved != j:
+            j = moved
+            continue
+        if text[j] == "{":
+            depth += 1
+        elif text[j] == "}":
+            depth -= 1
+            if depth == 0:
+                return text[m.start():j + 1]
+        j += 1
+    return ""
+
+
 def main():
     base = load()
     names = [b["name"] for b in base["bones"]]
@@ -611,8 +658,9 @@ def main():
     # 通道那几个键会落在外面，而断言比的正是"写出去的键"。
     cut = write_body.find("\n    // ── ", 1)
     write_body = write_body[:cut if cut > 0 else write_body.find("\n    }")]
-    read_body = kt[kt.find("fun loadAnimations"):]
-    read_body = read_body[:read_body.find("fun saveAnimation")]
+    # 按**名字**取那三个函数的正文，而不是"从这里切到那里"：中间插进别的函数时，
+    # 切片会把别人的键也算进来（这一条就因此红过一次）。
+    read_body = "".join(kotlin_body(kt, n) for n in ("loadAnimations", "readTracks", "readKeys"))
     keys = lambda text, pat: set(re.findall(pat, text))
     written = keys(write_body, r'\.put\("(\w+)"')
     # optInt 也要在里面：漏了它，一个用 optInt 读回来的键就会"看起来没读" —— 这一版绑规则

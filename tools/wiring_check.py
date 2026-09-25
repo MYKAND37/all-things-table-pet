@@ -122,6 +122,11 @@ def layout_visibility():
     return out
 
 
+def logic_kt_text(files):
+    """LogicSpec.kt 的正文（液体和粒子的字段写在它里面）。"""
+    return next((t for p, t in files.items() if p.endswith("engine/logic/LogicSpec.kt")), "")
+
+
 def kotlin_text():
     parts = {}
     for base, _, names in os.walk(SRC):
@@ -469,13 +474,23 @@ def main():
            "particles.drawStains(" in bench and "particles.drawLive(" in bench)
     stains_at = bench.find("particles.drawStains(")
     live_at = bench.find("particles.drawLive(")
-    report("活粒子画在宠物、道具、钉子、等待提示之后",
-           live_at > max(bench.find("drawCharacter(canvas, sk)"), bench.find("drawProps(canvas)"),
-                         bench.find("drawNails(canvas)"), bench.find("drawWaiting(canvas)")))
+    # 1.26.0 起粒子分两层：`behind = true` 的那一半画在地面之后、角色之前，
+    # `behind = false` 的那一半照旧在最上面。这一句钉的是**前面那一半**的位置。
+    report("活粒子（前面那一半）画在宠物、道具、钉子、等待提示之后",
+           bench.find("particles.drawLive(canvas, worldPaint, behind = false)")
+           > max(bench.find("drawCharacter(canvas, sk)"), bench.find("drawProps(canvas)"),
+                 bench.find("drawNails(canvas)"), bench.find("drawWaiting(canvas)")))
+    report("后面那一半画在角色**之前**（灰尘、烟那种在它后面的空气）",
+           bench.find("particles.drawLive(canvas, worldPaint, behind = true)")
+           < bench.find("drawCharacter(canvas, sk)"))
     report("印子画在一切之前（它算地面的一部分）",
-           0 <= stains_at < bench.find("drawFluid(canvas)"))
+           0 <= stains_at < bench.find("drawFluid(canvas, behind = true)"))
     report("气泡和平衡读数仍在粒子上面（一个是台词，一个是调试读数）",
            bench.find("drawBubble(canvas, sk)") > live_at)
+    report("液体也分两层：角色之前一趟、道具之后一趟",
+           bench.find("drawFluid(canvas, behind = true)") < bench.find("drawCharacter(canvas, sk)")
+           and bench.find("drawFluid(canvas, behind = false)")
+           > bench.find("drawCharacter(canvas, sk)"))
     # 两半各自都要把 alpha 还回去。它原来是一个函数，结尾复位一次；拆成两半之后只留一处，
     # 后面每个用同一支笔的画法（拖尾、绳子、角色）就会继承最后一块印子的透明度 ——
     # 一个**只在有印子的时候**才出现的 bug。
@@ -613,8 +628,11 @@ def main():
     report("加变体时能选两种关系（叠加 / 替换）",
            "fun addVariant(" in store_text and "overlay: Boolean = false" in store_text
            and "part_variant_overlay" in activity and "part_variant_replace" in activity)
-    report("替换：原来那层被标成「状态关着时画」",
-           'l.put("state", "!" + tag)' in store_text and "if (!overlay &&" in store_text)
+    # 1.26.0：标记是**追加**的（`!a+!b`）。老实现只在 state 为空时才写，
+    # 于是第二件、第三件替换再也没让底图让位 —— 用户报的"三个状态只显示第一个"。
+    report("替换：原来那层被标成「这些状态关着时画」（追加，不是覆盖）",
+           'l.put("state", addStateTag(l.optString("state", ""), "!" + tag))' in store_text
+           and "if (!overlay &&" in store_text and "private fun isBaseLayer(" in store_text)
     report("叠加：原来那层一个字都不动（两张都画）",
            "if (!overlay && l.getString(\"bone\") == bone" in store_text.replace("\n", " ")
            or "!overlay && l.getString" in store_text)
@@ -624,9 +642,11 @@ def main():
            "fun setVariantOverlay(" in store_text and "part_variant_to_overlay" in activity
            and "part_variant_to_replace" in activity)
     report("切换只改那一个标记（不碰图、不碰 z、不碰别的骨头）",
-           "l.put(\"state\", \"\")" in store_text and "hasVariant(" in store_text)
+           'Anim.statesOf(s2).filter { it != "!" + tag }' in store_text
+           and 'l.put("state", addStateTag(s2, "!" + tag))' in store_text
+           and "hasVariant(" in store_text)
     report("没有那张图就不给「改成替换」（不然等于把图藏起来）",
-           "s2.isEmpty() && hasVariant(arr, bone, tag)" in store_text)
+           "isBaseLayer(s2) && hasVariant(arr, bone, tag)" in store_text)
 
     print("== 调骨骼碰撞时看得见范围（1.21.0）==")
     # 「调骨骼碰撞时可以看见范围」。要害是**画出来的就是撞上的那个**：半径必须和求解器共用
@@ -789,6 +809,58 @@ def main():
     report("绑规则有入口，而且说清楚规则只在测试场和桌面上才会响",
            "@+id/animBind" in layout_text and "private fun bindStudioRule(" in activity
            and "anim_bind_where" in activity)
+
+    print("== 部位状态好几套：让位标记 + 权重（1.26.0）==")
+    spec_kt = next((t for p, t in files.items() if p.endswith("engine/skeleton/CharacterSpec.kt")), "")
+    store_kt = next((t for p, t in files.items() if p.endswith("data/CharacterStore.kt")), "")
+    report("一串开关是与：`!a+!b` 要两个都关着（底图才画）",
+           "val states: List<String> get() = Anim.statesOf(state)" in spec_kt
+           and "for (one in this.states)" in spec_kt)
+    report("让位标记是**追加**不是覆盖（老实现只在 state 为空时写，所以第二件之后全失效）",
+           "private fun isBaseLayer(state: String): Boolean" in store_kt
+           and 'l.put("state", addStateTag(l.optString("state", ""), "!" + tag))' in store_kt)
+    report("同一根骨头只有最高权重那一档会画（叠加和底图同档，所以不打断叠加）",
+           "val prio: Int = 0" in spec_kt and "topPrio[layer.bone] != layer.prio" in renderer_kt)
+    report("新加的替换图排在最后一件上面，权重能在部位那一页调",
+           "val prio = if (overlay) 0 else topPrio + 1" in store_kt
+           and "fun setVariantPriority(" in store_kt
+           and "R.string.part_variant_prio" in activity and "part_variant_prio_title" in activity)
+    report("权重跟着保存骨骼和两种关系的转换一起走",
+           'if (layer.prio != 0) o.put("prio", layer.prio)' in store_kt
+           and "l.put(\"prio\", top)" in store_kt and "l.put(\"prio\", 0)" in store_kt)
+
+    print("== 液体画在前还是在后（1.26.0）==")
+    fluid_kt = next((t for p, t in files.items() if p.endswith("engine/fluid/Fluid.kt")), "")
+    report("液体有一层属性，默认**在后面**（= 一直以来的样子）",
+           "val behind: Boolean = true" in fluid_kt
+           and 'behind = l.optBoolean("behind", true)' in logic_kt_text(files)
+           and '.put("behind", l.behind)' in logic_kt_text(files))
+    report("洒出来那一刻抄到每一滴上（半空中的不会因为改设置突然换层）",
+           "val behind: Boolean = true," in fluid_kt and "behind = behind," in fluid_kt
+           and "behind = liquid.behind," in bench)
+    report("世界按它画两趟：角色之前一趟、道具之后一趟",
+           "drawFluid(canvas, behind = true)" in bench and "drawFluid(canvas, behind = false)" in bench
+           and "if (d.behind != behind) continue" in bench)
+    report("编辑器里有这个开关，而且打开时画对（paintDepth 真的被调用）",
+           "R.string.liquid_behind" in activity and "private fun paintDepth" in activity
+           or "val depthChip" in activity)
+
+    print("== 粒子的那一层 + 节点能不能拖 + 显示节点（1.26.0）==")
+    report("粒子也有这一层（默认**在前面**，和液体相反：各按各的老行为）",
+           "val behind: Boolean = false" in next(
+               (t for p, t in files.items() if p.endswith("engine/particle/ParticleSpec.kt")), "")
+           and "particles.drawLive(canvas, worldPaint, behind = true)" in bench
+           and "particles.drawLive(canvas, worldPaint, behind = false)" in bench)
+    report("节点有一开关：不能拖的点照样挂道具、系绳子、有碰撞，只是手指拽不走它",
+           "var draggable: Boolean = true" in spec_kt
+           and "if (!node.draggable) return@run" in bench
+           and 'put("draggable", n.draggable)' in store_kt
+           and "R.string.rig_node_drag" in activity)
+    report("全局设置里有「显示节点」，关掉只是不画（拖动照旧）",
+           "val showNodes: Boolean = true" in next(
+               (t for p, t in files.items() if p.endswith("data/Settings.kt")), "")
+           and "if (!settings.showNodes) return" in bench
+           and "R.string.settings_show_nodes" in activity)
 
     print("== 撤销 / 重做（1.25.0）==")
     report("两个 chip 在底栏，而且是**动作**不是装饰（空的时候压暗 + 说一句）",

@@ -1053,7 +1053,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         fluid?.spill(
             liquid.colour, Vec2(homeX(), homeY() - 400f), count, liquid.viscosity,
             liquid = id, collides = liquid.collides,
-            size = liquid.size, opacity = liquid.opacity,
+            size = liquid.size, opacity = liquid.opacity, behind = liquid.behind,
         )
         invalidate()
     }
@@ -1550,6 +1550,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
                         a.value.toInt(), liquid.viscosity, liquid = liquid.id,
                         collides = liquid.collides,
                         size = liquid.size, opacity = liquid.opacity,
+                        behind = liquid.behind,
                     )
                 }
                 // 流液体 / 持续喷粒子: registered rather than done. A second stream of the same
@@ -3027,8 +3028,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         canvas.scale(viewScale, viewScale)
 
         if (settings.particles) particles.drawStains(canvas, worldPaint)
+        // 画在角色**后面**的那些（1.26.0）：灰尘、烟、影子一样的东西。默认全在前面，所以
+        // 旧数据一个像素都不变。
+        if (settings.particles) particles.drawLive(canvas, worldPaint, behind = true)
 
-        if (settings.liquid) drawFluid(canvas)
+        if (settings.liquid) drawFluid(canvas, behind = true)
         drawTrails(canvas)
         drawRopes2(canvas)
         drawCharacter(canvas, sk)
@@ -3037,9 +3041,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         drawProps(canvas)
         drawNails(canvas)
         drawWaiting(canvas)
-        // 粒子在最上层：火花、汗、血都盖在宠物和道具上面。印子在最底下（见 onDraw 开头），
-        // 因为那是地面的一部分。气泡和平衡指示还在它上面 —— 一个是台词，一个是调试读数。
-        if (settings.particles) particles.drawLive(canvas, worldPaint)
+        // 粒子默认在最上层：火花、汗、血都盖在宠物和道具上面。**每一种粒子自己说了算**
+        // （1.26.0 的"面前/后面"），所以要画的那一半在这里，前面那一半在角色之前。
+        // 印子在最底下（见上面），因为那是地面的一部分。气泡和平衡指示还在粒子上面 ——
+        // 一个是台词，一个是调试读数。
+        if (settings.liquid) drawFluid(canvas, behind = false)
+        if (settings.particles) particles.drawLive(canvas, worldPaint, behind = false)
         if (settings.showBalance) drawBalance(canvas, sk)
         drawBubble(canvas, sk)
 
@@ -3119,6 +3126,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * not drawn at all, for the same reason it is not felt.
      */
     private fun drawNodes(canvas: Canvas, sk: Skeleton) {
+        // 关掉就不画（全局设置里的「显示节点」）。**照样能拖**：这一句只管画 —— 拖动看的是
+        // 节点自己的"能不能拖"和半径，和看得见看不见是两件事。
+        if (!settings.showNodes) return
         if (sk.nodes.isEmpty()) return
         worldPaint.style = Paint.Style.STROKE
         for (node in sk.nodes) {
@@ -3163,11 +3173,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * merge into one body of liquid where the drops are packed and fade out at the edges,
      * which is the whole of the surface-tension look and costs one more draw call.
      */
-    private fun drawFluid(canvas: Canvas) {
+    /**
+     * 液体（1.26.0 起分两层）：世界把这一句叫两次 —— `behind = true` 在角色**之前**，
+     * `behind = false` 在道具和粒子之间（也就是盖住角色）。每一滴自己说了算。
+     */
+    private fun drawFluid(canvas: Canvas, behind: Boolean = true) {
         val f = fluid ?: return
         if (f.drops.isEmpty()) return
         worldPaint.style = Paint.Style.FILL
         for (d in f.drops) {
+            if (d.behind != behind) continue
             worldPaint.color = d.colour
             // The drop's own see-throughness, multiplied into BOTH passes rather than only
             // the body: the halo is half the blob, and a clear middle inside a solid rim is
@@ -4522,6 +4537,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             val sk = skeleton ?: return@run
             val node = sk.nodeAt(p) ?: return@run
             if (node.name in hiddenNodes) return@run
+            // 这个点被设成"不可拖"（1.26.0）：它照样挂道具、照样系绳子、照样有碰撞，
+            // 只是手指按上去不再把这一节拽走（见 NodeSpec.draggable）。
+            if (!node.draggable) return@run
             val q = sk.nodePoint(node)
             if (hypot(p.x - q.x, p.y - q.y) > node.radius + NODE_GRAB_SLACK) return@run
             if (!rag.canGrab(node.bone)) return@run

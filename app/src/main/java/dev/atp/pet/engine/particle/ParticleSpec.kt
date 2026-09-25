@@ -21,6 +21,14 @@ data class ParticleSpec(
     val size: Float = 1f,
     val gravity: Boolean = true,
     val stains: Boolean = false,
+    /**
+     * 画在角色的**后面**（true）还是**前面**（false，默认）。
+     *
+     * 「是显示在角色面前还是后面」：火花、血溅在前面才对，而灰尘、烟、影子一样的东西应该在
+     * 角色后面 —— 那是"这一层空气在它后面"，不是"它身上粘了灰"。默认 false = 和以前一样
+     * （粒子一直画在最上层），所以旧数据一个像素都不变。
+     */
+    val behind: Boolean = false,
 )
 
 /** The kinds a character can spray, and the six it starts with. */

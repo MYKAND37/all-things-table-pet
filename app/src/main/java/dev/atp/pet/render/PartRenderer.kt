@@ -214,10 +214,23 @@ class PartRenderer(
     val drawable: Int get() = baseOrder.size
 
     fun draw(canvas: Canvas) {
-        var drawn = 0
-        for (layer in currentOrder()) {
+        val order = currentOrder()
+        // 同一根骨头上**只有最高那一档会画**（1.26.0）：三件替换衣服同时开着时，画权重最大的
+        // 那一件；"叠加"那一类和底图同档（0），所以它们照旧一起画。旧数据全是 0 —— 和以前
+        // 一模一样（以前也是"能画的全画"）。
+        val topPrio = HashMap<String, Int>()
+        for (layer in order) {
             if (layer.bone in hidden) continue
             if (!layer.visible(states)) continue
+            val now = topPrio[layer.bone]
+            if (now == null || layer.prio > now) topPrio[layer.bone] = layer.prio
+        }
+
+        var drawn = 0
+        for (layer in order) {
+            if (layer.bone in hidden) continue
+            if (!layer.visible(states)) continue
+            if (topPrio[layer.bone] != layer.prio) continue
             val part = library.parts[layer.artKey] ?: continue
             val bone = skeleton.find(layer.bone) ?: continue
             val rest = restWorld[layer.bone] ?: continue

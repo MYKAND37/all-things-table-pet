@@ -65,6 +65,14 @@ class Particles {
         val kind: String = "",
     )
 
+    /**
+     * 哪一种粒子画在角色后面。跟着 [kinds] 一起更新（见 [setKinds]），所以查它是 O(1)，
+     * 而"用户刚改完"和"下一帧就生效"之间没有别的东西要同步。
+     */
+    private val behindKinds = HashMap<String, Boolean>()
+
+    private fun behindOf(kind: String): Boolean = behindKinds[kind] == true
+
     private val particles = ArrayList<Particle>()
     private val stains = ArrayList<Stain>()
     private val random = Random(7717)
@@ -78,6 +86,10 @@ class Particles {
 
     fun setKinds(list: List<ParticleSpec>) {
         kinds = list
+        // 哪几种画在角色后面。查表是 O(1)，所以"用户刚改完"和"下一帧就生效"之间没有别的东西
+        // 要同步 —— 连正在半空中的那几颗也跟着换层。
+        behindKinds.clear()
+        for (k in list) behindKinds[k.id] = k.behind
     }
 
     /** The kinds as they are right now, for a screen that wants to show them. */
@@ -219,8 +231,16 @@ class Particles {
      *
      * 一滴在自己身上溅开的血如果被自己的身体挡住，读起来就是"没喷"。
      */
-    fun drawLive(canvas: Canvas, paint: Paint) {
+    /**
+     * 现在活着的粒子，**只画要画的那一层**（1.26.0）。
+     *
+     * 世界把这一句叫两次：先 `behind = true`（画在角色后面），再 `behind = false`
+     * （画在最上面）。分层的判据是**粒子种类**上那个开关，而它每一帧现查 —— 用户改完
+     * 立刻生效，连正在半空中的那几颗也跟着换层（它们还没落地，凭什么不改）。
+     */
+    fun drawLive(canvas: Canvas, paint: Paint, behind: Boolean = false) {
         for (p in particles) {
+            if (behindOf(p.kind) != behind) continue
             val shape = shapes[p.kind]
             paint.alpha = ((p.life / p.maxLife).coerceIn(0f, 1f) * 255f).toInt()
             if (shape != null) {

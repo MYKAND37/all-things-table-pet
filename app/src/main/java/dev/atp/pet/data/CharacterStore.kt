@@ -1,6 +1,7 @@
 package dev.atp.pet.data
 
 import android.content.Context
+import dev.atp.pet.engine.anim.Anim
 import dev.atp.pet.engine.anim.AnimFrame
 import dev.atp.pet.engine.anim.AnimKey
 import dev.atp.pet.engine.anim.AnimationSpec
@@ -125,6 +126,15 @@ class CharacterFolder(val dir: File, val rig: String = "") {
          * 换一套身体那些名字就不存在了。
          */
         val ANIMATIONS_FILE = "animations.json"
+
+        /**
+         * 变体图权重的上下限（1.26.0）。
+         *
+         * 界面那个输入框和这里用同一对数：权重是"谁在上面"的一个序，不是分数 —— 0 到 9
+         * 足够排十件衣服，而不设上限只会让"手抖多打两个零"变成一个看起来一样的结果。
+         */
+        const val MIN_PRIO = 0
+        const val MAX_PRIO = 9
 
         /** One folder per KIND of particle (not per drop). See Subjects. */
         val PARTICLES_DIR = "particles"
@@ -514,22 +524,35 @@ class CharacterStore(private val context: Context) {
             var top = 0
             // 这一根骨头"平时就画"的那一层（画在上面才对）。没有就退回"最上面"。
             var baseZ = Int.MIN_VALUE
+            var topPrio = 0
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 top = maxOf(top, l.optInt("z", 0))
+                if (l.getString("bone") == bone) {
+                    topPrio = maxOf(topPrio, l.optInt("prio", 0))
+                }
                 if (l.getString("bone") == bone && !l.optString("state", "").startsWith("!")) {
                     baseZ = maxOf(baseZ, l.optInt("z", 0))
                 }
-                if (!overlay && l.getString("bone") == bone && l.optString("state", "").isEmpty()) {
-                    // 替换：原来那张只在状态**关着**的时候画。
-                    l.put("state", "!" + tag)
+                if (!overlay && l.getString("bone") == bone && isBaseLayer(l.optString("state", ""))) {
+                    // 替换：原来那张在这些状态**任何一个**开着的时候都不画。
+                    //
+                    // **追加**，不是覆盖（1.26.0 修的）：一根骨头可以有好几件替换衣服，
+                    // 而"平时那张"必须同时躲开它们全部。老实现只在 state 为空时才写，
+                    // 于是第二件之后再没有生效过 —— 用户报的「导入了三个部位状态结果只显示
+                    // 第一个，不管开关与否」就是这个：只有第一件替换真的让底图让了位。
+                    l.put("state", addStateTag(l.optString("state", ""), "!" + tag))
                 }
             }
+            val prio = if (overlay) 0 else topPrio + 1
             arr.put(
                 JSONObject()
                     .put("bone", bone)
                     .put("z", if (baseZ == Int.MIN_VALUE) top + 10 else baseZ + 1)
                     .put("state", tag).put("art", bone + VARIANT_SEPARATOR + state)
+                    // 权重：同一根骨头上只有最高那一档会画。新加的替换图排在最后一件的上面，
+                    // 用户可以再调（部位文件夹那一行的「权重」）。
+                    .put("prio", prio)
             )
             root.put("layers", arr)
             root.put("version", root.optInt("version", 0) + 1)
@@ -559,16 +582,31 @@ class CharacterStore(private val context: Context) {
             val root = JSONObject(folder.specText())
             val arr = root.optJSONArray("layers") ?: JSONArray()
             var touched = false
+            val top = if (overlay) 0 else maxPrio(arr, bone) + 1
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
                 if (l.getString("bone") != bone) continue
                 val s2 = l.optString("state", "")
-                if (overlay && s2 == "!" + tag) {
-                    l.put("state", "")
-                    touched = true
-                } else if (!overlay && s2.isEmpty() && hasVariant(arr, bone, tag)) {
-                    l.put("state", "!" + tag)
-                    touched = true
+                if (overlay) {
+                    // 换成叠加：把 `!tag` 从底图那一串里拿掉（拿空了就是空串），并且回到
+                    // 和底图同一档 —— 叠加就是"一起画"。
+                    if (Anim.statesOf(s2).contains("!" + tag)) {
+                        l.put("state", Anim.joinStates(Anim.statesOf(s2).filter { it != "!" + tag }))
+                        touched = true
+                    }
+                    if (s2 == tag) {
+                        l.put("prio", 0)
+                        touched = true
+                    }
+                } else {
+                    if (isBaseLayer(s2) && hasVariant(arr, bone, tag)) {
+                        l.put("state", addStateTag(s2, "!" + tag))
+                        touched = true
+                    }
+                    if (s2 == tag) {
+                        l.put("prio", top)
+                        touched = true
+                    }
                 }
             }
             if (!touched) return false
@@ -609,6 +647,8 @@ class CharacterStore(private val context: Context) {
                 val o = JSONObject().put("bone", layer.bone).put("z", 10 + index * 10)
                 if (layer.state.isNotEmpty()) o.put("state", layer.state)
                 if (layer.art.isNotEmpty()) o.put("art", layer.art)
+                // 权重也要跟着走：漏了它，"保存骨骼"会把手调好的顺序悄悄抹平。
+                if (layer.prio != 0) o.put("prio", layer.prio)
                 layers.put(o)
             }
             root.put("layers", layers)
@@ -767,6 +807,8 @@ class CharacterStore(private val context: Context) {
                         .put("at", n.at.toDouble())
                         .put("radius", n.radius.toDouble())
                         .put("prop", n.prop)
+                        // 缺了这个键，手改过的节点会在"保存骨骼"之后全部变回可拖。
+                        .put("draggable", n.draggable)
                 )
             }
             root.put("nodes", nodesArr)
@@ -1071,6 +1113,74 @@ class CharacterStore(private val context: Context) {
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    /**
+     * "平时就画"的那一层：开关串是空的，或者**全是** `!`（那正是被替换上去的那些标记）。
+     *
+     * 判据不能只是"空"：第一次替换之后它就变成 `!甲` 了，第二次再来的时候"空"不成立 ——
+     * 于是第二件、第三件替换永远轮不到它让位。这就是那个 bug 的根。
+     */
+    private fun isBaseLayer(state: String): Boolean =
+        state.isEmpty() || Anim.statesOf(state).all { it.startsWith("!") }
+
+    /** 往一串开关里加一个（已有的不加），保持原来的顺序。 */
+    private fun addStateTag(state: String, tag: String): String {
+        val list = Anim.statesOf(state).toMutableList()
+        if (tag !in list) list.add(tag)
+        return Anim.joinStates(list)
+    }
+
+    /** 一根骨头上现有的最大权重（新加的替换图排在它上面）。 */
+    private fun maxPrio(arr: JSONArray, bone: String): Int {
+        var top = 0
+        for (i in 0 until arr.length()) {
+            val l = arr.getJSONObject(i)
+            if (l.getString("bone") == bone) top = maxOf(top, l.optInt("prio", 0))
+        }
+        return top
+    }
+
+    /**
+     * 改一张变体图的**权重**（1.26.0）。「当多个状态开启时优先显示哪个」——同一根骨头上，
+     * 只有权重最高的那一档会画；叠加那一类和底图同档（0），所以它们照旧一起画。
+     */
+    fun setVariantPriority(
+        folder: CharacterFolder,
+        bone: String,
+        state: String,
+        prio: Int,
+    ): Boolean {
+        val tag = variantTag(folder, bone, state)
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.optJSONArray("layers") ?: JSONArray()
+            var touched = false
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                if (l.getString("bone") != bone) continue
+                val mine = l.optString("state", "")
+                if (mine == tag || (mine.isEmpty() && l.optString("art", "") ==
+                        bone + VARIANT_SEPARATOR + state)
+                ) {
+                    l.put("prio", prio.coerceIn(CharacterFolder.MIN_PRIO, CharacterFolder.MAX_PRIO))
+                    touched = true
+                }
+            }
+            if (!touched) return false
+            root.put("layers", arr)
+            root.put("version", root.optInt("version", 0) + 1)
+            writeSpec(folder, root)
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** 这一张变体图挂在哪个开关上（部件自己声明的带骨头标签，全局的就用 id）。 */
+    private fun variantTag(folder: CharacterFolder, bone: String, state: String): String {
+        val local = loadObjectLogic()[Subjects.part(bone)]
+            ?.states?.any { it.id == state } == true
+        return if (local) Subjects.stateTag(bone, state) else state
     }
 
     /**

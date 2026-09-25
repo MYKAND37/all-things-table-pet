@@ -51,6 +51,7 @@ DEFAULTS = {
     "showGround": True,
     "showBalance": True,
     "showBones": False,
+    "showNodes": True,
     "particles": True,
     "liquid": True,
     "followPet": True,
@@ -87,7 +88,8 @@ def parse(text):
 
     out["gravityScale"] = clamp(num("gravityScale", 1.0), MIN_GRAVITY, MAX_GRAVITY)
     out["defaultStiffness"] = clamp(num("defaultStiffness", 0.0), 0.0, 1.0)
-    for key in ("showGrid", "showGround", "showBalance", "showBones", "particles", "liquid",
+    for key in ("showGrid", "showGround", "showBalance", "showBones", "showNodes",
+                "particles", "liquid",
                 "followPet"):
         if key in o:
             out[key] = bool(o[key])
@@ -154,7 +156,8 @@ def main():
     print("\nthe switches the bench reads are all booleans")
     # A toggle that reads as "not False" instead of "is True" is a switch that cannot be
     # turned off, which is the classic version of this bug.
-    for key in ("showGrid", "showGround", "showBalance", "showBones", "particles", "liquid",
+    for key in ("showGrid", "showGround", "showBalance", "showBones", "showNodes",
+                "particles", "liquid",
                 "followPet"):
         on = parse(json.dumps({key: True}))[key]
         off = parse(json.dumps({key: False}))[key]
