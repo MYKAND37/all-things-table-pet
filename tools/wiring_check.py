@@ -835,9 +835,9 @@ def main():
            "val behind: Boolean = true" in fluid_kt
            and 'behind = l.optBoolean("behind", true)' in logic_kt_text(files)
            and '.put("behind", l.behind)' in logic_kt_text(files))
-    report("洒出来那一刻抄到每一滴上（半空中的不会因为改设置突然换层）",
+    report("洒/倒出来那一刻抄到每一滴上（半空中的不会因为改设置突然换层）",
            "val behind: Boolean = true," in fluid_kt and "behind = behind," in fluid_kt
-           and "behind = liquid.behind," in bench)
+           and bench.count("behind = liquid.behind") >= 4)
     report("世界按它画两趟：角色之前一趟、道具之后一趟",
            "drawFluid(canvas, behind = true)" in bench and "drawFluid(canvas, behind = false)" in bench
            and "if (d.behind != behind) continue" in bench)

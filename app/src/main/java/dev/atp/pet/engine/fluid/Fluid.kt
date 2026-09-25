@@ -173,6 +173,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         collides: Boolean = true,
         size: Float = 1f,
         opacity: Float = 1f,
+        behind: Boolean = true,
     ) {
         val n = count.coerceIn(0, 200)
         for (i in 0 until n) {
@@ -182,7 +183,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 colour, at.x + (random.nextFloat() - 0.5f) * 12f,
                 at.y + (random.nextFloat() - 0.5f) * 12f,
                 cos(angle) * v, sin(angle) * v - 120f,
-                viscosity, liquid, collides, size, opacity,
+                viscosity, liquid, collides, size, opacity, behind,
             )
         }
         while (drops.size > MAX_DROPS) drops.removeAt(0)
@@ -211,6 +212,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
         size: Float = 1f,
         opacity: Float = 1f,
         spread: Float = COLUMN_SPREAD,
+        behind: Boolean = true,
     ) {
         val n = count.coerceIn(0, 200)
         for (i in 0 until n) {
@@ -220,7 +222,7 @@ class Fluid(private val floorY: Float, private val worldWidth: Float) {
                 colour, at.x + (random.nextFloat() - 0.5f) * 2f,
                 at.y + (random.nextFloat() - 0.5f) * 2f,
                 cos(angle) * v, sin(angle) * v,
-                viscosity, liquid, collides, size, opacity,
+                viscosity, liquid, collides, size, opacity, behind,
             )
         }
         while (drops.size > MAX_DROPS) drops.removeAt(0)

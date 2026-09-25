@@ -2409,12 +2409,14 @@ class PhysicsSandboxView @JvmOverloads constructor(
                             liquid.colour, at, n, liquid.viscosity,
                             liquid = liquid.id, collides = liquid.collides,
                             size = liquid.size, opacity = liquid.opacity,
+                            behind = liquid.behind,
                         )
                     } else {
                         fluid?.spill(
                             liquid.colour, at, n, liquid.viscosity,
                             liquid = liquid.id, collides = liquid.collides,
                             size = liquid.size, opacity = liquid.opacity,
+                            behind = liquid.behind,
                         )
                     }
                 } else {
