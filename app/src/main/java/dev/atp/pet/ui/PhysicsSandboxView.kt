@@ -1927,8 +1927,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             animPass = pass
             animFired.clear()
         }
-        val bound = anim.frames.getOrNull(s.frame)?.rule ?: ""
-        if (bound.isNotEmpty() && animFired.add(s.frame)) {
+        // -1 = 没绑（见 AnimFrame.rule）。这一格是"第几条规则"，不是 id。
+        val bound = anim.frames.getOrNull(s.frame)?.rule ?: -1
+        if (bound >= 0 && animFired.add(s.frame)) {
             val actions = engine?.runRule(bound) ?: emptyList()
             if (actions.isNotEmpty()) {
                 perform(actions, null)
