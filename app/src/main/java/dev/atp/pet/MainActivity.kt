@@ -6365,7 +6365,7 @@ class MainActivity : AppCompatActivity() {
             next[i] = here.copy(seconds = first)
             insertedAt = i + 1
             next.add(insertedAt, AnimFrame(pose, state, rest))
-            tracks = trackKeysAt(anim, t, pose)
+            tracks = trackedKeysAt(anim, t, pose)
             Toast.makeText(
                 this, getString(R.string.anim_anchor_split, i + 1, "%.2f".format(t)),
                 Toast.LENGTH_SHORT,
@@ -6393,7 +6393,13 @@ class MainActivity : AppCompatActivity() {
         track.copy(rot = Timeline.withKey(track.rot, t, pose[bone] ?: 0f))
     }
 
-    /** 「绑规则」：给选中的姿态锚点挑一条**这只桌宠自己的**规则，播到它的时候响一次。 */
+    /**
+     * 「绑规则」：给选中的姿态锚点挑一条**这只桌宠自己的**规则，播到它的时候响一次。
+     *
+     * 挑的是**第几条**，和「跳到规则」认的是同一个身份（规则在文件里本来就没有名字，界面
+     * 上一律叫「规则 3 · 挥手」）。代价也一样，所以选择器和状态栏都把它说出来：**把规则的
+     * 顺序改了，绑的号也跟着变**。
+     */
     private fun bindStudioRule() {
         val (folder, anim) = studioEdit() ?: return
         val frame = anim.frames.getOrNull(animFrameIndex)
@@ -6406,25 +6412,32 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, R.string.anim_bind_empty, Toast.LENGTH_LONG).show()
             return
         }
-        val options = listOf("" to getString(R.string.anim_bind_none)) +
-            rules.map { it.id to ruleLabel(it) }
+        val options = listOf("-1" to getString(R.string.anim_bind_none)) +
+            rules.indices.map { i ->
+                i.toString() to getString(R.string.logic_rule_n, i + 1) +
+                    " · " + Labels.event(this, EventType.of(rules[i].on))
+            }
         pickList(
             title = getString(R.string.anim_bind_title),
             options = options,
             hint = getString(R.string.anim_bind_none_hint) + getString(R.string.anim_bind_where),
-            current = frame.rule,
+            current = frame.rule.toString(),
         ) { picked ->
+            val index = picked.toIntOrNull() ?: -1
             val next = anim.frames.toMutableList().apply {
-                this[animFrameIndex] = frame.copy(rule = picked)
+                this[animFrameIndex] = frame.copy(rule = index)
             }
             if (writeStudioAnimation(folder, anim.copy(frames = next))) {
                 buildAnimList()
                 Toast.makeText(
                     this,
-                    if (picked.isEmpty()) {
+                    if (index < 0) {
                         getString(R.string.anim_bind_cleared, animFrameIndex + 1)
                     } else {
-                        getString(R.string.anim_bind_done, animFrameIndex + 1, ruleLabel2(rules, picked))
+                        getString(
+                            R.string.anim_bind_done, animFrameIndex + 1,
+                            ruleShortName(rules, index),
+                        )
                     },
                     Toast.LENGTH_SHORT,
                 ).show()
@@ -6433,16 +6446,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** 规则在选择器里怎么念：「1 · 挥手」这种（编号是它在文件里的位置，和逻辑页一致）。 */
-    private fun ruleLabel(rule: RuleSpec): String {
-        val index = store.loadLogic(studioFolder()?.id ?: "").rules.indexOfFirst { it.id == rule.id }
-        return (index + 1).toString() + " · " + rule.name
-    }
-
-    private fun ruleLabel2(rules: List<RuleSpec>, id: String): String {
-        val index = rules.indexOfFirst { it.id == id }
-        val rule = rules.getOrNull(index)
-        return if (rule == null) id else (index + 1).toString() + " · " + rule.name
+    /** 规则在选择器和状态栏里怎么念：「规则 3 · 挥手」。 */
+    private fun ruleShortName(rules: List<RuleSpec>, index: Int): String {
+        val rule = rules.getOrNull(index) ?: return getString(R.string.logic_rule_n, index + 1)
+        return getString(R.string.logic_rule_n, index + 1) + " · " +
+            Labels.event(this, EventType.of(rule.on))
     }
 
     /** 点了一个姿态锚点：跳播放头、载入它存的那一套姿势（和点图那一块同一件事，换个说法）。 */
@@ -6452,10 +6460,13 @@ class MainActivity : AppCompatActivity() {
         val anim = studioAnimation(folder) ?: return
         showStudioFrame(folder, anim, index)
         val frame = anim.frames.getOrNull(index) ?: return
-        val rule = if (frame.rule.isEmpty()) {
+        val rule = if (frame.rule < 0) {
             getString(R.string.anim_anchor_unbound)
         } else {
-            getString(R.string.anim_anchor_bound, ruleLabel2(store.loadLogic(folder.id).rules, frame.rule))
+            getString(
+                R.string.anim_anchor_bound,
+                ruleShortName(store.loadLogic(folder.id).rules, frame.rule),
+            )
         }
         animStatus.text = getString(
             R.string.anim_anchor_status, index + 1,

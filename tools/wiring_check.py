@@ -727,7 +727,7 @@ def main():
     print("== 姿态锚点：小方块、绑规则、播到就响（1.24.0）==")
     logic_kt = next((t for p, t in files.items() if p.endswith("engine/logic/RuleEngine.kt")), "")
     report("锚点就是帧：一帧本来就带一整套姿势，锚点只是它在时间轴上的画法",
-           "val rule: String = \"\"" in anim_kt and "private fun addStudioAnchor(" in activity)
+           "val rule: Int = -1" in anim_kt and "private fun addStudioAnchor(" in activity)
     report("锚点那一行画的是**时刻**（小方块），图那一行画的是**时长**（块有多宽）",
            "private fun drawAnchorRow(" in view_kt and "private fun anchorLane(" in view_kt
            and "private fun drawArtRow(" in view_kt and "ANCHOR_ROW_DP" in view_kt)
@@ -739,18 +739,18 @@ def main():
            and "next[i] = here.copy(seconds = first)" in activity
            and "next.add(insertedAt, AnimFrame(pose, state, rest))" in activity)
     report("断开不改总时长，所以那种情况下一个关键帧都不用挪",
-           "tracks = trackKeysAt(anim, t, pose)" in activity
+           "tracks = trackedKeysAt(anim, t, pose)" in activity
            and activity.count("Timeline.shifted(") >= 2)
-    report("绑的是 id（规则能改名，锚点认的是哪一条）",
-           'put("rule", f.rule)' in next((t for p, t in files.items()
-                                          if p.endswith("data/CharacterStore.kt")), "")
-           and 'rule = f.optString("rule", "")' in next((t for p, t in files.items()
-                                                          if p.endswith("data/CharacterStore.kt")), ""))
-    report("引擎多了一个入口：按 id 跑一条规则（走的是同一个 fire）",
-           "fun runRule(id: String): List<ActionSpec>" in logic_kt
+    store_kt = next((t for p, t in files.items() if p.endswith("data/CharacterStore.kt")), "")
+    report("绑的是**第几条**，和「跳到规则」同一个身份（不另造一套 id）",
+           '.put("rule", f.rule)' in store_kt and 'rule = f.optInt("rule", -1)' in store_kt
+           and "val rule: Int = -1" in anim_kt
+           and "R.string.logic_rule_n" in activity)
+    report("引擎多了一个入口：按序号跑一条规则（走的是同一个 fire）",
+           "fun runRule(index: Int): List<ActionSpec>" in logic_kt
            and "return fire(index, spec.rules[index], mutableSetOf())" in logic_kt)
     report("触发只免掉「当」：如果 / 冷却 / 只一次 一个字都不放宽",
-           "fun hasRule(id: String): Boolean" in logic_kt
+           "fun hasRule(index: Int): Boolean" in logic_kt
            and "这份文件里已经没有它了" in logic_kt)
     report("播到那一格才响，而且**一遍只响一次**（循环每绕一圈再响）",
            "Timeline.passIndex(anim, playClock)" in bench and "animFired.add(s.frame)" in bench

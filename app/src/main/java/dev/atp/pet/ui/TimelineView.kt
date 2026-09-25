@@ -249,7 +249,7 @@ class TimelineView @JvmOverloads constructor(
             diamond.close()
             canvas.drawPath(diamond, if (posed) keyPaint else curvePaint)
             // 绑了规则的锚点右上角点一个小点 —— 一眼看得出哪几格会"响"。
-            if (f.rule.isNotEmpty()) {
+            if (f.rule >= 0) {
                 canvas.drawCircle(x + r, y - r, dp(3f), playHeadPaint)
             }
             acc += Anim.frameSeconds(f)

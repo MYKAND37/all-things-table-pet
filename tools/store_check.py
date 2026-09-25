@@ -615,13 +615,15 @@ def main():
     read_body = read_body[:read_body.find("fun saveAnimation")]
     keys = lambda text, pat: set(re.findall(pat, text))
     written = keys(write_body, r'\.put\("(\w+)"')
-    read_keys = keys(read_body, r'(?:optString|optDouble|optBoolean|optJSONObject|optJSONArray)\("(\w+)"')
+    # optInt 也要在里面：漏了它，一个用 optInt 读回来的键就会"看起来没读" —— 这一版绑规则
+    # 的 `rule` 正是 optInt（第一版就是这么报的红，红的是检查不是代码）。
+    read_keys = keys(read_body, r'(?:optString|optDouble|optBoolean|optInt|optJSONObject|optJSONArray)\("(\w+)"')
     report("动画：写出去的和读回来的是同一批键",
            written == read_keys and {"id", "name", "frames", "speed", "loop"} <= written,
            "写 %s / 读 %s" % (sorted(written), sorted(read_keys)))
     frame_written = keys(write_body[write_body.find("val frames = JSONArray()"):],
                          r'\.put\("(\w+)"')
-    frame_read = keys(read_body, r'(?:optString|optDouble|optJSONObject)\("(\w+)"')
+    frame_read = keys(read_body, r'(?:optString|optDouble|optInt|optJSONObject)\("(\w+)"')
     # 通道那一半：写的是 rot/x/y/scale，读的也得是这四个 —— 同一个"存好了但是空的"毛病。
     track_written = keys(write_body[write_body.find("private fun writeTracks"):],
                          r'\.put\("(\w+)"')

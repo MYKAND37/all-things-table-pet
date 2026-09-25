@@ -1053,7 +1053,7 @@ class CharacterStore(private val context: Context) {
                         angles = angles,
                         state = f.optString("state", ""),
                         seconds = f.optDouble("seconds", 0.4).toFloat(),
-                        rule = f.optString("rule", ""),
+                        rule = f.optInt("rule", -1),
                     )
                 }
                 AnimationSpec(
