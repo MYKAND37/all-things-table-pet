@@ -43,7 +43,6 @@
     <string name="anim_frame_longer">Frame +0.1s</string>
     <string name="anim_drop_frame">Delete this frame</string>
     <string name="anim_reset_pose">Reset pose</string>
-    <string name="anim_turn">Rotate 90°</string>
     <string name="anim_fit">Fit view</string>
     <string name="anim_bones">Bones</string>
     <string name="anim_edit_bones">Edit rig</string>

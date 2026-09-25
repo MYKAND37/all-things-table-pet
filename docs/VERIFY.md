@@ -159,6 +159,25 @@ python3 tools/pose_preview_check.py
 和同一对 cos/sin 缓存，所以四件事（缩放 / 旋转 / 平移 / 拖关节）互不知情；旋转为 0 时
 cos=1、sin=0，那两行就退化成原来的两句乘法 —— 这一版没有给"没转过"的情况加任何代价。
 
+## 「转 90°」闪退这一版的验证（1.22.1）
+
+`tools/kotlin_check.py` 第十条 —— 画布变换必须有配对的 `save`。两条判据，都是**能数的**：
+
+* 整个文件里 `canvas.restore()` 不许比 `canvas.save()` 多。多出来的那一次会去弹别人的存档，
+  Android 在 restore 弹空时直接抛（`Underflow in restore`）—— 用户看到的就是"点一下应用没了"；
+* 任何一个函数里有 `canvas.rotate/scale/translate/skew/concat/clipRect`，这个函数里就至少要有
+  一次 `canvas.save()`：没有的话那个变换会漏给父控件（整个界面跟着转）。
+
+**这条检查的第一版是错的，而且放过真 bug**：判据写成"这个文件里有 `canvas.save()` 就跳过"，
+而 `SkeletonView` 里别处本来就有一个（画角色那一块）—— 照例把真错误写回去验，才看见它没反应。
+改成现在这两条之后，同一个错误立刻红（`restore 2 次 > save 1 次`）。另外为了让第二条在
+"提前 return"的写法下也成立，`onDraw` 里 `if (!showSkeleton) return` 改成了 `if (showSkeleton) { }`
+—— 一条路径一个 restore、另一条路径也一个 restore，数出来必然比 save 多，而**能数得清**
+本身就是更好的写法。
+
+`tools/wiring_check.py` 一句盯"按钮真的没了、手势那条路还在"：`animTurn` 在布局和代码里都
+不许再出现，而 `applyViewRotation(viewRotation + (ang - twistAngle))`（双指那条）必须还在。
+
 ## 免责声明确认门这一版的验证
 
 `tools/wiring_check.py` 八句 —— 一条门要成立，四件事都要在：**关不掉**（`setCancelable(false)`，

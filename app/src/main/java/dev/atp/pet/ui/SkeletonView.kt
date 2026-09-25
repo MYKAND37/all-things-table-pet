@@ -1065,8 +1065,16 @@ class SkeletonView @JvmOverloads constructor(
 
         // 旋转是**视图**的：画框、参考图、角色、骨骼一起转，所以只在这一层做一次。
         // 提示文字留到 restore 之后画 —— 一行说明横躺着没人看得懂。
+        //
+        // save() 是**必须的**，而且它漏过一次：转了没 save 的话，一是这个旋转会漏给父控件
+        // （整个界面跟着转），二是下面那两个 restore 会去弹**别人的**存档 —— Android 的
+        // restore 弹空了就直接崩（"Underflow in restore"）。用户点「转 90°」闪退就是这个，
+        // 而双指旋转走的是同一段代码，所以只删那个按钮是治不好的。见 kotlin_check 第十条。
         val turned = viewRotation != 0f
-        if (turned) canvas.rotate(viewRotation, pivotX, pivotY)
+        if (turned) {
+            canvas.save()
+            canvas.rotate(viewRotation, pivotX, pivotY)
+        }
 
         canvas.drawRect(
             offsetX, offsetY,
@@ -1107,90 +1115,89 @@ class SkeletonView @JvmOverloads constructor(
 
         // 骨骼这一层可以整层关掉（动画预览要的是角色，不是骨头）。关掉时连节点、碰撞范围、
         // 选中环、手柄都不画 —— 手柄不画也照样能拖，只是看不见它在哪里。
-        if (!showSkeleton) {
-            if (turned) canvas.restore()
-            drawHint(canvas)
-            return
-        }
+        //
+        // 写成 if 包起来、而不是提前 return：提前返回会让 save/restore 的配对数出不了口
+        // （一条路径 restore 一次、另一条路径也 restore 一次，数出来就比 save 多），
+        // 而那个数字正是 kotlin_check 第十条拿来抓「漏了 canvas.save()」的判据。
+        if (showSkeleton) {
+            val fade = renderer != null
+            linePaint.alpha = if (fade) 110 else 255
+            jointPaint.alpha = if (fade) 110 else 255
 
-        val fade = renderer != null
-        linePaint.alpha = if (fade) 110 else 255
-        jointPaint.alpha = if (fade) 110 else 255
-
-        for (b in sk.bones) {
-            val hx = vx(b.worldPosition)
-            val hy = vy(b.worldPosition)
-            val tip = b.tipPosition()
-            val tx = vx(tip)
-            val ty = vy(tip)
-            val paint = if (b.springy) linePaint else linePaint
-            paint.color = colourFor(b.name)
-            canvas.drawLine(hx, hy, tx, ty, paint)
-
-            jointPaint.color = paint.color
-            canvas.drawCircle(hx, hy, 4.5f * density, jointPaint)
-            canvas.drawCircle(hx, hy, 2f * density, jointPaint)
-        }
-
-        // The nodes: a dot where they are and a ring at how far away something can touch them.
-        // Drawn before the picked bone's ring so that a selected bone is still the loudest
-        // thing on the canvas.
-        for (n in s.nodes) {
-            val q = nodePointOf(n)
-            val px = vx(q)
-            val py = vy(q)
-            nodeRingPaint.color = if (n.prop.isEmpty()) 0x556E6A62 else 0x552B7A8A
-            canvas.drawCircle(px, py, n.radius * scale, nodeRingPaint)
-            nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
-            canvas.drawCircle(px, py, 5f * density, nodePaint)
-        }
-
-        drawColliders(canvas, sk)
-
-        // The bone the side panel picked, ringed at both ends: the canvas is zoomed in far
-        // enough by then that "somewhere in that arm" is not a useful answer.
-        selected?.let { pick ->
-            sk.find(pick)?.let { b ->
-                canvas.drawCircle(vx(b.worldPosition), vy(b.worldPosition), 15f * density, selectPaint)
-                val t = b.tipPosition()
-                canvas.drawCircle(vx(t), vy(t), 11f * density, selectPaint)
-                drawRange(canvas, b)
-            }
-        }
-
-        if (editBones) {
-            // Joints are blue and fixed points of the rig; tips are orange and set how far
-            // the artwork reaches. They are the two things worth being able to move.
             for (b in sk.bones) {
-                val h = b.worldPosition
-                val t = b.tipPosition()
-                canvas.drawCircle(vx(h), vy(h), 9f * density, headPaint)
-                canvas.drawCircle(vx(t), vy(t), 9f * density, tailPaint)
+                val hx = vx(b.worldPosition)
+                val hy = vy(b.worldPosition)
+                val tip = b.tipPosition()
+                val tx = vx(tip)
+                val ty = vy(tip)
+                val paint = if (b.springy) linePaint else linePaint
+                paint.color = colourFor(b.name)
+                canvas.drawLine(hx, hy, tx, ty, paint)
+
+                jointPaint.color = paint.color
+                canvas.drawCircle(hx, hy, 4.5f * density, jointPaint)
+                canvas.drawCircle(hx, hy, 2f * density, jointPaint)
             }
-            val held = heldJoint
-            if (held != null) {
-                val b = sk.find(held.boneName)
-                if (b != null) {
-                    val p = if (held.tail) b.tipPosition() else b.worldPosition
-                    canvas.drawCircle(vx(p), vy(p), 13f * density, textPaint)
+
+            // The nodes: a dot where they are and a ring at how far away something can touch them.
+            // Drawn before the picked bone's ring so that a selected bone is still the loudest
+            // thing on the canvas.
+            for (n in s.nodes) {
+                val q = nodePointOf(n)
+                val px = vx(q)
+                val py = vy(q)
+                nodeRingPaint.color = if (n.prop.isEmpty()) 0x556E6A62 else 0x552B7A8A
+                canvas.drawCircle(px, py, n.radius * scale, nodeRingPaint)
+                nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
+                canvas.drawCircle(px, py, 5f * density, nodePaint)
+            }
+
+            drawColliders(canvas, sk)
+
+            // The bone the side panel picked, ringed at both ends: the canvas is zoomed in far
+            // enough by then that "somewhere in that arm" is not a useful answer.
+            selected?.let { pick ->
+                sk.find(pick)?.let { b ->
+                    canvas.drawCircle(vx(b.worldPosition), vy(b.worldPosition), 15f * density, selectPaint)
+                    val t = b.tipPosition()
+                    canvas.drawCircle(vx(t), vy(t), 11f * density, selectPaint)
+                    drawRange(canvas, b)
                 }
             }
-            // The head of a bone that is half drawn, so the second tap has something to
-            // aim away from.
-            pendingHead?.let {
-                canvas.drawCircle(vx(it), vy(it), 11f * density, pendingPaint)
-                canvas.drawCircle(vx(it), vy(it), 4f * density, pendingDot)
-            }
-        } else {
-            for (h in handles) {
-                val tip = h.bone.tipPosition()
-                handlePaint.color =
-                    if (h === active) 0xFF000000.toInt() else 0x88000000.toInt()
-                val r = (if (h.chain != null) 7f else 5f) * density
-                canvas.drawCircle(vx(tip), vy(tip), r, handlePaint)
+
+            if (editBones) {
+                // Joints are blue and fixed points of the rig; tips are orange and set how far
+                // the artwork reaches. They are the two things worth being able to move.
+                for (b in sk.bones) {
+                    val h = b.worldPosition
+                    val t = b.tipPosition()
+                    canvas.drawCircle(vx(h), vy(h), 9f * density, headPaint)
+                    canvas.drawCircle(vx(t), vy(t), 9f * density, tailPaint)
+                }
+                val held = heldJoint
+                if (held != null) {
+                    val b = sk.find(held.boneName)
+                    if (b != null) {
+                        val p = if (held.tail) b.tipPosition() else b.worldPosition
+                        canvas.drawCircle(vx(p), vy(p), 13f * density, textPaint)
+                    }
+                }
+                // The head of a bone that is half drawn, so the second tap has something to
+                // aim away from.
+                pendingHead?.let {
+                    canvas.drawCircle(vx(it), vy(it), 11f * density, pendingPaint)
+                    canvas.drawCircle(vx(it), vy(it), 4f * density, pendingDot)
+                }
+            } else {
+                for (h in handles) {
+                    val tip = h.bone.tipPosition()
+                    handlePaint.color =
+                        if (h === active) 0xFF000000.toInt() else 0x88000000.toInt()
+                    val r = (if (h.chain != null) 7f else 5f) * density
+                    canvas.drawCircle(vx(tip), vy(tip), r, handlePaint)
+                }
             }
         }
-
         if (turned) canvas.restore()
         drawHint(canvas)
     }

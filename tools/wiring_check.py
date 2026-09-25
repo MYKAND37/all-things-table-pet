@@ -687,9 +687,15 @@ def main():
                for i, fn in (("animPlay", "toggleStudioPlay()"), ("animFrameAdd", "captureStudioFrame()"),
                              ("animSaveFrame", "saveStudioFrame()"), ("animSlower", "nudgeStudioFrame(-0.1f)"),
                              ("animLonger", "nudgeStudioFrame(0.1f)"), ("animDropFrame", "dropStudioFrame()"),
-                             ("animResetPose", "animView.resetPose()"), ("animTurn", "turnStudio(90f)"),
+                             ("animResetPose", "animView.resetPose()"),
                              ("animFit", "animView.resetView()"), ("animBones", "toggleStudioBones()"),
                              ("animEditBones", "toggleStudioBoneMode()"))))
+    # 「转 90°」那个按钮删掉了（1.22.1）：它和双指旋转走的是同一条画布旋转的代码，而那段代码
+    # 漏了 canvas.save()，点了就闪退。删按钮只是把入口拿掉，真因是绘制那一层 —— 所以这里同时
+    # 钉住"按钮确实没了"和"手势那条路还在"。
+    report("「转 90°」按钮已删，旋转只剩双指手势（画布那一段的 save 由 kotlin_check 第十条盯着）",
+           "animTurn" not in layout_text and "animTurn" not in activity
+           and "applyViewRotation(viewRotation + (ang - twistAngle))" in skel_kt)
     report("离开这一页就把它那套图解掉（两个实例不同时压在内存里）",
            "private fun leaveAnimationStudio(" in activity and "animView.release()" in activity
            and "if (currentPane == Pane.ANIMS && pane != Pane.ANIMS) leaveAnimationStudio()" in activity)

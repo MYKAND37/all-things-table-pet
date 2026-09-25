@@ -713,11 +713,6 @@
                         android:text="@string/anim_reset_pose" />
 
                     <TextView
-                        android:id="@+id/animTurn"
-                        style="@style/AlignButton"
-                        android:text="@string/anim_turn" />
-
-                    <TextView
                         android:id="@+id/animFit"
                         style="@style/AlignButton"
                         android:text="@string/anim_fit" />

@@ -378,7 +378,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.animLonger).setOnClickListener { nudgeStudioFrame(0.1f) }
         findViewById<View>(R.id.animDropFrame).setOnClickListener { dropStudioFrame() }
         findViewById<View>(R.id.animResetPose).setOnClickListener { animView.resetPose() }
-        findViewById<View>(R.id.animTurn).setOnClickListener { turnStudio(90f) }
         findViewById<View>(R.id.animFit).setOnClickListener { animView.resetView() }
         animBonesChip.setOnClickListener { toggleStudioBones() }
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
@@ -6169,12 +6168,6 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(
             this, getString(R.string.anim_frame_dropped, gone + 1), Toast.LENGTH_SHORT,
         ).show()
-    }
-
-    /** 「转 90°」：绕着视图中心转，斜着画的身体才摆得顺手。 */
-    private fun turnStudio(delta: Float) {
-        animView.rotateBy(delta)
-        statusLine.text = getString(R.string.anim_turn_done, Math.round(animView.viewRotation))
     }
 
     private fun toggleStudioBones() {

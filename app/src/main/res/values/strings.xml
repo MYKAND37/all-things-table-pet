@@ -399,7 +399,6 @@
     <string name="anim_frame_longer">帧 ＋0.1s</string>
     <string name="anim_drop_frame">删掉这一帧</string>
     <string name="anim_reset_pose">复位姿势</string>
-    <string name="anim_turn">转 90°</string>
     <string name="anim_fit">摆正视角</string>
     <string name="anim_bones">骨骼</string>
     <string name="anim_edit_bones">改骨骼</string>
@@ -417,7 +416,6 @@
     <string name="anim_frame_added">在第 %1$d 帧后面加了一帧，它现在就是刚才那个样子</string>
     <string name="anim_frame_dropped">第 %1$d 帧删掉了，后面的帧接上来</string>
     <string name="anim_frame_seconds_now">第 %1$d 帧改成 %2$s 秒</string>
-    <string name="anim_turn_done">视角转到 %1$d° · 单指拖动画面，双指缩放/旋转，「摆正视角」回来</string>
     <string name="anim_playing_hint">正在演这一遍 · 碰一下右边就停下来（停下来之后才能改）</string>
     <string name="anim_frame_status">第 %1$d/%2$d 帧 · %3$s 秒 · %4$d 节骨头 · 图 %5$s</string>
     <string name="anim_dirty_hint">改过了 —— 按「存入这一帧」才会留下</string>

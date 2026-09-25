@@ -748,6 +748,74 @@ def check_platform_view_names():
            "\n         ".join(bad))
 
 
+def function_bodies(code):
+    """每一个 `fun name(...) {` 的名字和正文（按花括号配平扫），给"只看这一个函数"的检查用。
+
+    [code] 必须是 [strip_code] 过的那一份：字符串和注释里的花括号会把配平算歪（这一课在
+    `check_enum_when_exhaustive` 那里付过一次学费）。
+    """
+    out = []
+    for m in re.finditer(r"\bfun\s+(\w+)\s*\(", code):
+        i = code.find("{", m.end())
+        if i < 0:
+            continue
+        depth, j = 0, i
+        while j < len(code):
+            if code[j] == "{":
+                depth += 1
+            elif code[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        out.append((m.group(1), code[i:j + 1]))
+    return out
+
+
+def check_canvas_saved_before_transform():
+    """
+    A canvas transform (rotate/scale/translate/skew) must be preceded by canvas.save().
+
+    This is here because it SHIPPED and CRASHED THE APP: the animation workbench grew "rotate
+    the canvas" and the drawing was written as
+
+        if (turned) canvas.rotate(viewRotation, pivotX, pivotY)   // no save!
+        ...
+        if (turned) canvas.restore()
+
+    Two things go wrong at once, and the second one is fatal. The rotation leaks into the
+    parent's canvas (the whole UI drawing turns with it), and the restore pops SOMEBODY ELSE's
+    save -- Android throws on an underflow ("Underflow in restore - more restores than saves").
+    The user saw it as "tapping 转 90° closes the app instantly", and it was in fact in the
+    two-finger rotate as well, because both go through the same draw.
+
+    The check is deliberately narrow: a transform WITH a save in the same function is how every
+    other drawing path here is written (`save(); translate(); scale(); draw(); restore()`), so
+    anything that transforms without one is either this bug or something new that deserves a
+    look.
+    """
+    bad = []
+    for path in kotlin_files():
+        code = strip_code(open(path, encoding="utf-8").read())
+        # 判据两条，各自对应"转坏"的一种方式，而且都不看顺序（分支里的 save/restore 是正常的）：
+        #   1. 整个文件 restore 比 save 多 —— 多出来的那一次会去弹**别人的**存档，就是崩的那一下；
+        #   2. 某个函数里有旋转/缩放/平移，这个函数里却一次 save 都没有 —— 变换会漏给父控件。
+        # 第一版只写了"文件里有 save 就跳过"，于是它**放过了真 bug**（同一个文件别处有 save），
+        # 照例把真错误写回去验了一遍，才发现判据太粗，于是改成现在这样。
+        saves = code.count("canvas.save()")
+        restores = code.count("canvas.restore()")
+        if restores > saves:
+            bad.append("%s  restore %d 次 > save %d 次"
+                       % (os.path.basename(path), restores, saves))
+        for name, body in function_bodies(code):
+            if re.search(r"\bcanvas\.(rotate|scale|translate|skew|concat|clipRect)\s*\(", body) \
+                    and "canvas.save()" not in body:
+                bad.append("%s  %s() 里有画布变换，但一次 canvas.save() 都没有"
+                           % (os.path.basename(path), name))
+    report("画布变换都有配对的 save（多出来的 restore 会崩，漏掉的 save 会把界面一起转）",
+           not bad, "\n         ".join(bad))
+
+
 def check_one_home_for_a_file_name():
     """
     A file the app writes and reads has to be named in exactly ONE place.
@@ -829,6 +897,7 @@ def main():
     check_chip_lists()
     check_view_resources()
     check_platform_view_names()
+    check_canvas_saved_before_transform()
     check_one_home_for_a_file_name()
     check_dialog_bodies_scroll()
     print("")
