@@ -6193,7 +6193,7 @@ class MainActivity : AppCompatActivity() {
     /** 拖播放头：把这一刻的样子摆到右边，并选中"这一刻落在哪一帧"。 */
     private fun scrubStudioTo(t: Float) {
         haltStudioPlay()
-        pushStudioUndo(anim)
+        // 拖播放头**不是**改动（文件一个字都不动），所以不记历史。
         val folder = studioFolder() ?: return
         val anim = studioAnimation(folder) ?: return
         val sample = Timeline.sample(anim, frameClock(anim, t)) ?: return

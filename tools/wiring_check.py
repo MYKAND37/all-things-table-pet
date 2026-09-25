@@ -799,8 +799,12 @@ def main():
            "private class StudioStep(" in activity and "val playhead: Float," in activity
            and "val channel: Int," in activity and "private fun studioStep(" in activity)
     report("每一次**写文件之前**记一笔（写完之后再记就晚了）",
-           activity.count("pushStudioUndo(anim)") >= 10
+           activity.count("pushStudioUndo(anim)") >= 9
            and "private fun pushStudioUndo(anim: AnimationSpec)" in activity)
+    report("拖播放头不记历史（它一个字都不改，而且撤销一部「看」没有意义）",
+           "拖播放头**不是**改动" in activity
+           and activity.split("private fun scrubStudioTo")[1].split("private fun ")[0].count(
+               "pushStudioUndo") == 0)
     report("新的改动会清空重做栈（新的分支开始了），换动画也重新记",
            "animRedo.clear()" in activity and "if (animHistoryId != anim.id)" in activity)
     report("撤销栈封顶，不是无限长",
