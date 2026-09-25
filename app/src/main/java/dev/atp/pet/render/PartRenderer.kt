@@ -45,6 +45,19 @@ class PartRenderer(
     /** Which states are on right now. A state nobody declares reads as off. */
     var states: Map<String, Boolean> = emptyMap()
 
+    /**
+     * 动画给这一节的**画面**偏移与缩放（1.23.0）。
+     *
+     * 只有画面：求解器一个字都不知道它们，所以宠物该掉还是掉、该被抓还是被抓，碰撞体也还在
+     * 原来的位置。这不是偷懒 —— 一节骨头"平移"到别处在物理上没有意义（等于瞬移一节骨头：
+     * 碰撞体重叠、绳子长度全乱）。旋转不一样，旋转一直是交给求解器的目标。
+     *
+     * 不在表里的骨头 = 不动（不是归零）：一条只动了手的通道不该把整只宠物按回原位。
+     */
+    var animOffsetX: Map<String, Float> = emptyMap()
+    var animOffsetY: Map<String, Float> = emptyMap()
+    var animScale: Map<String, Float> = emptyMap()
+
     private val restWorld = HashMap<String, Transform>()
 
     /** Layers whose artwork actually exists on disk. A variant with no file draws nothing. */
@@ -209,10 +222,36 @@ class PartRenderer(
             val bone = skeleton.find(layer.bone) ?: continue
             val rest = restWorld[layer.bone] ?: continue
 
-            paintAt(canvas, library.parts[layer.artKey]!!, bone.worldTransform.compose(rest.inverse()))
+            paintAt(
+                canvas,
+                library.parts[layer.artKey]!!,
+                animated(layer.bone, bone.worldTransform.compose(rest.inverse())),
+            )
             drawn++
         }
         drawnLastFrame = drawn
+    }
+
+    /**
+     * 一节骨头的画法，加上动画那层**画面**变换：绕关节缩放，再整体挪一点。
+     *
+     * 缩放绕的是**关节**（`t.position` 就是这一节现在在画布上的位置）：一块贴着肩膀的手臂，
+     * 放大时应该从肩膀长出去，而不是从画布原点长出去。做法是"把原点缩放"这件事写成一次
+     * 平移（`p - p * s`）—— 于是关节不动，其余按比例张开。
+     *
+     * 三样都是默认值（1 倍、不挪）时**原样返回**：绝大多数骨头没有通道，这条路上一次多余的
+     * 矩阵乘法都不该做。
+     */
+    private fun animated(bone: String, t: Transform): Transform {
+        val s = animScale[bone] ?: 1f
+        val ox = animOffsetX[bone] ?: 0f
+        val oy = animOffsetY[bone] ?: 0f
+        if (s == 1f && ox == 0f && oy == 0f) return t
+        val p = t.position
+        val pivot = Transform(position = p - p * s, rotation = 0f, scale = s)
+        val moved = pivot.compose(t)
+        if (ox == 0f && oy == 0f) return moved
+        return Transform(moved.position + Vec2(ox, oy), moved.rotation, moved.scale)
     }
 
     /**

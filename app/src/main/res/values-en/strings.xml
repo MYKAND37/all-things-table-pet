@@ -36,6 +36,15 @@
     <string name="anim_frame_art">Which art this frame shows</string>
     <string name="anim_frame_seconds">How long this frame takes (s)</string>
     <string name="anim_frames">Frames</string>
+    <string name="timeline_seconds">s</string>
+    <string name="timeline_art_row">Art</string>
+    <string name="anim_channel_rot">Channel: rotate</string>
+    <string name="anim_channel_x">Channel: pos X</string>
+    <string name="anim_channel_y">Channel: pos Y</string>
+    <string name="anim_channel_scale">Channel: scale</string>
+    <string name="anim_key_add">＋ Keyframe</string>
+    <string name="anim_key_drop">Delete keyframe</string>
+    <string name="anim_bake">Bake to timeline</string>
     <string name="anim_pick_one">Pick an animation on the left</string>
     <string name="anim_frame_add">＋ Frame</string>
     <string name="anim_save_frame">Save into this frame</string>

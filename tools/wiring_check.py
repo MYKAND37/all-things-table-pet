@@ -629,11 +629,59 @@ def main():
            "dev.atp.pet.ui.SkeletonView" in layout_text and "@+id/animView" in layout_text
            and "animView = findViewById(R.id.animView)" in activity
            and "animView.load(folder)" in activity)
-    report("左边是一段和它的帧：动画列表 + 关键帧横带 + 末尾的「＋ 帧」",
-           "@+id/animFrames" in layout_text and "private fun buildFrameStrip(" in activity
-           and "private fun paintFrameChips(" in activity and "@+id/animFrameAdd" in layout_text)
-    report("选中一帧就摆上去，而且姿势取的是 Anim.framePose（和播放器同一刻，不是另算一套）",
-           "animView.applyPose(Anim.framePose(anim, animFrameIndex))" in activity
+    report("左边是动画列表，下面那条是时间轴（1.23.0 取代了原来那条帧带）",
+           "@+id/animList" in layout_text and "@+id/animTimeline" in layout_text
+           and "dev.atp.pet.ui.TimelineView" in layout_text
+           and "private fun refreshTimeline(" in activity and "animTimeline.setData(" in activity)
+    report("「＋ 帧」还在底栏（帧是图那一行的时间单位，不是被删掉的功能）",
+           "@+id/animFrameAdd" in layout_text and "captureStudioFrame()" in activity)
+
+    print("== 时间轴：可拖的播放头、可拖的菱形、每根骨头一条通道 ==")
+    tl_kt = next((t for p, t in files.items() if p.endswith("engine/anim/Timeline.kt")), "")
+    tl_layout = next((t for p, t in files.items() if p.endswith("engine/anim/TimelineLayout.kt")), "")
+    view_kt = next((t for p, t in files.items() if p.endswith("ui/TimelineView.kt")), "")
+    renderer_kt = next((t for p, t in files.items() if p.endswith("render/PartRenderer.kt")), "")
+    ragdoll_kt = next((t for p, t in files.items() if p.endswith("physics/Ragdoll.kt")), "")
+    report("引擎那一半没有 Android，几何那一半也没有（所以两边都能本地镜像）",
+           "android" not in tl_kt and "android" not in tl_layout
+           and "object Timeline {" in tl_kt and "object TimelineLayout {" in tl_layout)
+    report("三种关键帧通道都在：旋转 / 位置 / 缩放（位置分 X 与 Y）",
+           "const val ROTATION = 0" in tl_kt and "const val POSITION_X = 1" in tl_kt
+           and "const val POSITION_Y = 2" in tl_kt and "const val SCALE = 3" in tl_kt
+           and "data class BoneTrack(" in tl_kt)
+    report("播放头能拖：标尺那一条接的是 onScrub，宿主拿它当演到这一刻",
+           "var onScrub: ((Float) -> Unit)?" in view_kt and "onScrub?.invoke(t)" in view_kt
+           and "animTimeline.onScrub" in activity and "private fun scrubStudioTo(" in activity)
+    report("菱形能拖：按到才接这一下（没按到就不抢外面的滚动）",
+           "if (hit < 0) return false" in view_kt
+           and "onKeyPicked?.invoke(bone, hit)" in view_kt
+           and "private fun pickStudioKey(" in activity)
+    report("拖的时候立刻动、抬手才落盘（一秒几十次写文件是拿电池换中间状态）",
+           "onKeyMoved?.invoke(bone, dragKey, t, v, false)" in view_kt
+           and "onKeyMoved?.invoke(bone, index, dragT, dragV, true)" in view_kt
+           and "if (!done) {" in activity and "animPending" in activity)
+    report("时间轴不做时间轴以外的编辑（加帧/换图/播放在底栏）",
+           "TimelineView" in view_kt and "private fun addStudioKey(" in activity
+           and "private fun dropStudioKey(" in activity)
+    report("换通道会清掉选中的关键帧（下标在另一条通道上指的是别的东西）",
+           "animKeyIndex = -1" in activity
+           and "private fun cycleStudioChannel(" in activity and "@+id/animChannel" in layout_text)
+    report("帧和通道是同一个时间轴的两半：插帧/删帧/改时长都动了通道",
+           activity.count("Timeline.shifted(") >= 2 and "Timeline.dropped(" in activity
+           and "Timeline.withKey(track.rot, at, angles[bone] ?: 0f)" in activity)
+    report("烘培有入口，而且无损那一半由 timeline_check.py 逐点盯着",
+           "private fun bakeStudioTimeline(" in activity and "Timeline.bake(anim)" in activity
+           and "@+id/animBake" in layout_text and "fun bake(spec: AnimationSpec)" in tl_kt)
+    report("位置与缩放**只改画面**：渲染器认它们，求解器一个字都不知道",
+           "animOffsetX" in renderer_kt and "private fun animated(" in renderer_kt
+           and "animOffsetX" not in ragdoll_kt and "animScale" not in ragdoll_kt)
+    report("两根骨头之间的插值在引擎里，界面不算数学",
+           "fun valueAt(keys: List<AnimKey>, time: Float)" in tl_kt
+           and "fun ease(f: Float, kind: Int)" in tl_kt and "fun withKey(" in tl_kt)
+    report("选中一帧就摆上去，而且姿势取的是时间轴在**帧起点**的采样（和播放器同一刻）",
+           "applyStudioSample(Timeline.sample(anim, frameClock(anim, here))" in activity
+           and "private fun frameClock(" in activity
+           and "fun sample(spec: AnimationSpec, seconds: Float)" in tl_kt
            and "fun framePose(a: AnimationSpec, index: Int)" in anim_kt)
     report("改姿势就地改：拖关节 → onPoseEdited → 提示「存入这一帧」",
            "var onPoseEdited: (() -> Unit)?" in skel_kt
@@ -833,8 +881,9 @@ def main():
     # 图只进"画图用的"那张开关表 —— 不进引擎，所以不会变成一只关不掉的开关。
     step_anim = bench[bench.find("private fun stepAnimation("):]
     step_anim = step_anim[:step_anim.find("\n    }")]
-    report("每帧按时间采样，姿势交给求解器当目标",
-           "Anim.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim)
+    report("每帧按时间采样，姿势交给求解器当目标（没有通道时 Timeline.sample 就是 Anim.sample）",
+           "Timeline.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim
+           and "if (spec.tracks.isEmpty())" in tl_kt)
     report("不循环的走完就停在最后一帧（图不弹回默认）",
            "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)" in step_anim)
     report("当前帧的开关只进画图那张表（可以有好几个，拆开写进去）",

@@ -2,7 +2,9 @@ package dev.atp.pet.data
 
 import android.content.Context
 import dev.atp.pet.engine.anim.AnimFrame
+import dev.atp.pet.engine.anim.AnimKey
 import dev.atp.pet.engine.anim.AnimationSpec
+import dev.atp.pet.engine.anim.BoneTrack
 import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropSpec
@@ -1062,11 +1064,55 @@ class CharacterStore(private val context: Context) {
                     // 而不是在这里被悄悄改掉、让用户以为文件里写的就是 1。
                     speed = o.optDouble("speed", 1.0).toFloat(),
                     loop = o.optBoolean("loop", true),
+                    tracks = readTracks(o.optJSONObject("tracks")),
                 )
             }
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    /**
+     * 每根骨头的关键帧通道（1.23.0）。
+     *
+     * 读不出来的通道**整条丢掉**，而不是补一串 0：一条补出来的 0 度通道会去接管那根骨头的
+     * 旋转（有通道就归通道管，见 Timeline.sample），于是"文件里有一段坏数据"会变成
+     * "这只宠物这条胳膊不动了" —— 丢掉它反而回到原样的行为（帧说了算）。
+     */
+    private fun readTracks(obj: JSONObject?): Map<String, BoneTrack> {
+        if (obj == null) return emptyMap()
+        val out = LinkedHashMap<String, BoneTrack>()
+        for (bone in obj.keys()) {
+            val t = obj.optJSONObject(bone) ?: continue
+            val track = BoneTrack(
+                rot = readKeys(t.optJSONArray("rot")),
+                x = readKeys(t.optJSONArray("x")),
+                y = readKeys(t.optJSONArray("y")),
+                scale = readKeys(t.optJSONArray("scale")),
+            )
+            if (track.rot.isEmpty() && track.x.isEmpty() && track.y.isEmpty() &&
+                track.scale.isEmpty()
+            ) {
+                continue
+            }
+            out[bone] = track
+        }
+        return out
+    }
+
+    /** 一条通道的关键帧。每一项是 `[t, v, ease]`（数组而不是对象：一个关键帧就三个数）。 */
+    private fun readKeys(arr: JSONArray?): List<AnimKey> {
+        if (arr == null) return emptyList()
+        val out = ArrayList<AnimKey>(arr.length())
+        for (i in 0 until arr.length()) {
+            val a = arr.optJSONArray(i) ?: continue
+            if (a.length() < 2) continue
+            val t = a.optDouble(0, Double.NaN)
+            val v = a.optDouble(1, Double.NaN)
+            if (t.isNaN() || v.isNaN()) continue
+            out.add(AnimKey(t.toFloat(), v.toFloat(), a.optInt(2, AnimKey.EASE_SMOOTH)))
+        }
+        return out.sortedBy { it.t }
     }
 
     /** 写一段动画（同 id 覆盖），和 poses.json 一样走临时文件 + 改名。 */
@@ -1106,6 +1152,7 @@ class CharacterStore(private val context: Context) {
                     .put("id", a.id).put("name", a.name)
                     .put("speed", a.speed.toDouble()).put("loop", a.loop)
                     .put("frames", frames)
+                    .put("tracks", writeTracks(a.tracks))
             )
         }
         folder.rigDir.mkdirs()
@@ -1115,6 +1162,36 @@ class CharacterStore(private val context: Context) {
         if (target.exists()) target.delete()
         temp.renameTo(target)
         return true
+    }
+
+    /**
+     * 通道写回文件：每根骨头一个对象，四条通道各是一串 `[t, v, ease]`。
+     *
+     * 空通道不写（`put` 一个空数组等于"这条通道什么都不动"，但读回来时它会被当成"存在但为空"
+     * 而被丢掉 —— 写出去只会让文件更长，不会让信息更多）。
+     */
+    private fun writeTracks(tracks: Map<String, BoneTrack>): JSONObject {
+        val out = JSONObject()
+        for ((bone, track) in tracks) {
+            val entry = JSONObject()
+            // 四个键**逐个写出来**（不是循环一个表）：写和读说同一批键这件事，是
+            // tools/store_check.py 拿正则比出来的 —— 藏在一个 listOf 里它比不到。
+            if (track.rot.isNotEmpty()) entry.put("rot", keysJson(track.rot))
+            if (track.x.isNotEmpty()) entry.put("x", keysJson(track.x))
+            if (track.y.isNotEmpty()) entry.put("y", keysJson(track.y))
+            if (track.scale.isNotEmpty()) entry.put("scale", keysJson(track.scale))
+            if (entry.length() > 0) out.put(bone, entry)
+        }
+        return out
+    }
+
+    /** 一条通道的关键帧：`[[t, v, ease], …]`。 */
+    private fun keysJson(keys: List<AnimKey>): JSONArray {
+        val arr = JSONArray()
+        for (k in keys) {
+            arr.put(JSONArray().put(k.t.toDouble()).put(k.v.toDouble()).put(k.ease))
+        }
+        return arr
     }
 
     // ── 逻辑（每个角色一份）────────────────────────────────────────────────

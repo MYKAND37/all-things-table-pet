@@ -43,6 +43,14 @@ data class AnimationSpec(
     val frames: List<AnimFrame> = emptyList(),
     val speed: Float = 1f,
     val loop: Boolean = true,
+    /**
+     * 每根骨头自己的关键帧通道（1.23.0）：旋转、X/Y 偏移、缩放。
+     *
+     * **空的时候一切都和 1.22.0 一样**（帧一帧一帧地插值），所以老文件不用迁移；一旦某根
+     * 骨头有了通道，它的旋转就归通道管（[Timeline.sample]）。[Timeline.bake] 把整段帧写成
+     * 通道，而且逐点无损。
+     */
+    val tracks: Map<String, BoneTrack> = emptyMap(),
 )
 
 /**

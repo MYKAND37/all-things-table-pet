@@ -319,6 +319,7 @@ class SkeletonView @JvmOverloads constructor(
         // The states the preview was asked for, on the renderer that was just rebuilt: a rig
         // edit must not quietly turn the reference off.
         renderer?.states = previewStates
+        applyTrackOffsets()
 
         handles.clear()
         val alive = built.bones.map { it.name }.toSet()
@@ -369,6 +370,35 @@ class SkeletonView @JvmOverloads constructor(
     fun setReferenceAlpha(alpha: Int) {
         refAlpha = alpha.coerceIn(0, 255)
         invalidate()
+    }
+
+    /**
+     * 动画的**画面**偏移与缩放（1.23.0），一根骨头一份。
+     *
+     * 只有画面：求解器不知道它们，所以预览里看到的样子可以直接对应测试场和桌面上演出来的
+     * 样子（那两处走的是同一个 [PartRenderer]）。空表 = 一根骨头都不动。
+     */
+    private var trackOffsetX: Map<String, Float> = emptyMap()
+    private var trackOffsetY: Map<String, Float> = emptyMap()
+    private var trackScale: Map<String, Float> = emptyMap()
+
+    fun setTrackOffsets(
+        x: Map<String, Float>,
+        y: Map<String, Float>,
+        scale: Map<String, Float>,
+    ) {
+        trackOffsetX = x
+        trackOffsetY = y
+        trackScale = scale
+        applyTrackOffsets()
+        invalidate()
+    }
+
+    /** 交给渲染器那一份。骨架重烘之后也要重新交一次（渲染器是新的一个）。 */
+    private fun applyTrackOffsets() {
+        renderer?.animOffsetX = trackOffsetX
+        renderer?.animOffsetY = trackOffsetY
+        renderer?.animScale = trackScale
     }
 
     /**

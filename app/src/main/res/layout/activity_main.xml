@@ -309,8 +309,14 @@
                 android:id="@+id/animRow"
                 android:layout_width="match_parent"
                 android:layout_height="match_parent"
-                android:orientation="horizontal"
+                android:orientation="vertical"
                 android:visibility="gone">
+
+              <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_weight="1"
+                android:orientation="horizontal">
 
                 <LinearLayout
                     android:layout_width="0dp"
@@ -333,25 +339,6 @@
                             android:padding="10dp" />
                     </ScrollView>
 
-                    <!-- 关键帧那条横带：一帧一个方块，末尾的 ＋ 是"把现在的样子抓成一帧"。 -->
-                    <HorizontalScrollView
-                        android:id="@+id/animFramesScroll"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/glass_panel"
-                        android:paddingStart="4dp"
-                        android:paddingEnd="4dp"
-                        android:scrollbars="none">
-
-                        <LinearLayout
-                            android:id="@+id/animFrames"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:gravity="center_vertical"
-                            android:orientation="horizontal"
-                            android:paddingTop="6dp"
-                            android:paddingBottom="6dp" />
-                    </HorizontalScrollView>
                 </LinearLayout>
 
                 <LinearLayout
@@ -382,6 +369,28 @@
                         android:layout_height="0dp"
                         android:layout_weight="1" />
                 </LinearLayout>
+              </LinearLayout>
+
+                <!--
+                    时间轴（1.23.0）：标尺 + 播放头 + 一行一根骨头 + 一行"图"。
+                    高度由"有几行"决定（TimelineView 自己量），所以这里只给一个上限 ——
+                    一只手的时间轴不该和十九根骨头的一样高。
+                -->
+                <ScrollView
+                    android:id="@+id/animTimelineScroll"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:maxHeight="240dp"
+                    android:background="@drawable/glass_panel"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:scrollbars="none">
+
+                    <dev.atp.pet.ui.TimelineView
+                        android:id="@+id/animTimeline"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+                </ScrollView>
             </LinearLayout>
 
             <!-- ── 全局设置 ─────────────────────────── -->
@@ -711,6 +720,27 @@
                         android:id="@+id/animResetPose"
                         style="@style/AlignButton"
                         android:text="@string/anim_reset_pose" />
+
+                    <!-- 时间轴（1.23.0）：打一个关键帧 / 删一个 / 换通道 / 把帧转成通道。 -->
+                    <TextView
+                        android:id="@+id/animKeyAdd"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_key_add" />
+
+                    <TextView
+                        android:id="@+id/animKeyDrop"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_key_drop" />
+
+                    <TextView
+                        android:id="@+id/animChannel"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_channel_rot" />
+
+                    <TextView
+                        android:id="@+id/animBake"
+                        style="@style/AlignButton"
+                        android:text="@string/anim_bake" />
 
                     <TextView
                         android:id="@+id/animFit"

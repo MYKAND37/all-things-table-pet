@@ -13,6 +13,7 @@ import android.view.View
 import dev.atp.pet.R
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.anim.Anim
+import dev.atp.pet.engine.anim.Timeline
 import dev.atp.pet.engine.anim.AnimationSpec
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
@@ -333,6 +334,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** Which frame is showing, for the panel that says 第 3/8 帧. */
     private var animFrame = 0
     private var animFrames = 0
+
+    /**
+     * 动画给每根骨头的**画面**偏移与缩放（1.23.0）：关键帧通道里那一半不改物理的部分。
+     *
+     * 和 [animState] 一样，它们只进渲染器，不进引擎 —— 所以规则问不到它们，宠物的碰撞、
+     * 绳子、被抓起来的手感也一点都不变。
+     */
+    private var animOffsetX: Map<String, Float> = emptyMap()
+    private var animOffsetY: Map<String, Float> = emptyMap()
+    private var animScale: Map<String, Float> = emptyMap()
 
     private var clock = 0f
     private var bubble: String? = null
@@ -1261,6 +1272,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         animState = ""
         animFrame = 0
         animFrames = 0
+        animOffsetX = emptyMap()
+        animOffsetY = emptyMap()
+        animScale = emptyMap()
         invalidate()
     }
 
@@ -1879,7 +1893,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
     private fun stepAnimation(dt: Float, rag: Ragdoll) {
         val anim = playing ?: return
         playClock += dt
-        val s = Anim.sample(anim, playClock) ?: run {
+        // Timeline.sample 在没有通道时**就是** Anim.sample（同一个结果），有通道时多带回
+        // 偏移与缩放。所以播放器只有一条路，而不是"两套动画各有各的播放"。
+        val s = Timeline.sample(anim, playClock) ?: run {
             stopAnimation()
             return
         }
@@ -1887,6 +1903,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         animFrame = s.frame
         animFrames = s.frames
         if (s.angles.isNotEmpty()) rag.applyPose(s.angles)
+        animOffsetX = s.offsetX
+        animOffsetY = s.offsetY
+        animScale = s.scale
         // 不循环的走完了就停下 —— 停在最后一帧上：姿势留到最后那一帧，图也留着。
         if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
             playing = null
@@ -1948,6 +1967,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // LayerSpec.visible needs no change, because a tag is a key either way.
         stepAnimation(dt, rag)
         renderer?.states = mergedStates()
+        // 画面那一层（1.23.0）：和 states 一起交出去，保证"这一帧的状态"和"这一帧的样子"
+        // 是同一刻的，不会出现图换了而偏移还留在上一帧。
+        renderer?.animOffsetX = animOffsetX
+        renderer?.animOffsetY = animOffsetY
+        renderer?.animScale = animScale
 
         val pins = heldBones.entries.mapNotNull { entry ->
             // Handed over as it is. The low pass that used to be here went with the solver

@@ -23,6 +23,10 @@ import androidx.core.content.FileProvider
 import dev.atp.pet.engine.anim.Anim
 import dev.atp.pet.engine.anim.AnimFrame
 import dev.atp.pet.engine.anim.AnimationSpec
+import dev.atp.pet.engine.anim.BoneTrack
+import dev.atp.pet.engine.anim.Timeline
+import dev.atp.pet.engine.anim.TimelineLayout
+import dev.atp.pet.engine.anim.TrackSample
 import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.data.PetPackage
 import dev.atp.pet.data.Settings
@@ -60,6 +64,7 @@ import dev.atp.pet.ui.PhysicsSandboxView
 import dev.atp.pet.ui.Labels
 import dev.atp.pet.ui.PosePreview
 import dev.atp.pet.ui.SkeletonView
+import dev.atp.pet.ui.TimelineView
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
@@ -223,8 +228,23 @@ class MainActivity : AppCompatActivity() {
     private var animLastTick = 0L
     private var animShownFrame = -1
     private var animPlayingSpec: AnimationSpec? = null
-    /** 帧那一排方块，按顺序放着：播放时只改高亮，不整排重建。 */
-    private var animFrameChips = mutableListOf<TextView>()
+    /**
+     * 时间轴（1.23.0）：现在编哪条通道、选中哪一根骨头、选中第几个关键帧。
+     *
+     * [animKeyIndex] 是**当前骨头在这一条通道上**的第几个关键帧（-1 = 没选）—— 通道一换，
+     * 这个下标就没有意义了，所以换通道时它必须一起清掉，否则"删关键帧"会删到别的通道上。
+     */
+    private var animChannel = Timeline.ROTATION
+    private var animKeyIndex = -1
+    private var animBone: String? = null
+
+    /**
+     * 拖动菱形时的那一份**内存版本**。
+     *
+     * 手指每动一下都写一次文件是不行的（一秒几十次 I/O），但界面必须立刻跟着动。所以拖动
+     * 期间改这一份、时间轴画这一份，手指抬起来才落盘（见 onTimelineKeyMoved 的 done）。
+     */
+    private var animPending: Map<String, BoneTrack>? = null
 
     /** Which pane is on screen, so leaving one can do its own cleanup. See show(). */
     private var currentPane = Pane.PLACEHOLDER
@@ -261,7 +281,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var animList: LinearLayout
     private lateinit var animRow: View
     private lateinit var animView: SkeletonView
-    private lateinit var animFrames: LinearLayout
+    private lateinit var animTimeline: TimelineView
     private lateinit var animStates: LinearLayout
     private lateinit var animBarScroll: View
     private lateinit var animPlay: TextView
@@ -364,7 +384,7 @@ class MainActivity : AppCompatActivity() {
         animList = findViewById(R.id.animList)
         animRow = findViewById(R.id.animRow)
         animView = findViewById(R.id.animView)
-        animFrames = findViewById(R.id.animFrames)
+        animTimeline = findViewById(R.id.animTimeline)
         animStates = findViewById(R.id.animStates)
         animBarScroll = findViewById(R.id.animBarScroll)
         animPlay = findViewById(R.id.animPlay)
@@ -382,6 +402,16 @@ class MainActivity : AppCompatActivity() {
         animBonesChip.setOnClickListener { toggleStudioBones() }
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
+        findViewById<View>(R.id.animKeyAdd).setOnClickListener { addStudioKey() }
+        findViewById<View>(R.id.animKeyDrop).setOnClickListener { dropStudioKey() }
+        findViewById<View>(R.id.animChannel).setOnClickListener { cycleStudioChannel() }
+        findViewById<View>(R.id.animBake).setOnClickListener { bakeStudioTimeline() }
+        // 时间轴自己只报"手指干了什么"，改数据、存盘、重画都在工作台这一层。
+        animTimeline.onScrub = { t -> scrubStudioTo(t) }
+        animTimeline.onKeyPicked = { bone, index -> pickStudioKey(bone, index) }
+        animTimeline.onKeyMoved = { bone, index, t, v, done -> moveStudioKey(bone, index, t, v, done) }
+        animTimeline.onFramePicked = { index -> pickStudioFrame(index) }
+        animTimeline.onBonePicked = { bone -> pickStudioBone(bone) }
         findViewById<View>(R.id.animMeta).setOnClickListener {
             // 名字/速度/循环，外加"删掉这一段"。帧本身在这页里编，所以那个弹窗不带帧那一半。
             val (folder, anim) = studioEdit() ?: return@setOnClickListener
@@ -473,6 +503,7 @@ class MainActivity : AppCompatActivity() {
         // 初始那一眼也要对：布局里「存骨骼」是可见的，而它只该在改骨骼的时候出现。
         // 放在这一行**之后** —— applyAnimBoneMode 会写状态栏，而它是 lateinit。
         applyAnimBoneMode()
+        findViewById<TextView>(R.id.animChannel).text = channelLabel()
 
         alignView.onInfo = { statusLine.text = it }
         findViewById<View>(R.id.alignCancel).setOnClickListener {
@@ -5829,27 +5860,65 @@ class MainActivity : AppCompatActivity() {
             clearAnimationStudio()
             return
         }
-        buildFrameStrip(folder, anim)
         showStudioFrame(folder, anim, animFrameIndex)
     }
 
     /**
-     * 把第 [index] 帧摆到右边的角色上：它的姿势，和它开着的那几套图。
+     * 把第 [index] 帧摆到右边的角色上：它的姿势、它开着的那几套图，并把播放头挪到这一帧的起点。
      *
-     * 姿势取 [Anim.framePose]（帧起点那一刻的样子），不是"帧里写着的角度" —— 这两件事在
-     * 「下一帧才写的骨头」上不一样，而右边演的必须是**播放时会演出来的那个**。
+     * 姿势取**时间轴在帧起点那一刻的采样**（[Timeline.sample]）：没有通道时它就是
+     * [Anim.framePose]（帧起点那一刻的样子），有通道时通道赢 —— 两种情况下右边演的都是
+     * **播放时会演出来的那个**，而这一条必须一直成立：编辑器演一套、播放器演另一套，用户会
+     * 摆出一个引擎演不出来的姿势（摆好、存下、一播就变样）。
      */
     private fun showStudioFrame(folder: CharacterFolder, anim: AnimationSpec, index: Int) {
         val frames = anim.frames
         animFrameIndex = index.coerceIn(0, max(0, frames.size - 1))
         animLiveStates.clear()
         animLiveStates.addAll(Anim.statesOf(frames.getOrNull(animFrameIndex)?.state ?: ""))
-        animView.applyPose(Anim.framePose(anim, animFrameIndex))
+        val here = TimelineLayout.frameStarts(anim).getOrNull(animFrameIndex) ?: 0f
+        applyStudioSample(Timeline.sample(anim, frameClock(anim, here)) ?: return)
         applyStudioStates()
         buildStateChips(folder)
-        paintFrameChips(animFrameIndex)
+        refreshTimeline(folder, anim, here)
         statusLine.text = frameStatusText(anim, animFrameIndex)
     }
+
+    /**
+     * 动画自己的第 [t] 秒，换成"墙上要等多久"。
+     *
+     * [Timeline.sample] 收的是真实经过的秒数（它自己在里面乘速度倍率），所以要让采样落在
+     * 动画的某一刻，得先除回去。**只有这一处做这件事**：工作台要摆的是"第 1.5 秒的样子"，
+     * 而不是"速度 2 倍时第 1.5 秒的样子"。
+     */
+    private fun frameClock(anim: AnimationSpec, t: Float): Float = t / Anim.speedOf(anim)
+
+    /** 一刻的样子摆到右边：姿势交给骨架，偏移与缩放交给渲染器（只有画面）。 */
+    private fun applyStudioSample(sample: TrackSample) {
+        animView.applyPose(sample.angles)
+        animView.setTrackOffsets(sample.offsetX, sample.offsetY, sample.scale)
+    }
+
+    /**
+     * 时间轴那一条：给它这一段、要显示的骨头行、现在编哪条通道。
+     *
+     * 行 = "有通道的骨头" + "现在选中的那一根"。第二半是必须的：没有它，一根还没被打过关键帧
+     * 的骨头就没有行，也就没有地方放下第一个菱形 —— 一个"要你先有才能加"的功能。
+     */
+    private fun refreshTimeline(folder: CharacterFolder, anim: AnimationSpec, playhead: Float) {
+        val rows = LinkedHashSet<String>()
+        for ((bone, track) in anim.tracks) {
+            if (Timeline.CHANNELS.any { track.keys(it).isNotEmpty() }) rows.add(bone)
+        }
+        animBone?.let { rows.add(it) }
+        val ordered = rigBoneOrder().filter { it in rows } + rows.filter { it !in rigBoneOrder() }
+        animTimeline.setData(anim.copy(tracks = animPending ?: anim.tracks), ordered.toList(), animChannel)
+        animTimeline.setPlayhead(playhead)
+        animTimeline.setSelection(animBone, animKeyIndex, animFrameIndex)
+    }
+
+    /** 骨架自己的顺序（时间轴的行按这个排，和骨骼页看到的一致）。 */
+    private fun rigBoneOrder(): List<String> = animView.rigBones().map { it.name }
 
     /** 预览里亮哪几套图。只进渲染器那张画图表，不碰引擎里的开关 —— 这里是在**看**。 */
     private fun applyStudioStates() {
@@ -5857,56 +5926,6 @@ class MainActivity : AppCompatActivity() {
         for (tag in animLiveStates) map[tag] = true
         // 参考图不画：工作台问的是"这一帧看起来是什么样"，rig 的参考图回答的是另一个问题。
         animView.setPreview(map, true, reference = false)
-    }
-
-    /** 关键帧那条横带：一帧一个方块，末尾是「＋ 帧」。 */
-    private fun buildFrameStrip(folder: CharacterFolder, anim: AnimationSpec) {
-        animFrames.removeAllViews()
-        animFrameChips = mutableListOf()
-        for ((i, f) in anim.frames.withIndex()) {
-            val chip = label(
-                getString(R.string.anim_frame_chip, i + 1, "%.1f".format(Anim.frameSeconds(f))),
-                11f, INK,
-            )
-            chip.setPadding(dp(8), dp(6), dp(8), dp(6))
-            chip.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { marginEnd = dp(4) }
-            chip.setOnClickListener { onFrameChipTapped(folder, i) }
-            animFrames.addView(chip)
-            animFrameChips.add(chip)
-        }
-        val plus = label(getString(R.string.anim_frame_add), 11f, INK)
-        plus.setPadding(dp(8), dp(6), dp(8), dp(6))
-        plus.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { marginStart = dp(2) }
-        plus.setOnClickListener { captureStudioFrame() }
-        animFrames.addView(plus)
-        if (anim.frames.isEmpty()) {
-            animFrames.addView(label(getString(R.string.anim_no_frames_strip), 10f, MUTED))
-        }
-        paintFrameChips(animFrameIndex)
-    }
-
-    /** 帧方块的高亮。播放时每换一帧都要改，所以**只改背景**，不重建那一排。 */
-    private fun paintFrameChips(index: Int) {
-        for ((i, chip) in animFrameChips.withIndex()) {
-            val here = i == index
-            chip.background = getDrawable(
-                if (here) R.drawable.menu_item_selected else R.drawable.menu_item_idle
-            )
-            chip.setTextColor(if (here) INK else MUTED)
-        }
-    }
-
-    /** 点一个帧方块：停播（在看的那一帧上停），然后摆到这一帧。 */
-    private fun onFrameChipTapped(folder: CharacterFolder, index: Int) {
-        haltStudioPlay()
-        val anim = studioAnimation(folder) ?: return
-        showStudioFrame(folder, anim, index)
     }
 
     /**
@@ -5958,6 +5977,215 @@ class MainActivity : AppCompatActivity() {
         chip.background = getDrawable(
             if (on) R.drawable.menu_item_selected else R.drawable.menu_item_idle
         )
+    }
+
+    // ── 时间轴：打关键帧、删关键帧、换通道、把帧转成通道（1.23.0）──────────
+
+    /**
+     * 现在在编哪一根骨头。默认跟着预览里刚拖过的那一节走 —— 用户拖哪里就是在说"我要动这里"，
+     * 再让他去时间轴上找同一根骨头的名字，是多出来的一步。
+     */
+    private fun studioBone(): String? = animBone ?: animView.selected
+
+    /** 「＋关键帧」：把**这一刻、这一节的当前值**记成一个关键帧。 */
+    private fun addStudioKey() {
+        val (folder, anim) = studioEdit() ?: return
+        val bone = studioBone() ?: run {
+            Toast.makeText(this, R.string.anim_need_bone, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val t = animTimeline.playhead
+        val value = studioKeyValue(anim, bone, t)
+        val track = anim.tracks[bone] ?: BoneTrack()
+        val next = track.withKeys(animChannel, Timeline.withKey(track.keys(animChannel), t, value))
+        animBone = bone
+        animKeyIndex = Timeline.withKey(track.keys(animChannel), t, value).indexOfLast { it.t <= t + Timeline.TIME_EPSILON }
+        writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
+        buildAnimList()
+        statusLine.text = getString(
+            R.string.anim_key_added, bone, channelLabel(), "%.2f".format(t), formatValue(value),
+        )
+    }
+
+    /** 「删关键帧」：删掉时间轴上选中的那一个。 */
+    private fun dropStudioKey() {
+        val (folder, anim) = studioEdit() ?: return
+        val bone = animBone
+        val index = animKeyIndex
+        val track = bone?.let { anim.tracks[it] }
+        if (bone == null || track == null || index < 0 || index >= track.keys(animChannel).size) {
+            Toast.makeText(this, R.string.anim_need_key, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val next = track.withKeys(animChannel, Timeline.removed(track.keys(animChannel), index))
+        animKeyIndex = -1
+        writeStudioAnimation(folder, anim.copy(tracks = anim.tracks + (bone to next)))
+        buildAnimList()
+        statusLine.text = getString(R.string.anim_key_dropped, bone, channelLabel())
+    }
+
+    /** 「通道：…」：旋转 → 位置X → 位置Y → 缩放，转一圈。 */
+    private fun cycleStudioChannel() {
+        val next = Timeline.CHANNELS[(Timeline.CHANNELS.indexOf(animChannel) + 1) % Timeline.CHANNELS.size]
+        setStudioChannel(next)
+    }
+
+    /**
+     * 换通道。**选中的那个关键帧一定要清掉**：它是"当前骨头在这一条通道上的第几个"，
+     * 换一条通道之后那个下标指向的是另一个关键帧（甚至不存在），留着它，下一个"删关键帧"
+     * 就会删到别的通道上去。
+     */
+    private fun setStudioChannel(channel: Int) {
+        animChannel = channel
+        animKeyIndex = -1
+        findViewById<TextView>(R.id.animChannel).text = channelLabel()
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val here = TimelineLayout.frameStarts(anim).getOrNull(animFrameIndex) ?: animTimeline.playhead
+        refreshTimeline(folder, anim, here)
+    }
+
+    private fun channelLabel(): String = getString(
+        when (animChannel) {
+            Timeline.POSITION_X -> R.string.anim_channel_x
+            Timeline.POSITION_Y -> R.string.anim_channel_y
+            Timeline.SCALE -> R.string.anim_channel_scale
+            else -> R.string.anim_channel_rot
+        }
+    )
+
+    /**
+     * 这一刻、这一节、这条通道的"当前值"：新打的关键帧就从它开始。
+     *
+     * 旋转取的是**预览里那一节现在的角度**（用户刚拖出来的那个），其余三条取时间轴上的值
+     * （没写过就是默认值）—— 于是"打一个关键帧，再把它往上拖"就是设置偏移/缩放的完整操作，
+     * 不需要为此再做一套数字输入框。
+     */
+    private fun studioKeyValue(anim: AnimationSpec, bone: String, t: Float): Float {
+        if (animChannel == Timeline.ROTATION) {
+            return animView.currentDegrees(bone) ?: Timeline.defaultValue(animChannel)
+        }
+        val track = anim.tracks[bone] ?: BoneTrack()
+        val keys = track.keys(animChannel)
+        if (keys.isEmpty()) return Timeline.defaultValue(animChannel)
+        return Timeline.valueAt(keys, t)
+    }
+
+    private fun formatValue(v: Float): String =
+        if (animChannel == Timeline.SCALE) "%.2f×".format(v) else "%.1f".format(v)
+
+    /**
+     * 「转成时间轴」：把现在这几帧烘成每根骨头自己的通道。
+     *
+     * **逐点无损**（[Timeline.bake]，`tools/timeline_check.py` 拿 60 段随机动画比过），所以
+     * 这一下不会改坏已经做好的动作 —— 它只是把"帧里的姿势"翻译成"骨头上的关键帧"，
+     * 之后每一节才能各自动各的。
+     */
+    private fun bakeStudioTimeline() {
+        val (folder, anim) = studioEdit() ?: return
+        if (anim.frames.isEmpty()) {
+            Toast.makeText(this, R.string.anim_need_frame, Toast.LENGTH_SHORT).show()
+            return
+        }
+        val baked = Timeline.bake(anim)
+        if (baked == anim.tracks) {
+            Toast.makeText(this, R.string.anim_bake_done, Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!writeStudioAnimation(folder, anim.copy(tracks = baked))) return
+        animKeyIndex = -1
+        buildAnimList()
+        statusLine.text = getString(R.string.anim_baked, Timeline.trackedBones(anim.copy(tracks = baked)))
+    }
+
+    /** 拖播放头：把这一刻的样子摆到右边，并选中"这一刻落在哪一帧"。 */
+    private fun scrubStudioTo(t: Float) {
+        haltStudioPlay()
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val sample = Timeline.sample(anim, frameClock(anim, t)) ?: return
+        animFrameIndex = TimelineLayout.frameAt(anim, t)
+        animLiveStates.clear()
+        animLiveStates.addAll(Anim.statesOf(anim.frames.getOrNull(animFrameIndex)?.state ?: ""))
+        animPending = null
+        applyStudioSample(sample)
+        applyStudioStates()
+        buildStateChips(folder)
+        animTimeline.setData(anim, animTimeline.bones, animChannel)
+        animTimeline.setPlayhead(t)
+        animTimeline.setSelection(animBone, animKeyIndex, animFrameIndex)
+        statusLine.text = getString(
+            R.string.anim_scrub, "%.2f".format(t), animFrameIndex + 1,
+        )
+    }
+
+    /** 点了一个菱形：选中它，并把播放头挪到它的时刻（那一刻就是它的样子）。 */
+    private fun pickStudioKey(bone: String, index: Int) {
+        animBone = bone
+        animKeyIndex = index
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val key = anim.tracks[bone]?.keys(animChannel)?.getOrNull(index) ?: return
+        val sample = Timeline.sample(anim, frameClock(anim, key.t)) ?: return
+        animFrameIndex = TimelineLayout.frameAt(anim, key.t)
+        applyStudioSample(sample)
+        animTimeline.setPlayhead(key.t)
+        animTimeline.setSelection(bone, index, animFrameIndex)
+        statusLine.text = getString(
+            R.string.anim_key_status, bone, channelLabel(), formatValue(key.v), "%.2f".format(key.t),
+        )
+    }
+
+    /**
+     * 拖了一个菱形：**先在内存里改，手指抬起来才落盘**。
+     *
+     * 一秒几十次写文件是拿电池换一个没人看得见的中间状态；而拖动过程中界面必须立刻跟着动
+     * （否则手感是"拖不动"）。两件事都要，所以拖动期间时间轴画的是 [animPending] 那一份。
+     */
+    private fun moveStudioKey(bone: String, index: Int, t: Float, v: Float, done: Boolean) {
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        val track = (animPending ?: anim.tracks)[bone] ?: return
+        val keys = track.keys(animChannel)
+        if (index < 0 || index >= keys.size) return
+        val moved = Timeline.moved(keys, index, t, v)
+        val nextTrack = track.withKeys(animChannel, moved)
+        val tracks = (animPending ?: anim.tracks) + (bone to nextTrack)
+        animPending = tracks
+        animBone = bone
+        animKeyIndex = moved.indexOfFirst { abs(it.t - t) < 1e-4 }
+        animTimeline.setData(anim.copy(tracks = tracks), animTimeline.bones, animChannel)
+        animTimeline.setPlayhead(t)
+        animTimeline.setSelection(bone, animKeyIndex, animFrameIndex)
+        if (!done) {
+            statusLine.text = getString(
+                R.string.anim_key_status, bone, channelLabel(), formatValue(v), "%.2f".format(t),
+            )
+            return
+        }
+        animPending = null
+        if (!writeStudioAnimation(folder, anim.copy(tracks = tracks))) return
+        animKeyIndex = -1
+        buildAnimList()
+    }
+
+    /** 点了"图"那一行的一块：选中那一帧（右边摆成它的样子）。 */
+    private fun pickStudioFrame(index: Int) {
+        haltStudioPlay()
+        val folder = studioFolder() ?: return
+        val anim = studioAnimation(folder) ?: return
+        showStudioFrame(folder, anim, index)
+    }
+
+    /** 点了时间轴左边的名字：选中那一节（之后"＋关键帧"就是给它打）。 */
+    private fun pickStudioBone(bone: String) {
+        animBone = bone
+        animKeyIndex = -1
+        animTimeline.setSelection(bone, -1, animFrameIndex)
+        // 预览也跟着选中它：时间轴上点名字和画布上拖关节应该是同一件事。
+        animView.focusOn(bone)
+        val anim = studioFolder()?.let { studioAnimation(it) } ?: return
+        statusLine.text = frameStatusText(anim, animFrameIndex)
     }
 
     /** 换了一套图：重画那一排（✓ 的位置变了），预览跟着换，并记下"和这一帧不一样了"。 */
@@ -6028,11 +6256,14 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             animFrameIndex = s.frame
+            animView.applyPose(s.angles)
+            animView.setTrackOffsets(s.offsetX, s.offsetY, s.scale)
+            // 播放头就是"演到哪儿了"：它跟着时钟走，用户才能看着时间轴对动作。
+            animTimeline.setPlayhead(Timeline.localTime(anim, animClock))
             if (s.frame != animShownFrame) {
                 animShownFrame = s.frame
-                paintFrameChips(s.frame)
+                animTimeline.setSelection(animBone, animKeyIndex, s.frame)
             }
-            animView.applyPose(s.angles)
             // 图在**帧边界**换，不在中间换 —— 一帧可以同时开着好几套（Anim.statesOf）。
             val live = Anim.statesOf(s.state)
             if (live != animLiveStates.toList()) {
@@ -6070,7 +6301,6 @@ class MainActivity : AppCompatActivity() {
         haltStudioPlay()
         val folder = studioFolder() ?: return
         val anim = studioAnimation(folder) ?: return
-        buildFrameStrip(folder, anim)
         showStudioFrame(folder, anim, animFrameIndex)
     }
 
@@ -6086,7 +6316,13 @@ class MainActivity : AppCompatActivity() {
             seconds = anim.frames.getOrNull(animFrameIndex)?.seconds ?: Anim.DEFAULT_FRAME_SECONDS,
         )
         val next = anim.frames.toMutableList().apply { add(at, frame) }
-        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        // 帧和通道是同一个时间轴的两半：往中间插一帧，后面的关键帧必须跟着往后挪，
+        // 否则图往后走了一格、通道留在原地，动作和画就对不上了。
+        val shifted = Timeline.shifted(
+            anim.tracks, TimelineLayout.frameStarts(anim).getOrElse(at) { 0f },
+            Anim.frameSeconds(frame), Anim.duration(anim.copy(frames = next)),
+        )
+        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = shifted))) return
         animFrameIndex = at
         buildAnimList()
         Toast.makeText(
@@ -6115,7 +6351,14 @@ class MainActivity : AppCompatActivity() {
         val next = anim.frames.toMutableList().apply {
             this[animFrameIndex] = frame.copy(angles = angles, state = state)
         }
-        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        // 有通道的骨头**同时**在这一帧的起点打一个关键帧：帧和通道是同一个时间轴的两半，
+        // 而"存了这一帧、播出来却是通道的老值"是最容易让人以为"存没生效"的那种错。
+        val at = TimelineLayout.frameStarts(anim).getOrElse(animFrameIndex) { 0f }
+        val tracks = anim.tracks.mapValues { (bone, track) ->
+            if (track.rot.isEmpty()) return@mapValues track
+            track.copy(rot = Timeline.withKey(track.rot, at, angles[bone] ?: 0f))
+        }
+        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = tracks))) return
         buildAnimList()
         Toast.makeText(
             this,
@@ -6140,7 +6383,12 @@ class MainActivity : AppCompatActivity() {
         val next = anim.frames.toMutableList().apply {
             this[animFrameIndex] = frame.copy(seconds = seconds)
         }
-        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        // 这一帧变长/变短，它**之后**的关键帧跟着挪同样多（和插一帧同一个道理）。
+        val shifted = Timeline.shifted(
+            anim.tracks, TimelineLayout.frameStarts(anim).getOrElse(animFrameIndex + 1) { 0f },
+            seconds - Anim.frameSeconds(frame), Anim.duration(anim.copy(frames = next)),
+        )
+        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = shifted))) return
         buildAnimList()
         statusLine.text = getString(
             R.string.anim_frame_seconds_now, animFrameIndex + 1, "%.2f".format(seconds),
@@ -6162,7 +6410,13 @@ class MainActivity : AppCompatActivity() {
         haltStudioPlay()
         val gone = animFrameIndex
         val next = anim.frames.toMutableList().apply { removeAt(gone.coerceIn(0, size - 1)) }
-        if (!writeStudioAnimation(folder, anim.copy(frames = next))) return
+        val starts = TimelineLayout.frameStarts(anim)
+        val from = starts.getOrElse(gone) { 0f }
+        val to = from + Anim.frameSeconds(anim.frames[gone.coerceIn(0, anim.frames.size - 1)])
+        val dropped = Timeline.dropped(
+            anim.tracks, from, to, Anim.duration(anim.copy(frames = next)),
+        )
+        if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = dropped))) return
         animFrameIndex = gone.coerceAtMost(max(0, next.size - 1))
         buildAnimList()
         Toast.makeText(
@@ -6255,8 +6509,11 @@ class MainActivity : AppCompatActivity() {
         animEditId = null
         animFrameIndex = 0
         animLiveStates.clear()
-        animFrameChips = mutableListOf()
-        animFrames.removeAllViews()
+        animBone = null
+        animKeyIndex = -1
+        animPending = null
+        animTimeline.setData(AnimationSpec("", ""), emptyList(), animChannel)
+        animTimeline.setPlayhead(0f)
         animStates.removeAllViews()
         animView.setShowSkeleton(false)
         animView.setPreview(emptyMap(), false, reference = false)

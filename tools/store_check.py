@@ -606,7 +606,11 @@ def main():
     # 读的时候 optJSONArray("frame")，两种都不报错，症状只有"存好的动画播放起来是空的"。
     kt = open(STORE_KT, encoding="utf-8").read()
     write_body = kt[kt.find("private fun writeAnimations"):]
-    write_body = write_body[:write_body.find("\n    }")]
+    # 写这一半现在有两个函数：writeAnimations（动画本身）和 writeTracks（每根骨头的通道，
+    # 1.23.0）。切到"下一个段落注释"为止，两个都包进来 —— 只切第一个 `\n    }` 的话，
+    # 通道那几个键会落在外面，而断言比的正是"写出去的键"。
+    cut = write_body.find("\n    // ── ", 1)
+    write_body = write_body[:cut if cut > 0 else write_body.find("\n    }")]
     read_body = kt[kt.find("fun loadAnimations"):]
     read_body = read_body[:read_body.find("fun saveAnimation")]
     keys = lambda text, pat: set(re.findall(pat, text))
@@ -618,6 +622,17 @@ def main():
     frame_written = keys(write_body[write_body.find("val frames = JSONArray()"):],
                          r'\.put\("(\w+)"')
     frame_read = keys(read_body, r'(?:optString|optDouble|optJSONObject)\("(\w+)"')
+    # 通道那一半：写的是 rot/x/y/scale，读的也得是这四个 —— 同一个"存好了但是空的"毛病。
+    track_written = keys(write_body[write_body.find("private fun writeTracks"):],
+                         r'\.put\("(\w+)"')
+    track_read = keys(read_body, r'optJSONArray\("(\w+)"')
+    report("动画：通道写出去的和读回来的是同一批键（旋转 / 位置X / 位置Y / 缩放）",
+           {"rot", "x", "y", "scale"} <= track_written
+           and {"rot", "x", "y", "scale"} <= track_read,
+           "通道写 %s / 读 %s" % (sorted(track_written), sorted(track_read)))
+    report("坏掉的通道整条丢掉（补一串 0 度会去接管那根骨头的旋转）",
+           "if (t.isNaN() || v.isNaN()) continue" in read_body
+           and "track.rot.isEmpty() && track.x.isEmpty()" in read_body)
     report("动画：每一帧的字段也对得上（角度 / 开关 / 秒数）",
            {"angles", "state", "seconds"} <= frame_written
            and {"angles", "state", "seconds"} <= frame_read,
