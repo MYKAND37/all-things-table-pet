@@ -287,6 +287,21 @@ if (turned) canvas.restore()
 **节点能不能拖**（关掉照样挂道具、系绳子、有碰撞，只是手指拽不走）和
 **液体/粒子画在角色前还是后**（各按各的老默认值，所以升级不换样子）。
 
+### 十四、一个撇号让整轮构建失败（1.26.0）
+
+CI 红在一句英文上：
+
+    values-en/strings.xml:614: Failed to flatten XML for resource 'part_variant_prio_title'
+    with error: Invalid unicode escape sequence in string
+
+我写的是 `Where %1$s's drawing ranks` —— Android 资源里**裸的单引号**必须写成 `\'`（或者
+把整句包在双引号里），否则 aapt2 直接拒绝。报错信息（"invalid unicode escape"）也没帮上忙，
+是那一行的内容让我一眼看出来的。
+
+`tools/english_check.py` 从此多一句：中文、英文两份资源里都不许有裸单引号，而且照例用真错误
+反过来验过（写回去立刻红）。这已经是这台机器上第五类"只有工具链看得见、而本地检查能提前拦住"
+的错 —— 每一个都值得一条本地断言。
+
 ## 每一版的断言记录
 
 从 `docs/VERIFY.md` 搬来（原来在 README 的「关于验证」里）。每一段说的是：**这一版加了什么，

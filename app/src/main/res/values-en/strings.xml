@@ -617,6 +617,6 @@ The full text (licence status, how to report, applicable law) is in the reposito
     <string name="part_variant_to_overlay">Make it an overlay</string>
     <string name="part_variant_to_replace">Make it a replacement</string>
     <string name="part_variant_prio">Prio %1$d</string>
-    <string name="part_variant_prio_title">Where %1$s's drawing ranks</string>
+    <string name="part_variant_prio_title">Where %1$s\'s drawing ranks</string>
     <string name="part_variant_switched">Changed</string>
 </resources>

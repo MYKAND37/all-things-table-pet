@@ -283,6 +283,12 @@ cos=1、sin=0，那两行就退化成原来的两句乘法 —— 这一版没�
 `if (!node.draggable) return@run` 拦在手指那一条路上；`showNodes` 只拦在**画**那一条路上
 （`if (!settings.showNodes) return`），拖动照旧。
 
+## 资源里不该有的东西（1.26.0）
+
+`tools/english_check.py` 多一句：**两份资源里都不许有裸的单引号**。它是被一轮 CI 红逼出来的 ——
+`Where %1$s's drawing ranks` 让 aapt2 报 `Invalid unicode escape sequence in string`，
+而正确写法是 `\'`。照例用真错误反过来验过。
+
 ## 免责声明确认门这一版的验证
 
 `tools/wiring_check.py` 八句 —— 一条门要成立，四件事都要在：**关不掉**（`setCancelable(false)`，

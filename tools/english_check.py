@@ -69,6 +69,14 @@ def main():
     report("英文那份里没有汉字", not leftovers,
            "; ".join("%s=%s" % (k, v[:18]) for k, v in leftovers[:3]))
 
+    print("\n资源里没有会让 aapt2 报错的东西")
+    # 裸单引号：`Where %1$s's drawing ranks` 这种，Android 的资源编译器直接失败
+    # （CI 报 "Invalid unicode escape sequence in string"）。第一版就是这么红的。
+    bare = [(k, v[:40]) for k, v in list(zh.items()) + list(en.items())
+            if any(ch == "'" and (i == 0 or v[i - 1] != "\\")
+                   for i, ch in enumerate(v))]
+    report("没有裸的单引号（要写成 \\'）", not bare, str(bare[:3]))
+
     print("\n功能词这一类必须翻完")
     # 这一版的范围就是"应用自己的功能词"：控件文案（短标签）+ 引擎词汇 + 骨头名 + 刚度档。
     # 长文案（>16 字）不在范围内，所以按同一把尺子量：短的必须都有英文。
