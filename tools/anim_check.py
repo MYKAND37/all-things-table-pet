@@ -209,9 +209,53 @@ def sample_at(a, t):
             "frame": len(frames) - 1, "frames": len(frames)}
 
 
-def anim(frames, speed=1.0, loop=True, return_home=False):
+def anim(frames, speed=1.0, loop=True, return_home=False, additive=False, base=None):
     return {"id": "a", "name": "a", "speed": speed, "loop": loop,
-            "returnHome": return_home, "frames": frames}
+            "returnHome": return_home, "additive": additive, "base": base or {},
+            "frames": frames}
+
+
+def floor_for(a, under):
+    """叠加段"脚下"是什么（镜像 Anim.floorFor，1.31.0）。
+
+    有人在下面演（under 非空）就是那一份；什么都没在演时，叠加段踩在**它自己的基准**上。
+    """
+    return a["base"] if a.get("additive") and not under else under
+
+
+def overlay_pose(frame, base, live):
+    """叠加一份姿势（镜像 Anim.overlayPose，1.31.0）。
+
+    帧里提到的骨头 = live + (帧值 − 基准值)；没提到的跟着 live 走（增量 0）。
+    """
+    out = dict(live)
+    for bone, value in frame.items():
+        out[bone] = live.get(bone, 0.0) + value - base.get(bone, 0.0)
+    return out
+
+
+def overlay_sample(cur, add, additive, base):
+    """把一段叠在当前结果上（镜像 Timeline.overlay，1.31.0）。
+
+    一条规矩管四个通道：替换 = 整份接管；叠加 = 姿势相加、偏移相加、缩放相乘、图并起来。
+    """
+    if not additive:
+        return {
+            "angles": dict(add["angles"]), "offsetX": dict(add["offsetX"]),
+            "offsetY": dict(add["offsetY"]), "scale": dict(add["scale"]),
+            "state": add["state"],
+        }
+    angles = overlay_pose(add["angles"], base, cur["angles"])
+    ox, oy = dict(cur["offsetX"]), dict(cur["offsetY"])
+    for bone, v in add["offsetX"].items():
+        ox[bone] = ox.get(bone, 0.0) + v
+    for bone, v in add["offsetY"].items():
+        oy[bone] = oy.get(bone, 0.0) + v
+    scale = dict(cur["scale"])
+    for bone, v in add["scale"].items():
+        scale[bone] = scale.get(bone, 1.0) * v
+    return {"angles": angles, "offsetX": ox, "offsetY": oy, "scale": scale,
+            "state": join_states(states_of(cur["state"]) + states_of(add["state"]))}
 
 
 def frame(angles=None, state="", seconds=DEFAULT_FRAME_SECONDS):
@@ -423,6 +467,71 @@ def main():
     report("帧起点的时间会夹住（越界不返回负数）",
            start_seconds(inherit, -5) == 0.0 and abs(start_seconds(inherit, 99) - 1.0) < 1e-9)
 
+    print("\n叠加：一段加在另一段上（1.31.0）")
+    # 这一段量的是**加法本身**，因为它是这一版唯一会悄悄错的地方：少减一次基准 = 姿势偏一大截，
+    # 少加一次 live = "我没碰过的骨头回站姿"（用户看到的是"坐姿的两条腿突然站直了"）。
+    base = {"arm": 20.0, "leg": 90.0}
+    live = {"arm": 10.0, "leg": 90.0, "head": 5.0}
+    frame_now = {"arm": 50.0}
+    got = overlay_pose(frame_now, base, live)
+    report("提到的骨头：脚下那一份 + (帧值 − 基准值)", abs(got["arm"] - 40.0) < 1e-6,
+           "%.1f（脚下 10、基准 20、帧里 50）" % got["arm"])
+    report("没提到的骨头一点不动", got["leg"] == 90.0 and got["head"] == 5.0, str(got))
+    report("基准里有、帧里没有的骨头也是增量 0（减法自己成立）",
+           overlay_pose({}, base, live) == live)
+    report("基准里没有的骨头按静息算（0）",
+           abs(overlay_pose({"arm": 30.0}, {}, {"arm": 0.0})["arm"] - 30.0) < 1e-6)
+    report("脚下什么都没有时，叠加的就是它自己（空 + 帧 = 帧）",
+           overlay_pose({"arm": 30.0}, {}, {}) == {"arm": 30.0})
+    # 恒等式：编辑器里摆的时候脚下就是基准，所以"摆的样子"必须逐点等于"演的样子"。
+    # 这条一破，用户会摆出一个引擎演不出来的姿势（摆好、存下、一播就变样）。
+    authored = {"arm": 50.0, "leg": 90.0, "head": 5.0}
+    identity = overlay_pose(authored, base, base)
+    report("摆的就是演的：脚下 == 基准 时逐点等于作者摆的那一份",
+           all(abs(identity[k] - authored[k]) < 1e-6 for k in authored)
+           and identity["arm"] == authored["arm"], str(identity))
+    report("（上一条里没被摆到的骨头跟着基准，不是回 0）",
+           overlay_pose({"arm": 50.0}, base, base)["leg"] == 90.0)
+    # 四个通道同一条规矩。
+    cur = {"angles": {"arm": 10.0}, "offsetX": {"arm": 4.0}, "offsetY": {},
+           "scale": {"arm": 1.2}, "state": "帧1"}
+    add = {"angles": {"arm": 50.0}, "offsetX": {"arm": 6.0}, "offsetY": {"arm": 2.0},
+           "scale": {"arm": 2.0}, "state": "帧2"}
+    folded = overlay_sample(cur, add, True, {"arm": 20.0})
+    report("叠加：姿势相加、偏移相加、缩放相乘、图并起来",
+           abs(folded["angles"]["arm"] - 40.0) < 1e-6
+           and abs(folded["offsetX"]["arm"] - 10.0) < 1e-6
+           and abs(folded["offsetY"]["arm"] - 2.0) < 1e-6
+           and abs(folded["scale"]["arm"] - 2.4) < 1e-6
+           and folded["state"] == "帧1+帧2", str(folded))
+    replaced = overlay_sample(cur, add, False, {"arm": 20.0})
+    report("替换：四个通道整份接管（老行为一个字没变）",
+           replaced["angles"] == {"arm": 50.0} and replaced["offsetX"] == {"arm": 6.0}
+           and replaced["scale"] == {"arm": 2.0} and replaced["state"] == "帧2",
+           str(replaced))
+    report("缩放是倍率：没写过的那一侧按 1 算（不是 0）",
+           abs(overlay_sample({"angles": {}, "offsetX": {}, "offsetY": {}, "scale": {},
+                               "state": ""}, add, True, {})["scale"]["arm"] - 2.0) < 1e-6)
+    # 镜像和 Kotlin 是同一条式子 —— 这一句是"漂了会红"的那一半：函数体改了写法而这里没改，
+    # 上面那些数字断言会一起变成假绿。
+    kt_text = open(KT, encoding="utf-8").read()
+    tl_text = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/anim/Timeline.kt"),
+                   encoding="utf-8").read()
+    # 单播一段叠加动画时的"脚下"：这一段本来就是在那个姿势上摆的，单独播就该是作者摆的样子。
+    # 这条错了的症状是"我在编辑器里摆的是坐着挥手，一按播放变成手臂抬 10 度"。
+    sitting = anim([], additive=True, base={"arm": 60.0})
+    report("没人演、也没有按着的动作时：叠加段踩在自己的基准上",
+           floor_for(sitting, {}) == {"arm": 60.0})
+    report("有人在下面演时：踩在下面那一份上（基准只管减法）",
+           floor_for(sitting, {"arm": 10.0}) == {"arm": 10.0})
+    report("不叠加的段不受影响（它整份接管，脚下是什么都不看）",
+           floor_for(anim([], additive=False, base={"arm": 60.0}), {}) == {})
+    report("Kotlin 里那一行和这份镜像逐字一致（漂了会红）",
+           "out[bone] = (live[bone] ?: 0f) + value - (base[bone] ?: 0f)" in kt_text
+           and "out[bone] = (out[bone] ?: 0f) + v" in tl_text
+           and "scale[bone] = (scale[bone] ?: 1f) * v" in tl_text
+           and "Anim.overlayPose(add.angles, base, cur.angles)" in tl_text
+           and "if (a.additive && under.isEmpty()) a.base else under" in kt_text)
     print("")
     if FAILURES:
         print("%d FAILED" % len(FAILURES))

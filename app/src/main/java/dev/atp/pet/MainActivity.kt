@@ -475,6 +475,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.animFit).setOnClickListener { animView.resetView() }
         animBonesChip.setOnClickListener { toggleStudioBones() }
         findViewById<View>(R.id.animReference).setOnClickListener { toggleStudioReference() }
+        findViewById<View>(R.id.animBase).setOnClickListener { askStudioBase() }
         findViewById<View>(R.id.animTimelineToggle).setOnClickListener { toggleStudioTimeline() }
         findViewById<View>(R.id.animSnap).setOnClickListener { toggleStudioSnap() }
         findViewById<View>(R.id.animRows).setOnClickListener { toggleStudioRows() }
@@ -1293,7 +1294,30 @@ class MainActivity : AppCompatActivity() {
         )
         box.addView(label(getString(R.string.anim_hint), 10f, MUTED, bottom = 8))
 
-        val playing = sandboxView.animationInfo()
+        // 现在在演什么（底座 ＋ 叠加上去的几段）。"同时播两段"要是没有这一行，用户只能靠眼睛
+        // 猜哪几段在演、叠了几段 —— 而猜错的下一步一定是"我明明停了它怎么还在动"。
+        val playingIds = sandboxView.playingIds()
+        val overlayCount = sandboxView.overlayCount()
+        if (playingIds.isNotEmpty()) {
+            val names = playingIds.map { id -> anims.firstOrNull { it.id == id }?.name ?: id }
+            val now = label(
+                getString(R.string.anim_now_playing, names.joinToString(" ＋ ")),
+                11f, INK, bottom = 4,
+            )
+            now.setPadding(dp(10), dp(6), dp(10), dp(6))
+            box.addView(now)
+            if (overlayCount > 0) {
+                val stop = label(getString(R.string.anim_overlay_stop), 11f, INK)
+                stop.setPadding(dp(10), dp(6), dp(10), dp(6))
+                stop.background = getDrawable(R.drawable.menu_item_idle)
+                stop.setOnClickListener {
+                    sandboxView.stopOverlay()
+                    fillActionList(box, folder)
+                }
+                box.addView(stop)
+                box.addView(label(getString(R.string.anim_overlay_hint), 10f, MUTED, top = 4, bottom = 4))
+            }
+        }
         for (anim in anims) {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -1312,8 +1336,19 @@ class MainActivity : AppCompatActivity() {
             text.layoutParams = LinearLayout.LayoutParams(
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f,
             )
-            val here = playing?.takeIf { it.first == anim.name }
-            text.addView(label(anim.name + if (here != null) " · 播放中" else "", 14f, INK))
+            // 身份用 id（见 playingIds）：两段动画可以重名，按名字认会把行标错。
+            val here = playingIds.firstOrNull() == anim.id
+            val stacked = anim.id in playingIds.drop(1)
+            text.addView(
+                label(
+                    anim.name + when {
+                        here -> " · " + getString(R.string.anim_playing)
+                        stacked -> " · " + getString(R.string.anim_stacked)
+                        else -> ""
+                    },
+                    14f, INK,
+                )
+            )
             text.addView(
                 label(
                     getString(
@@ -1321,22 +1356,23 @@ class MainActivity : AppCompatActivity() {
                         anim.frames.size,
                         "%.2f×".format(anim.speed),
                         "%.2f".format(Anim.realDuration(anim)),
-                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else "",
+                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else ""
+                        + if (anim.additive) " · " + getString(R.string.anim_additive_short) else "",
                     10f, MUTED,
                 )
             )
             row.addView(text)
 
             val play = label(
-                getString(if (here != null) R.string.anim_stop else R.string.anim_play),
+                getString(if (here) R.string.anim_stop else R.string.anim_play),
                 12f, INK,
             )
             play.setPadding(dp(10), dp(6), dp(10), dp(6))
             play.background = getDrawable(
-                if (here != null) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+                if (here) R.drawable.menu_item_selected else R.drawable.menu_item_idle
             )
             play.setOnClickListener {
-                if (here != null) {
+                if (here) {
                     sandboxView.stopAnimation()
                 } else if (!sandboxView.playAnimation(anim.id)) {
                     Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
@@ -1344,6 +1380,28 @@ class MainActivity : AppCompatActivity() {
                 fillActionList(box, folder)
             }
             row.addView(play)
+
+            // 「＋叠」（1.31.0）：把这一段**加**在正在演的那一段上面，两个时钟各走各的。
+            // 没有正在演的时候它就是普通播放（PhysicsSandboxView.playAnimation 里那一条：
+            // "先按叠加"不该变成什么都不播）。
+            val stack = label(
+                getString(
+                    if (stacked) R.string.anim_overlay_stop_one else R.string.anim_overlay_play,
+                ),
+                12f, INK,
+            )
+            stack.setPadding(dp(10), dp(6), dp(10), dp(6))
+            stack.background = getDrawable(
+                if (stacked) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            stack.setOnClickListener {
+                if (stacked) sandboxView.stopOverlay()
+                else if (!sandboxView.playAnimation(anim.id, overlay = true)) {
+                    Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+                }
+                fillActionList(box, folder)
+            }
+            row.addView(stack)
 
             row.setOnClickListener { askAnimation(folder, anim) { fillActionList(box, folder) } }
             box.addView(row)
@@ -1419,6 +1477,22 @@ class MainActivity : AppCompatActivity() {
         // 两个开关互相影响（循环开着时"回家"没有意义，所以画成灰的），所以点了哪一个都重画两个。
         loopChip.setOnClickListener { loop = !loop; paintLoop(); paintHome() }
         homeChip.setOnClickListener { returnHome = !returnHome; paintHome(); paintLoop() }
+        // 叠加（1.31.0）：这一段是"加在正在演的那一段上"，而不是整份接管。
+        // 基准（摆它的时候脚下踩的是什么）在动画页那个「基准」按钮上选 —— 两件事分开是因为
+        // 一个说的是"播的时候怎么算"，另一个说的是"摆的时候脚下是什么"。
+        var additive = existing?.additive ?: false
+        val addChip = label(getString(R.string.anim_additive), 12f, INK)
+        addChip.setPadding(dp(10), dp(8), dp(10), dp(8))
+        fun paintAdditive() {
+            addChip.background = getDrawable(
+                if (additive) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            addChip.setTextColor(if (additive) INK else MUTED)
+            addChip.text = getString(
+                if (additive) R.string.anim_additive_on else R.string.anim_additive,
+            )
+        }
+        addChip.setOnClickListener { additive = !additive; paintAdditive() }
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1428,9 +1502,18 @@ class MainActivity : AppCompatActivity() {
 
         fun write() {
             val name = nameInput.text.toString().trim().ifEmpty { id }
+            // 从**原来那一段**改，不是重新造一段（1.31.0 顺手修的 bug）：这个弹窗只管名字、
+            // 速度、循环、回家、叠加五件事，别的字段（每根骨头的通道、基准……）必须原样留着。
+            // 原来这里是 `AnimationSpec(id, name, frames, speed, loop, returnHome)` —— 造新对象
+            // 会把没提到的字段打回默认值，也就是**通道全丢**：烤完时间轴、进来调一下速度、
+            // 关键帧就没了。copy 只有一处能漏字段，构造器每一处都要重新数一遍。
+            val base = existing ?: AnimationSpec(id, name)
             store.saveAnimation(
                 folder,
-                AnimationSpec(id, name, frames.toList(), speedOf(), loop, returnHome = returnHome),
+                base.copy(
+                    name = name, frames = frames.toList(), speed = speedOf(),
+                    loop = loop, returnHome = returnHome, additive = additive,
+                ),
             )
             refreshAnimations(folder)
             // 谁开的这个弹窗，谁决定重画什么：测试场那张动作表，或者动画管理页。
@@ -1501,6 +1584,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(loopChip)
         box.addView(homeChip)
         box.addView(label(getString(R.string.anim_return_home_hint), 10f, MUTED, top = 4))
+        box.addView(addChip)
+        box.addView(label(getString(R.string.anim_additive_hint), 10f, MUTED, top = 4))
         if (withFrames) {
             box.addView(label(getString(R.string.anim_frames), 11f, MUTED, top = 10, bottom = 6))
             box.addView(frameBox)
@@ -1531,6 +1616,7 @@ class MainActivity : AppCompatActivity() {
             .show()
         paintLoop()
         paintHome()
+        paintAdditive()
         fillFrames()
     }
 
@@ -5937,7 +6023,8 @@ class MainActivity : AppCompatActivity() {
                         anim.frames.size,
                         "%.2f×".format(anim.speed),
                         "%.2f".format(Anim.realDuration(anim)),
-                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else "",
+                    ) + if (anim.loop) " · " + getString(R.string.anim_loops) else ""
+                        + if (anim.additive) " · " + getString(R.string.anim_additive_short) else "",
                     10f, MUTED,
                 )
             )
@@ -6088,6 +6175,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
         showStudioMoment(folder, anim, animPlayhead)
+        // 「基准」那一格跟着**这一段**走（1.31.0）。放在这里而不是 showStudioMoment 里：
+        // 那一句每拖一次播放头就跑一遍，而基准那一格要读一遍 poses.json —— 拖播放头时读盘
+        // 是那种"用起来有点卡但看不出为什么"的东西。
+        paintStudioChips()
     }
 
     /**
@@ -6103,7 +6194,7 @@ class MainActivity : AppCompatActivity() {
         animLiveStates.clear()
         animLiveStates.addAll(Anim.statesOf(anim.frames.getOrNull(animFrameIndex)?.state ?: ""))
         val sample = Timeline.sample(anim, frameClock(anim, clamped)) ?: return
-        applyStudioSample(sample)
+        applyStudioSample(anim, sample)
         applyStudioStates()
         buildStateChips(folder)
         refreshTimeline(folder, anim, clamped)
@@ -6133,9 +6224,18 @@ class MainActivity : AppCompatActivity() {
      */
     private fun frameClock(anim: AnimationSpec, t: Float): Float = t / Anim.speedOf(anim)
 
-    /** 一刻的样子摆到右边：姿势交给骨架，偏移与缩放交给渲染器（只有画面）。 */
-    private fun applyStudioSample(sample: TrackSample) {
-        animView.applyPose(sample.angles)
+    /**
+     * 一刻的样子摆到右边：姿势交给骨架，偏移与缩放交给渲染器（只有画面）。
+     *
+     * 叠加的那一段（1.31.0）只写了**它碰过的**骨头，所以没写的骨头要拿它自己的**基准**补上
+     * （[Anim.overlayPose]，脚下 == 基准 的那一半）。不补的话编辑器里看到的是"坐姿动画的两条腿
+     * 突然站直了"，而播放时那两条腿是坐着的 —— 摆的和演的不一样，正是这个仓库里最难查的错。
+     */
+    private fun applyStudioSample(anim: AnimationSpec, sample: TrackSample) {
+        animView.applyPose(
+            if (anim.additive) Anim.overlayPose(sample.angles, anim.base, anim.base)
+            else sample.angles
+        )
         animView.setTrackOffsets(sample.offsetX, sample.offsetY, sample.scale)
     }
 
@@ -6423,7 +6523,7 @@ class MainActivity : AppCompatActivity() {
         animLiveStates.clear()
         animLiveStates.addAll(Anim.statesOf(anim.frames.getOrNull(animFrameIndex)?.state ?: ""))
         animPending = null
-        applyStudioSample(sample)
+        applyStudioSample(anim, sample)
         applyStudioStates()
         buildStateChips(folder)
         animTimeline.setData(anim, animTimeline.bones, animChannel)
@@ -6985,6 +7085,72 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 「基准」（1.31.0）：摆这段动画的时候，脚下踩的是哪个姿势。
+     *
+     * 存下去的是**那一刻姿势的快照**，不是动作的名字 —— 名字是引用，用户以后改了那个动作，
+     * 这段已经摆好的动画会跟着变样，而一段存下来的东西不该因为别处改动而变。名字只在选的那
+     * 一下有用（用户认得的是名字）。
+     *
+     * 存的是快照，所以"现在这份基准是哪来的"不能靠记名字：这里拿角度跟现有的动作**比一遍**
+     * （[currentBaseIndex]）。比出来的名字永远是真的，记下来的名字会在重命名之后骗人。
+     */
+    private fun askStudioBase() {
+        val (folder, anim) = studioEdit() ?: return
+        val poses = store.loadPoses(folder)
+        // 选项的 id 用序号（"0" 是静息），不用名字：动作可以叫任何名字，包括"静息"。
+        val options = ArrayList<Pair<String, String>>()
+        options.add("0" to getString(R.string.anim_base_rest))
+        for ((i, p) in poses.withIndex()) options.add((i + 1).toString() to p.name)
+        pickList(
+            getString(R.string.anim_base),
+            options,
+            getString(R.string.anim_base_hint),
+            currentBaseIndex(anim, poses),
+        ) { picked ->
+            val index = picked.toIntOrNull() ?: 0
+            val angles = poses.getOrNull(index - 1)?.angles ?: emptyMap()
+            setStudioBase(folder, angles)
+            true
+        }
+    }
+
+    /**
+     * 当前这份基准对应列表里的哪一项（给选中的那一行加高亮）。
+     *
+     * 逐点比角度，**不是**比一个存下来的名字：名字会在用户重命名动作之后变成假话，而假话在
+     * 界面上看起来和真话一模一样。
+     */
+    private fun currentBaseIndex(anim: AnimationSpec, poses: List<CharacterStore.Pose>): String {
+        // 静息先单独判：空表和"一个没有角度的动作"是相等的，不判的话一行空动作会冒领这个高亮。
+        if (anim.base.isEmpty()) return "0"
+        for ((i, p) in poses.withIndex()) {
+            if (p.angles == anim.base) return (i + 1).toString()
+        }
+        return "0"
+    }
+
+    /**
+     * 把基准换成 [angles]（空表 = 静息），并把右边摆成它。
+     *
+     * 立刻摆上去是必须的：用户接下来的动作是"在这个姿势上摆一帧"，看不见基准就没法在它上面摆
+     * （一页没有基准的叠加动画，作者只会在静息上瞎摆）。帧一帧都没有时更要摆 —— 那一刻右边
+     * 显示的就是"这段动画现在什么都不演"，用户会以为坏了。
+     */
+    private fun setStudioBase(folder: CharacterFolder, angles: Map<String, Float>) {
+        val anim = studioAnimation(folder) ?: return
+        if (!writeStudioAnimation(folder, anim.copy(base = angles))) return
+        val next = studioAnimation(folder) ?: return
+        if (next.frames.isEmpty()) {
+            animView.applyPose(angles)
+            animStatus.text = getString(R.string.anim_base_set_empty)
+        } else {
+            showStudioMoment(folder, next, animPlayhead)
+            animStatus.text = getString(R.string.anim_base_set)
+        }
+        paintStudioChips()
+    }
+
+    /**
      * 「参考图」：这一页的预览里画不画这套骨骼的参考图。
      *
      * 没有参考图时说清楚**去哪儿弄**（骨骼页 → 参考图），而不是给一个按了没反应的按钮。
@@ -7028,6 +7194,29 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.animRows).text = getString(
             if (animRowsAll) R.string.anim_rows_all else R.string.anim_rows_one,
         ) + if (!animRowsAll) " ✓" else ""
+        // 基准（1.31.0）：名字是**比出来的**（见 currentBaseIndex），不是记下来的。
+        // 叠加上时多加两个字：那时基准不只是"编辑时站着的样子"，它还是增量要减掉的那一份，
+        // 用户得看得出来这一页现在编的是"加在别人身上的"一段。
+        val baseFolder = studioFolder()
+        val baseAnim = baseFolder?.let { studioAnimation(it) }
+        findViewById<TextView>(R.id.animBase).text =
+            getString(R.string.anim_base_chip, studioBaseLabel(baseFolder, baseAnim)) +
+                if (baseAnim?.additive == true) getString(R.string.anim_base_chip_add) else ""
+    }
+
+    /**
+     * 「基准」那一格上写的名字：静息 / 某个动作 / 自定义。
+     *
+     * 三种是**穷尽**的：空表就是静息；和某个动作逐点一样就是它；都不是就只能是"别的姿势"——
+     * 比如那个动作后来被删了、或者被改过，快照还在。写"自定义"而不是硬猜一个名字，是因为
+     * 猜错的名字会让用户以为这段动画跟着某个动作走（它不跟）。
+     */
+    private fun studioBaseLabel(folder: CharacterFolder?, anim: AnimationSpec?): String {
+        if (anim == null) return getString(R.string.anim_base_rest)
+        if (anim.base.isEmpty()) return getString(R.string.anim_base_rest)
+        val poses = folder?.let { store.loadPoses(it) } ?: emptyList()
+        for (p in poses) if (p.angles == anim.base) return p.name
+        return getString(R.string.anim_base_custom)
     }
 
     /** 底下那条里跟着状态变的字：骨骼开关、改骨骼/摆姿势、存骨骼。 */

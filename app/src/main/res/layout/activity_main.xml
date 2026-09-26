@@ -538,6 +538,14 @@
                             style="@style/AlignButton"
                             android:text="@string/anim_reference" />
 
+                        <!-- 基准（1.31.0）：摆这段动画的时候脚下踩的是哪个姿势。叠加要减掉的
+                             就是这一份，所以它既决定"编辑时右边站着什么样"，也决定播放时
+                             增量的零点。 -->
+                        <TextView
+                            android:id="@+id/animBase"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_base" />
+
                         <TextView
                             android:id="@+id/animEditBones"
                             style="@style/AlignButton"

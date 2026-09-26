@@ -310,19 +310,32 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** The animations of the current rig, by id. Handed over with the load, like the poses. */
     private var animations: List<AnimationSpec> = emptyList()
 
-    /** The one being played, or null. See [playAnimation]. */
-    private var playing: AnimationSpec? = null
+    /** 正在播的那几段（1.31.0）：第 0 段是**底座**，后面几段叠在它上面。空的 = 没在播。 */
+    private val animSlots = ArrayList<AnimSlot>()
 
     /**
-     * How long the animation has been playing, in REAL seconds.
+     * 一段正在播的动画。
      *
-     * Real, not animation-time: the speed factor is applied inside [Anim.sample], so "2×" has
-     * exactly one place it can be wrong (and that place is mirrored in tools/anim_check.py).
+     * 为什么从"一个 [playing] 字段"变成一张小表：同时播两段要的就是**各自一个时钟** ——
+     * 两段的长度、速度、循环、回家、（锚点绑的）规则响过没有，全都是各算各的。共用一份
+     * 时钟的话，"两段一起播"就变成了"两段被同一根绳子拴着"，那不是叠加，那是同步。
+     *
+     * 折出来的结果（姿势/图/偏移/缩放）还是那几个老字段（[animState]、[animOffsetX]…），
+     * 所以画图那一半一个字都不用改。
      */
-    private var playClock = 0f
+    private class AnimSlot(val spec: AnimationSpec) {
+        var clock = 0f
+        var pass = -1
+        val fired = mutableSetOf<Int>()
+    }
 
     /**
-     * The switch the animation's CURRENT frame turns on, or "".
+     * The switches the playing animations turn on right now, or "".
+     *
+     * With one animation this is that frame's states; several playing at once (1.31.0) give the
+     * **union** of theirs, joined with `+` (an additive slot adds its tags, a replacing one
+     * takes them over -- see [Timeline.overlay]). Two clips wanting the same layer's art is
+     * settled the way art always is here: by layer priority, in the renderer.
      *
      * It goes into the renderer's state map and nowhere else -- it is not a state the user
      * declared and it does not show up on the switch chips. That is the whole of "绘制动画":
@@ -331,25 +344,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private var animState = ""
 
-    /** Which frame is showing, for the panel that says 第 3/8 帧. */
-    private var animFrame = 0
-    private var animFrames = 0
-
     /**
      * 动画给每根骨头的**画面**偏移与缩放（1.23.0）：关键帧通道里那一半不改物理的部分。
      *
      * 和 [animState] 一样，它们只进渲染器，不进引擎 —— 所以规则问不到它们，宠物的碰撞、
      * 绳子、被抓起来的手感也一点都不变。
      */
-    /**
-     * 姿态锚点绑的规则（1.24.0）：这是第几遍、这一遍里哪些锚点已经响过。
-     *
-     * 一遍响一次（不是"每帧都响"），所以循环的动画每绕一圈，同一格的规则会再响一次 ——
-     * "每走一圈就咳一下"这种动画因此不需要任何额外机制。
-     */
-    private var animPass = -1
-    private val animFired = mutableSetOf<Int>()
-
     private var animOffsetX: Map<String, Float> = emptyMap()
     private var animOffsetY: Map<String, Float> = emptyMap()
     private var animScale: Map<String, Float> = emptyMap()
@@ -1255,17 +1255,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *
      * [animState] 那一半是图：当前帧的开关亮着，其余帧的开关**不在**渲染器的开关表里
      * （那张表每帧重建，见 mergedStates），所以逐帧绘制不需要"记得把上一帧关掉"。
+     *
+     * [overlay] = true 是**叠加**（1.31.0）：不替换正在播的那一段，而是加在它上面（见
+     * [AnimSlot] 和 [Timeline.overlay]）。底座那段没有正在播时，叠加的那段就成了底座
+     * （不然"先按叠加"会变成什么都不播）。
      */
-    fun playAnimation(id: String): Boolean {
+    fun playAnimation(id: String, overlay: Boolean = false): Boolean {
         val anim = animations.firstOrNull { it.id == id } ?: return false
         if (anim.frames.isEmpty()) return false
-        playing = anim
-        playClock = 0f
-        animFrame = 0
-        animFrames = anim.frames.size
-        animState = anim.frames.first().state
-        animPass = -1
-        animFired.clear()
+        if (overlay && animSlots.isNotEmpty()) {
+            // 同一段不许叠两次：两个同样的时钟加在一起就是"动作做两遍"，而用户按的是
+            // "把这一段也加上"。已经在播的那一份先撤掉，再按新的加一遍（等于让它重新开始）。
+            animSlots.removeAll { it.spec.id == id }
+            animSlots.add(AnimSlot(anim))
+        } else {
+            animSlots.clear()
+            animSlots.add(AnimSlot(anim))
+            // 整场换成这一段：图立刻换成它的头一帧。叠加那一路**不能**在这里写图 ——
+            // 那只是其中一段的开关，折出来的结果要等下一帧（stepAnimation）才算得出。
+            animState = anim.frames.first().state
+        }
         invalidate()
         return true
     }
@@ -1278,24 +1287,39 @@ class PhysicsSandboxView @JvmOverloads constructor(
      * 就变回默认图，是"播完了"看起来像"坏了"。
      */
     fun stopAnimation() {
-        playing = null
-        playClock = 0f
+        animSlots.clear()
         animState = ""
-        animFrame = 0
-        animFrames = 0
         animOffsetX = emptyMap()
         animOffsetY = emptyMap()
         animScale = emptyMap()
-        animPass = -1
-        animFired.clear()
         invalidate()
     }
 
-    /** 正在播什么，给界面那一行用：("挥手", 第几帧, 共几帧) 或 null。 */
-    fun animationInfo(): Triple<String, Int, Int>? {
-        val anim = playing ?: return null
-        return Triple(anim.name, animFrame, animFrames)
+    /**
+     * 只停**叠加上去的那几段**（1.31.0），底座那段接着演。
+     *
+     * 和 [stopAnimation] 分开是因为这两件事在用户那儿是两件事：「停止」是"别演了"，
+     * 而叠了三段之后想撤掉最后那一段，不该把整场也一起关掉。
+     */
+    fun stopOverlay() {
+        if (animSlots.size <= 1) return
+        while (animSlots.size > 1) animSlots.removeAt(animSlots.size - 1)
+        invalidate()
     }
+
+    /**
+     * 正在播的每一段的 id（底座在最前，空表 = 没在播）。
+     *
+     * 给列表用的身份是 **id** 而不是名字：两只动画可以叫同一个名字（"挥手"复制一份改一改），
+     * 按名字认会在那种时候把行标错 —— 标错的行点下去演的是另一段。
+     */
+    fun playingIds(): List<String> = animSlots.map { it.spec.id }
+
+    /**
+     * 底座那段之外还叠了几段。**只有这一处数这件事**：状态行、"停止叠加"按钮的可用状态
+     * 都问它，免得一个地方数 `size`、另一个地方数 `size - 1`。
+     */
+    fun overlayCount(): Int = maxOf(0, animSlots.size - 1)
 
     /** null clears back to limp. */
     fun applyPose(angles: Map<String, Float>?, home: Boolean = true) {
@@ -1909,48 +1933,79 @@ class PhysicsSandboxView @JvmOverloads constructor(
      *
      * 放在 renderer.states 之前、rag.step 之前，两个理由各一个：状态表交出去之前得已经
      * 是这一帧的那一份，而姿势是**目标**——求解器在这一帧里朝它走，所以要先给。
+     *
+     * 1.31.0 起这里是**几张表折成一张**：每一段各推自己的时钟、各采各的样，然后按播放顺序
+     * 叠起来（[Timeline.overlay]）。底座是**用户正按着的那个姿势**（[Ragdoll.poseBase]，
+     * 也就是他最后摆的动作/静息），不是"上一段动画的最后一帧" —— 一段叠加动画要加在
+     * "这只宠物现在是什么样"上。
      */
     private fun stepAnimation(dt: Float, rag: Ragdoll) {
-        val anim = playing ?: return
-        playClock += dt
-        // Timeline.sample 在没有通道时**就是** Anim.sample（同一个结果），有通道时多带回
-        // 偏移与缩放。所以播放器只有一条路，而不是"两套动画各有各的播放"。
-        val s = Timeline.sample(anim, playClock) ?: run {
-            stopAnimation()
-            return
-        }
-        animState = s.state
-        animFrame = s.frame
-        animFrames = s.frames
-        if (s.angles.isNotEmpty()) rag.applyPose(s.angles)
-        animOffsetX = s.offsetX
-        animOffsetY = s.offsetY
-        animScale = s.scale
+        if (animSlots.isEmpty()) return
+        // 这一帧折的是**这几段**：规则里可能有"播放另一段动画"，那会把表换掉，换掉之后
+        // 这一帧的结果就作废了（下面那句判断要认得出这件事）。
+        val slots = animSlots.toList()
+        // 折的起点：脚下那一份。用户按着的动作就是它；没按动作、也没人在演的时候，
+        // 第一段叠加动画拿**它自己的基准**当脚下（见 Anim.floorFor —— 不这样的话，
+        // 一段在坐姿上摆的挥手单独播出来会变成"手臂抬 10 度"）。
+        val floor = Anim.floorFor(slots.first().spec, rag.poseBase)
+        var merged = TrackSample(
+            floor, emptyMap(), emptyMap(), emptyMap(), "", 0, 0,
+        )
+        var anyFinished = false
+        val fired = ArrayList<Int>()
+        for (slot in slots) {
+            val anim = slot.spec
+            slot.clock += dt
+            // Timeline.sample 在没有通道时**就是** Anim.sample（同一个结果），有通道时多带回
+            // 偏移与缩放。所以播放器只有一条路，而不是"两套动画各有各的播放"。
+            val s = Timeline.sample(anim, slot.clock) ?: continue
+            // 叠加那一段的增量是"帧值 − 它自己的基准"，替换那一段就是整份接管。
+            merged = Timeline.overlay(merged, s, anim.additive, anim.base)
 
-        // 姿态锚点绑的规则：播放头**走到**那一格时响一次。一遍只响一次（pass 变了才清），
-        // 所以循环的动画每绕一圈会再响一次，而"停在这一格"不会每帧都响。
-        val pass = Timeline.passIndex(anim, playClock)
-        if (pass != animPass) {
-            animPass = pass
-            animFired.clear()
+            // 姿态锚点绑的规则：播放头**走到**那一格时响一次。一遍只响一次（pass 变了才清），
+            // 所以循环的动画每绕一圈会再响一次，而"停在这一格"不会每帧都响。
+            // 每段各算各的：两段各自的"第几遍"没有关系，共用一份会让其中一段漏响。
+            val pass = Timeline.passIndex(anim, slot.clock)
+            if (pass != slot.pass) {
+                slot.pass = pass
+                slot.fired.clear()
+            }
+            // -1 = 没绑（见 AnimFrame.rule）。这一格是"第几条规则"，不是 id。
+            val bound = anim.frames.getOrNull(s.frame)?.rule ?: -1
+            if (bound >= 0 && slot.fired.add(s.frame)) fired.add(bound)
+
+            // 不循环的走完了：整场停（见下面那段注释）。走完了没有要算上"回家"那一段
+            // （1.30.0）—— 不这样的话，开着"顺滑回第一帧"的动画会在半路上被当成"演完了"。
+            if (!anim.loop && slot.clock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)) {
+                anyFinished = true
+            }
         }
-        // -1 = 没绑（见 AnimFrame.rule）。这一格是"第几条规则"，不是 id。
-        val bound = anim.frames.getOrNull(s.frame)?.rule ?: -1
-        if (bound >= 0 && animFired.add(s.frame)) {
+        // 折完了一次性写下去：四个通道每帧只有一个写的人，谁也别在循环里改它们
+        // （"每个通道一个家"这条在播放器里也一样）。
+        animState = merged.state
+        animOffsetX = merged.offsetX
+        animOffsetY = merged.offsetY
+        animScale = merged.scale
+        if (merged.angles.isNotEmpty()) rag.showPose(merged.angles)
+
+        for (bound in fired) {
             val actions = engine?.runRule(bound) ?: emptyList()
             if (actions.isNotEmpty()) {
                 perform(actions, null)
                 // 和别的执行动作的路一样：动作抬起来的信号得当场发出去，否则一条
-                // 「响完再喊一声」的规则要等到下次有人碰它才响。
+                // 「响完再喊一声」的规则要等到下次有人碰它才亮。
                 drainSignals()
             }
         }
-        // 不循环的走完了就停下 —— 停在最后一帧上：姿势留到最后那一帧，图也留着。
-        // 走完了没有：算上"回家"那一段（1.30.0）—— 不这样的话，开着"顺滑回第一帧"的动画
-        // 会在回家的半路上被当成"演完了"掐掉。
-        if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)) {
-            playing = null
-        }
+        // 规则把正在播的东西换掉了：这一帧的结果作废，谁换的谁负责摆。
+        if (animSlots != slots) return
+        if (!anyFinished) return
+        // **一段"播一遍"的走到头 = 整场停**，姿势和图都冻在那一刻（和 1.30.0 之前一样：
+        // 停在最后一帧上，不自己变回站姿）。规矩定得这么粗是有意的：叠加的两段长度不同时，
+        // "短的先停、长的接着演"要回答"那姿势现在归谁" —— 而那个答案在界面上讲不清。
+        // 姿势冻进 [Ragdoll.applyPose]（顺带成为新的底座），所以叠加的段撤掉时不会跳。
+        animSlots.clear()
+        if (merged.angles.isNotEmpty()) rag.applyPose(merged.angles)
     }
 
     private fun simulate(dt: Float) {

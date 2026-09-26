@@ -1084,15 +1084,8 @@ class CharacterStore(private val context: Context) {
                 val frameArr = o.optJSONArray("frames") ?: JSONArray()
                 val frames = (0 until frameArr.length()).mapNotNull { j ->
                     val f = frameArr.optJSONObject(j) ?: return@mapNotNull null
-                    val angleObj = f.optJSONObject("angles")
-                    val angles = LinkedHashMap<String, Float>()
-                    if (angleObj != null) {
-                        for (key in angleObj.keys()) {
-                            angles[key] = angleObj.optDouble(key, 0.0).toFloat()
-                        }
-                    }
                     AnimFrame(
-                        angles = angles,
+                        angles = readAngles(f.optJSONObject("angles")),
                         state = f.optString("state", ""),
                         seconds = f.optDouble("seconds", 0.4).toFloat(),
                         rule = f.optInt("rule", -1),
@@ -1109,12 +1102,37 @@ class CharacterStore(private val context: Context) {
                     loop = o.optBoolean("loop", true),
                     // 缺键 = 关（= 老行为：走完停在最后一帧）。
                     returnHome = o.optBoolean("returnHome", false),
+                    // 缺键 = 关（= 老行为：这一段整份接管，不是加在别人身上）。
+                    additive = o.optBoolean("additive", false),
+                    // 缺键 = 空 = 静息（老动画就是在站姿上摆的）。
+                    base = readAngles(o.optJSONObject("base")),
                     tracks = readTracks(o.optJSONObject("tracks")),
                 )
             }
         } catch (e: Exception) {
             emptyList()
         }
+    }
+
+    /**
+     * 一张角度表（骨头名 → 弧度），从 JSON 读回来；没有就是空表。
+     *
+     * 抽出来是因为**有三个地方**是同一张表：每一帧的姿势、动画的基准（1.31.0），将来还会有
+     * 别的。三份各写一遍的话，其中一份漏掉一个 `toFloat()` 就是"存下去 0.5、读回来 0"这种
+     * 只在切换动画时才现形的错。
+     */
+    private fun readAngles(obj: JSONObject?): Map<String, Float> {
+        if (obj == null) return emptyMap()
+        val out = LinkedHashMap<String, Float>()
+        for (key in obj.keys()) out[key] = obj.optDouble(key, 0.0).toFloat()
+        return out
+    }
+
+    /** 反过来：一张角度表写成一个 JSON 对象（和 [readAngles] 成对）。 */
+    private fun writeAngles(angles: Map<String, Float>): JSONObject {
+        val out = JSONObject()
+        for ((bone, value) in angles) out.put(bone, value.toDouble())
+        return out
     }
 
     /**
@@ -1251,11 +1269,9 @@ class CharacterStore(private val context: Context) {
         for (a in all) {
             val frames = JSONArray()
             for (f in a.frames) {
-                val angles = JSONObject()
-                for ((bone, value) in f.angles) angles.put(bone, value.toDouble())
                 frames.put(
                     JSONObject()
-                        .put("angles", angles)
+                        .put("angles", writeAngles(f.angles))
                         .put("state", f.state)
                         .put("seconds", f.seconds.toDouble())
                         // 姿态锚点绑的规则（1.24.0）。空的时候也写：读的那一半要看到同一个键。
@@ -1267,6 +1283,10 @@ class CharacterStore(private val context: Context) {
                     .put("id", a.id).put("name", a.name)
                     .put("speed", a.speed.toDouble()).put("loop", a.loop)
                     .put("returnHome", a.returnHome)
+                    // 叠加与基准（1.31.0）：空的基准也写（读的那一半要看到同一个键，
+                    // store_check 比的正是"写出去的和读回来的是同一批"）。
+                    .put("additive", a.additive)
+                    .put("base", writeAngles(a.base))
                     .put("frames", frames)
                     .put("tracks", writeTracks(a.tracks))
             )

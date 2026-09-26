@@ -702,6 +702,20 @@ class Ragdoll(
     }
 
     /**
+     * The pose being **held** right now (an 动作, or empty for rest), 1.31.0.
+     *
+     * This is the floor an additive animation is added on top of. It has to live here rather
+     * than in the caller because the targets are recomputed from it every single frame: if
+     * the animation added onto whatever `target` currently holds, the offset would be added
+     * again every frame and the figure would slowly walk into its own joint limits.
+     *
+     * Kept up to date by [applyPose] and [clearPose] only -- those are the two places a
+     * human's choice of pose comes in. [showPose] deliberately does *not* touch it.
+     */
+    var poseBase: Map<String, Float> = emptyMap()
+        private set
+
+    /**
      * Hold a saved pose.
      *
      * Setting the spring targets is all it takes: the joints are already pulled towards
@@ -710,8 +724,21 @@ class Ragdoll(
      * the pose it is supposed to be holding.
      */
     fun applyPose(angles: Map<String, Float>, hold: Float = 0.85f) {
+        poseBase = angles
         for (b in bones) target[b.name] = angles[b.name] ?: 0f
         stiffness = hold
+    }
+
+    /**
+     * Show a pose **without holding it** (1.31.0): the animation's write, once per frame.
+     *
+     * The difference from [applyPose] is one thing only -- [poseBase] is left alone. An
+     * additive animation is "the held pose plus an offset", so if its frame overwrote the
+     * base, the next frame would be added onto the previous frame's result instead of onto
+     * the pose the user is actually holding.
+     */
+    fun showPose(angles: Map<String, Float>) {
+        for (b in bones) target[b.name] = angles[b.name] ?: 0f
     }
 
     /**
@@ -735,6 +762,7 @@ class Ragdoll(
 
     /** Drop the pose: the joints go back to hanging limp. */
     fun clearPose() {
+        poseBase = emptyMap()
         for (b in bones) target[b.name] = 0f
     }
 

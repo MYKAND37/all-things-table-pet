@@ -176,6 +176,49 @@ object Timeline {
         return TrackSample(angles, ox, oy, sc, base.state, base.frame, base.frames)
     }
 
+    /**
+     * 把 [add] 这一段叠在 [cur] 上（1.31.0）。
+     *
+     * 这是"叠加"唯一的定义处：四个通道各一句话，而且**同一条规矩**（[AnimationSpec.additive]
+     * 说的那一条）同时管四个 —— 「整份替换」或者「加在下面的那份上」。
+     *
+     *  * 姿势：替换是 [add] 自己的；叠加走 [Anim.overlayPose]（增量 = 帧值 − [base]）；
+     *  * 图开关：替换是 [add] 的串；叠加是两份并起来（同名开关在渲染器里照旧按图层权重
+     *    定胜负 —— 那是画图那一层早就在用的规矩，这里不另造一套）；
+     *  * 偏移 X/Y：叠加是相加（两段各推 8px 就是 16px），替换是 [add] 的；
+     *  * 缩放：叠加是**相乘**（1.1 × 1.1），替换是 [add] 的 —— 缩放是倍率，相加会变成
+     *    "1 + 1 = 2 倍"这种没人想要的结果。
+     *
+     * 没有"哪一段赢"的第三套规矩：谁在上面谁后叠（调用方按播放顺序折），一层的贡献只由它
+     * 自己的开关决定。
+     */
+    fun overlay(
+        cur: TrackSample,
+        add: TrackSample,
+        additive: Boolean,
+        base: Map<String, Float>,
+    ): TrackSample {
+        if (!additive) {
+            return TrackSample(
+                add.angles, add.offsetX, add.offsetY, add.scale,
+                add.state, add.frame, add.frames,
+            )
+        }
+        val angles = Anim.overlayPose(add.angles, base, cur.angles)
+        fun sum(a: Map<String, Float>, b: Map<String, Float>): Map<String, Float> {
+            val out = LinkedHashMap(a)
+            for ((bone, v) in b) out[bone] = (out[bone] ?: 0f) + v
+            return out
+        }
+        val scale = LinkedHashMap(cur.scale)
+        for ((bone, v) in add.scale) scale[bone] = (scale[bone] ?: 1f) * v
+        return TrackSample(
+            angles, sum(cur.offsetX, add.offsetX), sum(cur.offsetY, add.offsetY), scale,
+            Anim.joinStates(Anim.statesOf(cur.state) + Anim.statesOf(add.state)),
+            add.frame, add.frames,
+        )
+    }
+
     /** 一条通道在某一刻的值，含"循环时接回开头"和"回家"两种情况。 */
     private fun channelValue(
         keys: List<AnimKey>,

@@ -816,8 +816,10 @@ def main():
     report("触发只免掉「当」：如果 / 冷却 / 只一次 一个字都不放宽",
            "fun hasRule(index: Int): Boolean" in logic_kt
            and "这份文件里已经没有它了" in logic_kt)
+    # 1.31.0 起"第几遍/响过没有"是**每一段自己**的（同时播两段时共用一份会让其中一段漏响）。
     report("播到那一格才响，而且**一遍只响一次**（循环每绕一圈再响）",
-           "Timeline.passIndex(anim, playClock)" in bench and "animFired.add(s.frame)" in bench
+           "Timeline.passIndex(anim, slot.clock)" in bench and "slot.fired.add(s.frame)" in bench
+           and "slot.fired.clear()" in bench
            and "fun passIndex(spec: AnimationSpec, seconds: Float): Int" in tl_kt)
     report("响完抬起来的信号当场发出去（不然要等下一次有人碰它）",
            "engine?.runRule(bound)" in bench and "drainSignals()" in bench)
@@ -966,7 +968,7 @@ def main():
     report("回家那一段的长度和总时长都在引擎里算（播放器只问走完了没有）",
            "fun totalSeconds(a: AnimationSpec): Float" in anim_kt
            and "fun returnSeconds(a: AnimationSpec): Float" in anim_kt
-           and "playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in bench
+           and "slot.clock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in bench
            and "animClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in activity)
     report("通道也跟着回家（不然姿势回去了、某根骨头留在原地）",
            "val homing = !spec.loop && Anim.returnSeconds(spec) > 0f && raw > total" in tl_kt
@@ -1270,14 +1272,22 @@ def main():
     report("两个宿主都只从 Timeline.sample 取这一刻（没有第二条播放路径）",
            "Anim.sample(" not in activity and "Anim.sample(" not in bench
            and activity.count("Timeline.sample(") >= 2 and "Timeline.sample(" in bench)
+    # 姿势还是"当目标交给求解器"，但 1.31.0 起多了两步：几段先折成一份（Timeline.overlay），
+    # 再交给 showPose（写目标、**不动底座** —— 见下面 1.31.0 那一节）。
     report("每帧按时间采样，姿势交给求解器当目标（没有通道时 Timeline.sample 就是 Anim.sample）",
-           "Timeline.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim
+           "Timeline.sample(anim, slot.clock)" in step_anim
+           and "Timeline.overlay(merged, s, anim.additive, anim.base)" in step_anim
+           and "rag.showPose(merged.angles)" in step_anim
            and "if (spec.tracks.isEmpty())" in tl_kt)
     report("不循环的走完就停（算上回家那一段；关着回家就是停在最后一帧，图不弹回默认）",
-           "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in step_anim)
+           "!anim.loop && slot.clock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in step_anim
+           # "停在最后一帧上"另一半：整场停，但姿势**冻进底座**（清掉槽之前先 applyPose），
+           # 不然叠加的那几段一撤，姿势会跳回用户按着的那个动作。
+           and "animSlots.clear()" in step_anim
+           and "if (merged.angles.isNotEmpty()) rag.applyPose(merged.angles)" in step_anim)
     report("当前帧的开关只进画图那张表（可以有好几个，拆开写进去）",
            "for (tag in Anim.statesOf(animState)) out[tag] = true" in bench
-           and "private fun mergedStates()" in bench and "animState = s.state" in step_anim)
+           and "private fun mergedStates()" in bench and "animState = merged.state" in step_anim)
     report("用户按的停止会把图还回默认（和「走完」不一样）",
            "fun stopAnimation()" in bench and 'animState = ""' in bench)
     report("播不了就说出来（名字不认识 / 一帧都没有）",
@@ -1375,6 +1385,68 @@ def main():
                 info("%-22s %s:%d" % (name, os.path.basename(path), i + 1))
     if orphans == 0:
         report("every function is called from somewhere", True)
+
+    print("== 叠加：一段加在另一段上（1.31.0）==")
+    # 这一句问的是"叠加能不能用上"，不是"加法对不对"（加法在 tools/anim_check.py 里逐点量过）。
+    # 一个开关在引擎里存在、在界面上没有入口，是这个仓库里发生过不止一次的那种"做完了但用不上"。
+    rag = next((t for p2, t in files.items() if p2.endswith("physics/Ragdoll.kt")), "")
+    show_body = rag.split("fun showPose(")[1].split("fun ")[0] if "fun showPose(" in rag else ""
+    apply_body = rag.split("fun applyPose(")[1].split("fun ")[0] if "fun applyPose(" in rag else ""
+    report("「叠加」是动画自己的一个开关，存得住（引擎 + 文件 + 界面都要有）",
+           "val additive: Boolean = false" in anim_kt
+           and 'additive = o.optBoolean("additive", false)' in store_text
+           and '.put("additive", a.additive)' in store_text
+           and "R.string.anim_additive" in activity and "addChip" in activity)
+    # 基准必须是**快照**：存名字的话，用户改了那个动作，一段已经摆好的动画会跟着变样。
+    report("基准是快照（角度表），不是动作的名字",
+           "val base: Map<String, Float> = emptyMap()" in anim_kt
+           and 'base = readAngles(o.optJSONObject("base"))' in store_text
+           and '.put("base", writeAngles(a.base))' in store_text
+           and "anim.copy(base = angles)" in activity)
+    # 这一条是这一版最要紧的不变量：动画每帧只写**目标**，不动底座。动了的话，第二帧就是在
+    # 第一帧的结果上再加一次，姿势会一帧一帧往关节极限里爬（而且看起来像"求解器坏了"）。
+    report("叠加的每一帧只写目标，不动底座（否则增量会一帧叠一帧）",
+           "poseBase = angles" in apply_body and "poseBase = emptyMap()" in rag
+           and "poseBase" not in show_body
+           and "rag.showPose(merged.angles)" in bench
+           and "rag.applyPose(merged.angles)" in bench)
+    report("折的起点是**用户正按着的那个姿势**（不是上一段动画的最后一帧）",
+           "Anim.floorFor(slots.first().spec, rag.poseBase)" in bench
+           and "Timeline.overlay(merged, s, anim.additive, anim.base)" in bench
+           and "fun floorFor(a: AnimationSpec, under: Map<String, Float>): Map<String, Float>" in anim_kt)
+    report("一条规矩管四个通道（替换 = 整份接管；叠加 = 相加/相乘/并起来）",
+           "fun overlay(" in tl_kt and "Anim.overlayPose(add.angles, base, cur.angles)" in tl_kt
+           and "scale[bone] = (scale[bone] ?: 1f) * v" in tl_kt
+           and "Anim.joinStates(Anim.statesOf(cur.state) + Anim.statesOf(add.state))" in tl_kt
+           and "if (!additive) {" in tl_kt)
+    # 同时播两段要的是"各自一个时钟"：一段一个槽（时钟 / 第几遍 / 响过哪几格）。
+    report("两段各走各的时钟（一段一个槽，不是一个全局 playClock）",
+           "private val animSlots = ArrayList<AnimSlot>()" in bench
+           and "private class AnimSlot(val spec: AnimationSpec)" in bench
+           and "slot.clock += dt" in bench
+           and "fun playAnimation(id: String, overlay: Boolean = false)" in bench
+           and "fun stopOverlay()" in bench)
+    report("编辑器里叠加的段也拿基准补上没写到的骨头（摆的和演的一个样）",
+           "Anim.overlayPose(sample.angles, anim.base, anim.base)" in activity
+           and "private fun applyStudioSample(anim: AnimationSpec, sample: TrackSample)" in activity)
+    report("「基准」有入口，而且名字是**比出来的**（不是记下来的）",
+           "@+id/animBase" in layout_text and "private fun askStudioBase(" in activity
+           and "private fun studioBaseLabel(" in activity
+           and "private fun currentBaseIndex(" in activity
+           and "R.string.anim_base_chip" in activity)
+    report("测试场能同时起两段（「＋ 叠」/「撤掉叠加」/「停掉叠加」都在）",
+           "sandboxView.playAnimation(anim.id, overlay = true)" in activity
+           and "sandboxView.stopOverlay()" in activity
+           and "R.string.anim_overlay_play" in activity
+           and "fun playingIds(): List<String>" in bench)
+    report("叠了几段只有一处数（状态行和按钮不会各数各的）",
+           "fun overlayCount(): Int = maxOf(0, animSlots.size - 1)" in bench
+           and activity.count("sandboxView.overlayCount()") >= 1)
+    # 顺手修的那个会丢数据的 bug：名字/速度弹窗原来是**造一段新的**，通道（1.23.0）会被它打回
+    # 默认值 —— 也就是"烤完时间轴，进来调一下速度，关键帧就没了"。判据是"从原来那段 copy"。
+    report("名字/速度弹窗改的是原来那一段（造新的会把通道抹掉）",
+           "val base = existing ?: AnimationSpec(id, name)" in activity
+           and "base.copy(" in activity)
 
     print()
     if FAILURES:
