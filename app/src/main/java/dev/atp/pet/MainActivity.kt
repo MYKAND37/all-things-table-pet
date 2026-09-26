@@ -1404,8 +1404,6 @@ class MainActivity : AppCompatActivity() {
             loopChip.setTextColor(if (loop) INK else MUTED)
             loopChip.text = getString(if (loop) R.string.anim_loops else R.string.anim_once)
         }
-        loopChip.setOnClickListener { loop = !loop; paintLoop(); paintHome() }
-
         // 走完顺滑回第一帧（1.30.0）：只对"播一遍"的动画有意义 —— 循环的动画本来就会回去。
         val homeChip = label(getString(R.string.anim_return_home), 12f, INK)
         homeChip.setPadding(dp(10), dp(8), dp(10), dp(8))
@@ -1418,6 +1416,8 @@ class MainActivity : AppCompatActivity() {
                 if (returnHome) R.string.anim_return_home_on else R.string.anim_return_home,
             )
         }
+        // 两个开关互相影响（循环开着时"回家"没有意义，所以画成灰的），所以点了哪一个都重画两个。
+        loopChip.setOnClickListener { loop = !loop; paintLoop(); paintHome() }
         homeChip.setOnClickListener { returnHome = !returnHome; paintHome(); paintLoop() }
 
         val box = LinearLayout(this).apply {

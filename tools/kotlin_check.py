@@ -816,6 +816,39 @@ def check_canvas_saved_before_transform():
            not bad, "\n         ".join(bad))
 
 
+def check_local_declared_before_use():
+    """
+    局部函数要在**用之前**声明 —— 而只有编译器看得见这件事。
+
+    1.30.0 的 CI 红：`loopChip.setOnClickListener { …; paintHome() }` 写在 `fun paintHome()`
+    的上面（我加第二个开关时把两个回调放在一起，而它们的 `paint` 函数一上一下）。Kotlin 里
+    局部函数没有提升，于是 `Unresolved reference: paintHome`。
+
+    判据：一个名字在**整个文件里只作为局部函数**出现过（也就是说它不是成员函数），而它在
+    声明位置之前就被调用了 —— 那一定是这一条。名字同时是成员函数的（比如同名的重载）不判，
+    因为那种调用合法，判了就是误报。
+    """
+    bad = []
+    for path in kotlin_files():
+        code = strip_code(open(path, encoding="utf-8").read())
+        for name, body in function_bodies(code):
+            # 只在这个函数体里找"局部函数"。缩进 **8 格起**是判据：类的成员是 4 格缩进
+            # （`    fun loadObjectLogic(...)`），而局部函数在成员体之内，至少要 8 格 ——
+            # 第一版写的是"缩进比宿主深"，于是把成员函数也当成了局部函数，误报了一条。
+            declarations = [
+                (m.start(), m.group(1))
+                for m in re.finditer(r"\n {8,}fun (\w+)\s*\(", body)
+            ]
+            for at, local in declarations:
+                # 这个名字在本文件里还有没有别的 `fun 名字(`（宿主/成员/另一个局部）
+                if len(re.findall(r"fun %s\s*\(" % re.escape(local), code)) != 1:
+                    continue
+                earlier = re.search(r"(?<![\w.])%s\s*\(" % re.escape(local), body[:at])
+                if earlier:
+                    bad.append("%s  %s() 在声明之前就被调用了" % (os.path.basename(path), local))
+    report("局部函数都在用之前声明（Kotlin 没有提升）", not bad, "; ".join(sorted(set(bad))[:4]))
+
+
 def check_labels_fall_back():
     """
     认不出的名字要用**它自己**，不能是空串。
@@ -924,6 +957,7 @@ def main():
     check_platform_view_names()
     check_canvas_saved_before_transform()
     check_labels_fall_back()
+    check_local_declared_before_use()
     check_one_home_for_a_file_name()
     check_dialog_bodies_scroll()
     print("")
