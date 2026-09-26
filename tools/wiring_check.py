@@ -958,6 +958,21 @@ def main():
            and "showStudioMoment(folder, step.spec, step.playhead)" in activity)
 
     print("== 关键帧用起来该有的样子（1.25.0，四条都是用户报的）==")
+    report("「走完回第一帧」是一个开关，存在动画自己身上（1.30.0）",
+           "val returnHome: Boolean = false" in anim_kt
+           and 'returnHome = o.optBoolean("returnHome", false)' in store_text
+           and '.put("returnHome", a.returnHome)' in store_text
+           and "R.string.anim_return_home" in activity and "homeChip" in activity)
+    report("回家那一段的长度和总时长都在引擎里算（播放器只问走完了没有）",
+           "fun totalSeconds(a: AnimationSpec): Float" in anim_kt
+           and "fun returnSeconds(a: AnimationSpec): Float" in anim_kt
+           and "playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in bench
+           and "animClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in activity)
+    report("通道也跟着回家（不然姿势回去了、某根骨头留在原地）",
+           "val homing = !spec.loop && Anim.returnSeconds(spec) > 0f && raw > total" in tl_kt
+           and "channelValue(" in tl_kt)
+    report("循环时最后一根关键帧平滑接回第一根（原来是停住再跳）",
+           "loop: Boolean = false," in tl_kt and "if (!loop || total <= last.t) return last.v" in tl_kt)
     report("时间轴默认**只显示现在这一节**，想看全部才摊开（1.29.1）",
            "private var animRowsAll = false" in activity
            and "ordered.filter { it == animBone }.ifEmpty { ordered.take(1) }" in activity
@@ -1035,7 +1050,7 @@ def main():
            and "AnimKey.EASE_LINEAR," in tl_kt)
 
     report("两根骨头之间的插值在引擎里，界面不算数学",
-           "fun valueAt(keys: List<AnimKey>, time: Float)" in tl_kt
+           "fun valueAt(" in tl_kt and "keys: List<AnimKey>," in tl_kt
            and "fun ease(f: Float, kind: Int)" in tl_kt and "fun withKey(" in tl_kt)
     report("选中一帧/某一刻就摆上去，而且姿势取的是时间轴的采样（和播放器同一刻）",
            "val sample = Timeline.sample(anim, frameClock(anim, clamped)) ?: return" in activity
@@ -1258,8 +1273,8 @@ def main():
     report("每帧按时间采样，姿势交给求解器当目标（没有通道时 Timeline.sample 就是 Anim.sample）",
            "Timeline.sample(anim, playClock)" in step_anim and "rag.applyPose(s.angles)" in step_anim
            and "if (spec.tracks.isEmpty())" in tl_kt)
-    report("不循环的走完就停在最后一帧（图不弹回默认）",
-           "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)" in step_anim)
+    report("不循环的走完就停（算上回家那一段；关着回家就是停在最后一帧，图不弹回默认）",
+           "!anim.loop && playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)" in step_anim)
     report("当前帧的开关只进画图那张表（可以有好几个，拆开写进去）",
            "for (tag in Anim.statesOf(animState)) out[tag] = true" in bench
            and "private fun mergedStates()" in bench and "animState = s.state" in step_anim)

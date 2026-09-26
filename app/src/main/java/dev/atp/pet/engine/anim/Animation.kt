@@ -56,6 +56,16 @@ data class AnimationSpec(
     val speed: Float = 1f,
     val loop: Boolean = true,
     /**
+     * 不循环的动画**走完时顺滑回第一帧**（1.30.0），默认关。
+     *
+     * 关着是原来的行为：走到最后那一帧就停在哪儿（一个"趴下"的动画不该自己站起来）。
+     * 开着就多走一段"回家"的路 —— 长度取最后一帧的时长，姿势（和每根骨头的通道）从末尾
+     * **平滑地**回到起点，到了就停。它和"循环"是两件事：循环是无限地转，这个是**只回一次**。
+     *
+     * 循环的动画用不着它（最后一帧本来就是插值回第一帧的）。
+     */
+    val returnHome: Boolean = false,
+    /**
      * 每根骨头自己的关键帧通道（1.23.0）：旋转、X/Y 偏移、缩放。
      *
      * **空的时候一切都和 1.22.0 一样**（帧一帧一帧地插值），所以老文件不用迁移；一旦某根
@@ -153,8 +163,23 @@ object Anim {
         return sum
     }
 
+    /**
+     * 一遍到底有多长，**算上"回家"那一段**（[AnimationSpec.returnHome]）。
+     *
+     * 播放器要的是这个（走完了没有），而"这段动画多长"（作者写的那几帧）仍然是 [duration] ——
+     * 时间轴画的是后者：回家是播放时的一段尾巴，不是要用户去编辑的东西。
+     */
+    fun totalSeconds(a: AnimationSpec): Float =
+        duration(a) + returnSeconds(a)
+
+    /** "回家"那一段多长：最后一帧的时长（和循环时最后一段一样长），不回家就是 0。 */
+    fun returnSeconds(a: AnimationSpec): Float {
+        if (a.loop || !a.returnHome || a.frames.isEmpty()) return 0f
+        return frameSeconds(a.frames.last())
+    }
+
     /** 同样的东西，换成"挂在墙上"的秒数 —— 速度 2 就是一半的时间。界面显示这个。 */
-    fun realDuration(a: AnimationSpec): Float = duration(a) / speedOf(a)
+    fun realDuration(a: AnimationSpec): Float = totalSeconds(a) / speedOf(a)
 
     fun speedOf(a: AnimationSpec): Float = a.speed.coerceIn(MIN_SPEED, MAX_SPEED)
 
@@ -172,7 +197,22 @@ object Anim {
         if (frames.isEmpty()) return null
         val total = duration(a)
         val raw = max(0f, seconds) * speedOf(a)
-        val t = if (a.loop) raw - total * floor(raw / total) else min(raw, total)
+        if (!a.loop) {
+            val home = returnSeconds(a)
+            val body = min(raw, total)
+            val here = sampleAt(a, body)
+            if (home <= 0f || raw <= total) return here
+            // 回家：从末尾那一帧**平滑地**回到第一帧（和循环时最后一段同一套插值），到了就停。
+            val f = ((raw - total) / home).coerceIn(0f, 1f)
+            val start = sampleAt(a, 0f)
+            return AnimSample(
+                blendPoses(here.angles, start.angles, f),
+                // 图也跟着回：到家的时候画的应该是第一帧那一套（不然姿势回去了、画还留着）。
+                if (f >= 1f) start.state else here.state,
+                here.frame, here.frames,
+            )
+        }
+        val t = raw - total * floor(raw / total)
 
         var acc = 0f
         for (i in frames.indices) {
@@ -187,6 +227,34 @@ object Anim {
         // 走不到这里：最后一帧一定兜住。写出来是为了让编译器也看得见。
         val only = frames.last()
         return AnimSample(only.angles, only.state, frames.lastIndex, frames.size)
+    }
+
+    /** 动画自己的时间里某一刻的样子（不含"回家"那一段）。 */
+    private fun sampleAt(a: AnimationSpec, t: Float): AnimSample {
+        val frames = a.frames
+        var acc = 0f
+        for (i in frames.indices) {
+            val d = frameSeconds(frames[i])
+            val last = i == frames.lastIndex
+            if (t < acc + d || last) {
+                return AnimSample(poseAt(a, t), frames[i].state, i, frames.size)
+            }
+            acc += d
+        }
+        val only = frames.last()
+        return AnimSample(only.angles, only.state, frames.lastIndex, frames.size)
+    }
+
+    /** 两套姿势之间插值（每根骨头各自算；只在一侧出现过的保持另一侧的值）。 */
+    private fun blendPoses(from: Map<String, Float>, to: Map<String, Float>, f: Float): Map<String, Float> {
+        if (from.isEmpty() && to.isEmpty()) return emptyMap()
+        val out = LinkedHashMap<String, Float>()
+        for (name in from.keys + to.keys) {
+            val a = from[name] ?: to[name] ?: 0f
+            val b = to[name] ?: from[name] ?: 0f
+            out[name] = a + (b - a) * f
+        }
+        return out
     }
 
     /**

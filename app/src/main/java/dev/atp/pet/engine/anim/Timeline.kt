@@ -143,6 +143,16 @@ object Timeline {
             )
         }
 
+        val total = Anim.duration(spec)
+        val raw = max(0f, seconds) * Anim.speedOf(spec)
+        // 回家那一段（1.30.0）：通道的值在"末尾的值"和"起点的值"之间插值 —— 和帧那一半
+        // 同一个算法，所以整只宠物是一起回去的，不会出现"姿势回去了、某根骨头留在原地"。
+        val homing = !spec.loop && Anim.returnSeconds(spec) > 0f && raw > total
+        val f = if (homing) {
+            ((raw - total) / Anim.returnSeconds(spec)).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
         val time = localTime(spec, seconds)
         val angles = LinkedHashMap(base.angles)
         val ox = LinkedHashMap<String, Float>()
@@ -150,13 +160,37 @@ object Timeline {
         val sc = LinkedHashMap<String, Float>()
 
         for ((bone, track) in spec.tracks) {
-            if (track.rot.isNotEmpty()) angles[bone] = valueAt(track.rot, time)
-            if (track.x.isNotEmpty()) ox[bone] = valueAt(track.x, time)
-            if (track.y.isNotEmpty()) oy[bone] = valueAt(track.y, time)
-            if (track.scale.isNotEmpty()) sc[bone] = valueAt(track.scale, time)
+            if (track.rot.isNotEmpty()) {
+                angles[bone] = if (homing) {
+                    lerp(valueAt(track.rot, total), valueAt(track.rot, 0f), f)
+                } else {
+                    valueAt(track.rot, time, spec.loop, total)
+                }
+            }
+            if (track.x.isNotEmpty()) ox[bone] = channelValue(track.x, time, total, spec.loop, homing, f)
+            if (track.y.isNotEmpty()) oy[bone] = channelValue(track.y, time, total, spec.loop, homing, f)
+            if (track.scale.isNotEmpty()) {
+                sc[bone] = channelValue(track.scale, time, total, spec.loop, homing, f)
+            }
         }
         return TrackSample(angles, ox, oy, sc, base.state, base.frame, base.frames)
     }
+
+    /** 一条通道在某一刻的值，含"循环时接回开头"和"回家"两种情况。 */
+    private fun channelValue(
+        keys: List<AnimKey>,
+        time: Float,
+        total: Float,
+        loop: Boolean,
+        homing: Boolean,
+        f: Float,
+    ): Float = if (homing) {
+        lerp(valueAt(keys, total, loop, total), valueAt(keys, 0f, loop, total), f)
+    } else {
+        valueAt(keys, time, loop, total)
+    }
+
+    private fun lerp(from: Float, to: Float, f: Float): Float = from + (to - from) * f
 
     /**
      * 把"墙上经过了多少秒"换成"动画自己的第几秒"：速度倍率与循环都在这里，和 [Anim.sample]
@@ -178,11 +212,23 @@ object Timeline {
      *  * 最后一个之后 = 最后一个的值；
      *  * 两个关键帧之间按起点那一个的 [AnimKey.ease] 走。
      */
-    fun valueAt(keys: List<AnimKey>, time: Float): Float {
+    fun valueAt(
+        keys: List<AnimKey>,
+        time: Float,
+        loop: Boolean = false,
+        total: Float = 0f,
+    ): Float {
         if (keys.isEmpty()) return 0f
         if (keys.size == 1 || time <= keys[0].t) return keys[0].v
         val last = keys[keys.size - 1]
-        if (time >= last.t) return last.v
+        if (time >= last.t) {
+            // 循环的动画里，最后一根关键帧**平滑接回第一根**（1.30.0）：不这么做的话，
+            // 一根骨头在末尾会"停住"然后在绕回的一瞬间跳回去 —— 用户说的"不顺滑"就是它。
+            if (!loop || total <= last.t) return last.v
+            val span = total - last.t
+            val f = ((time - last.t) / span).coerceIn(0f, 1f)
+            return last.v + (keys[0].v - last.v) * f
+        }
         for (i in 0 until keys.size - 1) {
             val a = keys[i]
             val b = keys[i + 1]

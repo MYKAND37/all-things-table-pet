@@ -83,6 +83,17 @@ def duration(a):
     return sum(frame_seconds(f) for f in a["frames"])
 
 
+def return_seconds(a):
+    """不循环 + 开着"走完回第一帧"时，回家那一段有多长（= 最后一帧的时长）。"""
+    if a.get("loop", True) or not a.get("returnHome", False) or not a["frames"]:
+        return 0.0
+    return frame_seconds(a["frames"][-1])
+
+
+def total_seconds(a):
+    return duration(a) + return_seconds(a)
+
+
 def speed_of(a):
     return min(MAX_SPEED, max(MIN_SPEED, float(a.get("speed", 1.0))))
 
@@ -153,10 +164,36 @@ def sample(a, seconds):
         return None
     total = duration(a)
     raw = max(0.0, seconds) * speed_of(a)
-    if a.get("loop", True):
-        t = raw - total * (raw // total)
-    else:
-        t = min(raw, total)
+    if not a.get("loop", True):
+        home = return_seconds(a)
+        body = min(raw, total)
+        here = sample_at(a, body)
+        if home <= 0 or raw <= total:
+            return here
+        f = min(1.0, max(0.0, (raw - total) / home))
+        start = sample_at(a, 0.0)
+        return {"angles": blend_poses(here["angles"], start["angles"], f),
+                "state": start["state"] if f >= 1.0 else here["state"],
+                "frame": here["frame"], "frames": here["frames"]}
+    t = raw - total * (raw // total)
+    return sample_at(a, t)
+
+
+def blend_poses(x, y, f):
+    """两套姿势之间插值（镜像 Anim.blendPoses）。"""
+    if not x and not y:
+        return {}
+    names = list(x.keys()) + [n for n in y if n not in x]
+    out = {}
+    for n in names:
+        a = x.get(n, y.get(n, 0.0))
+        b = y.get(n, x.get(n, 0.0))
+        out[n] = a + (b - a) * f
+    return out
+
+
+def sample_at(a, t):
+    frames = a["frames"]
     acc = 0.0
     for i, f in enumerate(frames):
         d = frame_seconds(f)
@@ -172,8 +209,9 @@ def sample(a, seconds):
             "frame": len(frames) - 1, "frames": len(frames)}
 
 
-def anim(frames, speed=1.0, loop=True):
-    return {"id": "a", "name": "a", "speed": speed, "loop": loop, "frames": frames}
+def anim(frames, speed=1.0, loop=True, return_home=False):
+    return {"id": "a", "name": "a", "speed": speed, "loop": loop,
+            "returnHome": return_home, "frames": frames}
 
 
 def frame(angles=None, state="", seconds=DEFAULT_FRAME_SECONDS):
@@ -280,6 +318,29 @@ def main():
     report("第一次写它之前保持第一个值（不是 0）",
            abs(sample(anim([frame({}, seconds=1.0), frame({"arm": 55.0}, seconds=1.0)]),
                       0.1)["angles"].get("arm", 0.0) - 55.0) < 1e-4)
+
+    print("\n走完顺滑回第一帧（1.30.0）")
+    home = anim([frame({"arm": 0.0}, seconds=1.0), frame({"arm": 90.0}, seconds=1.0)],
+                loop=False, return_home=True)
+    report("回家那一段 = 最后一帧的时长", abs(return_seconds(home) - 1.0) < 1e-6)
+    report("总时长 = 作者写的那几帧 + 回家那一段",
+           abs(total_seconds(home) - 3.0) < 1e-6, "%.2f 秒" % total_seconds(home))
+    report("关着的时候不多走一段（老行为）",
+           abs(total_seconds(anim([frame({}, seconds=1.0)], loop=False)) - 1.0) < 1e-6)
+    report("循环的动画用不着它（回家那一段是 0）",
+           return_seconds(anim([frame({}, seconds=1.0)], loop=True, return_home=True)) == 0.0)
+    # 走完那一秒里，姿势从"最后一帧"平滑回到"第一帧"：中间是插值出来的，不是一下跳过去。
+    mid = sample(home, 2.5)
+    report("回家的半路上是两头的中间（45 度）", abs(mid["angles"]["arm"] - 45.0) < 1e-4,
+           "%.1f" % mid["angles"]["arm"])
+    report("到家就是第一帧的姿势", abs(sample(home, 3.0)["angles"]["arm"] - 0.0) < 1e-4)
+    report("到家之后再走也不会越过（停在第一帧上）",
+           abs(sample(home, 9.0)["angles"]["arm"] - 0.0) < 1e-4)
+    report("一步也不会跳：整条路上每 0.05 秒最多走 5 度",
+           max(abs(sample(home, i / 20.0)["angles"]["arm"]
+                   - sample(home, (i + 1) / 20.0)["angles"]["arm"]) for i in range(60)) <= 5.0,
+           "%.1f 度" % max(abs(sample(home, i / 20.0)["angles"]["arm"]
+                               - sample(home, (i + 1) / 20.0)["angles"]["arm"]) for i in range(60)))
 
     print("\n一帧的动画")
     one = anim([frame({"arm": 33.0}, state="帧1", seconds=0.4)])

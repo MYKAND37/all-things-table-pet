@@ -177,13 +177,18 @@ def ease(f, kind):
     return t * t * (3.0 - 2.0 * t)
 
 
-def value_at(keys, time):
+def value_at(keys, time, loop=False, total=0.0):
     if not keys:
         return 0.0
     if len(keys) == 1 or time <= keys[0]["t"]:
         return keys[0]["v"]
     if time >= keys[-1]["t"]:
-        return keys[-1]["v"]
+        # 循环时最后一根平滑接回第一根（1.30.0）：不这么做，末尾会"停住"再跳回去。
+        if not loop or total <= keys[-1]["t"]:
+            return keys[-1]["v"]
+        span = total - keys[-1]["t"]
+        f = min(1.0, max(0.0, (time - keys[-1]["t"]) / span))
+        return keys[-1]["v"] + (keys[0]["v"] - keys[-1]["v"]) * f
     for i in range(len(keys) - 1):
         a, b = keys[i], keys[i + 1]
         if time < a["t"] or time > b["t"]:
@@ -586,6 +591,16 @@ def main():
     report("如果把度数当弧度写进去，立刻超出关节能到的范围（|值| 必须 ≤ %.1f）" % joint_limit,
            abs(math.radians(20.0)) <= joint_limit and math.radians(20.0) < 1.0,
            "20° 应该是 %.3f 弧度，而写成度数就是 20" % math.radians(20.0))
+
+    print("\n循环时最后一根关键帧平滑接回第一根（1.30.0）")
+    cyc = [key(0.0, 0.0, EASE_LINEAR), key(1.0, 90.0, EASE_LINEAR)]
+    report("循环：末尾那一截是从最后一个值往回走（不是停住再跳）",
+           abs(value_at(cyc, 1.5, loop=True, total=2.0) - 45.0) < 1e-6,
+           "%.1f" % value_at(cyc, 1.5, loop=True, total=2.0))
+    report("绕回的那一刻正好是第一根的值",
+           abs(value_at(cyc, 2.0, loop=True, total=2.0) - 0.0) < 1e-6)
+    report("不循环时还是停在最后一个值上（老行为）",
+           abs(value_at(cyc, 1.5, loop=False, total=2.0) - 90.0) < 1e-6)
 
     print("\n插一帧 / 删一帧：关键帧跟着走")
     tr = {"hand_L": {"rot": [key(0.0, 0.0, EASE_LINEAR), key(1.0, 30.0, EASE_LINEAR),

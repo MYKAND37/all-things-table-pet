@@ -1946,7 +1946,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
         }
         // 不循环的走完了就停下 —— 停在最后一帧上：姿势留到最后那一帧，图也留着。
-        if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
+        // 走完了没有：算上"回家"那一段（1.30.0）—— 不这样的话，开着"顺滑回第一帧"的动画
+        // 会在回家的半路上被当成"演完了"掐掉。
+        if (!anim.loop && playClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)) {
             playing = null
         }
     }

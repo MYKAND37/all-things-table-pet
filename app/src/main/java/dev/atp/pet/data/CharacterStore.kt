@@ -1107,6 +1107,8 @@ class CharacterStore(private val context: Context) {
                     // 而不是在这里被悄悄改掉、让用户以为文件里写的就是 1。
                     speed = o.optDouble("speed", 1.0).toFloat(),
                     loop = o.optBoolean("loop", true),
+                    // 缺键 = 关（= 老行为：走完停在最后一帧）。
+                    returnHome = o.optBoolean("returnHome", false),
                     tracks = readTracks(o.optJSONObject("tracks")),
                 )
             }
@@ -1264,6 +1266,7 @@ class CharacterStore(private val context: Context) {
                 JSONObject()
                     .put("id", a.id).put("name", a.name)
                     .put("speed", a.speed.toDouble()).put("loop", a.loop)
+                    .put("returnHome", a.returnHome)
                     .put("frames", frames)
                     .put("tracks", writeTracks(a.tracks))
             )

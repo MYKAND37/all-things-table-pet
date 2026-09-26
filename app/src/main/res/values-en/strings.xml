@@ -92,6 +92,8 @@
     <string name="anim_new">＋ New animation</string>
     <string name="anim_no_art">No art change</string>
     <string name="anim_once">Play once</string>
+    <string name="anim_return_home">Smooth return home</string>
+    <string name="anim_return_home_on">Smooth return home (on)</string>
     <string name="anim_play">▶ Play</string>
     <string name="anim_preview">▶ Preview</string>
     <string name="anim_speed">Speed (whole animation)</string>

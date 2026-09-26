@@ -1394,6 +1394,7 @@ class MainActivity : AppCompatActivity() {
         val (speedRow, speedOf) = stepperRow(
             getString(R.string.anim_speed), speed, 0.25f, 0.25f, 4f,
         ) { "%.2f×".format(it) }
+        var returnHome = existing?.returnHome ?: false
         val loopChip = label(getString(R.string.anim_loops), 12f, INK)
         loopChip.setPadding(dp(10), dp(8), dp(10), dp(8))
         fun paintLoop() {
@@ -1403,7 +1404,21 @@ class MainActivity : AppCompatActivity() {
             loopChip.setTextColor(if (loop) INK else MUTED)
             loopChip.text = getString(if (loop) R.string.anim_loops else R.string.anim_once)
         }
-        loopChip.setOnClickListener { loop = !loop; paintLoop() }
+        loopChip.setOnClickListener { loop = !loop; paintLoop(); paintHome() }
+
+        // 走完顺滑回第一帧（1.30.0）：只对"播一遍"的动画有意义 —— 循环的动画本来就会回去。
+        val homeChip = label(getString(R.string.anim_return_home), 12f, INK)
+        homeChip.setPadding(dp(10), dp(8), dp(10), dp(8))
+        fun paintHome() {
+            homeChip.background = getDrawable(
+                if (returnHome && !loop) R.drawable.menu_item_selected else R.drawable.menu_item_idle
+            )
+            homeChip.setTextColor(if (returnHome && !loop) INK else MUTED)
+            homeChip.text = getString(
+                if (returnHome) R.string.anim_return_home_on else R.string.anim_return_home,
+            )
+        }
+        homeChip.setOnClickListener { returnHome = !returnHome; paintHome(); paintLoop() }
 
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1413,7 +1428,10 @@ class MainActivity : AppCompatActivity() {
 
         fun write() {
             val name = nameInput.text.toString().trim().ifEmpty { id }
-            store.saveAnimation(folder, AnimationSpec(id, name, frames.toList(), speedOf(), loop))
+            store.saveAnimation(
+                folder,
+                AnimationSpec(id, name, frames.toList(), speedOf(), loop, returnHome = returnHome),
+            )
             refreshAnimations(folder)
             // 谁开的这个弹窗，谁决定重画什么：测试场那张动作表，或者动画管理页。
             after()
@@ -1481,6 +1499,8 @@ class MainActivity : AppCompatActivity() {
         box.addView(nameInput)
         box.addView(speedRow)
         box.addView(loopChip)
+        box.addView(homeChip)
+        box.addView(label(getString(R.string.anim_return_home_hint), 10f, MUTED, top = 4))
         if (withFrames) {
             box.addView(label(getString(R.string.anim_frames), 11f, MUTED, top = 10, bottom = 6))
             box.addView(frameBox)
@@ -1510,6 +1530,7 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.depth_cancel, null)
             .show()
         paintLoop()
+        paintHome()
         fillFrames()
     }
 
@@ -6616,8 +6637,8 @@ class MainActivity : AppCompatActivity() {
                 buildStateChips(folder)
                 applyStudioStates()
             }
-            // 不循环的演完了就停：和测试场同一条规矩（停在最后一帧上，图留着）。
-            if (!anim.loop && animClock * Anim.speedOf(anim) >= Anim.duration(anim)) {
+            // 不循环的演完了就停：算上"回家"那一段（1.30.0），和测试场同一条规矩。
+            if (!anim.loop && animClock * Anim.speedOf(anim) >= Anim.totalSeconds(anim)) {
                 stopStudioPlay()
                 return
             }
