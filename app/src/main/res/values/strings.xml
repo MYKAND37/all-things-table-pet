@@ -449,6 +449,7 @@
     <string name="anim_pick_one">先在左边选一段动画</string>
     <string name="anim_frame_add">＋ 帧</string>
     <string name="anim_save_frame">存入这一帧</string>
+    <string name="anim_frame_stretched">第 %1$d 帧现在走 %2$s 秒（整段 %3$s 秒）</string>
     <string name="anim_frame_shorter">帧 −0.1s</string>
     <string name="anim_frame_longer">帧 ＋0.1s</string>
     <string name="anim_drop_frame">删掉这一帧</string>

@@ -129,6 +129,18 @@ object TimelineLayout {
         return best
     }
 
+    /**
+     * 把一行里的一个横向位移换算成**秒**（1.28.0）。
+     *
+     * 「左右拖动轴上的帧方块，控制这一帧到下一帧的时间」：整条轨道铺满 [duration] 秒，
+     * 所以拖过轨道的几分之几，就是改了几分之几的时长。夹在上下限里由调用方做（那是界面的
+     * 尺子，不是几何）。
+     */
+    fun secondsDelta(lane: Lane, dx: Float): Float {
+        if (lane.width <= 0f) return 0f
+        return dx / lane.width * lane.duration
+    }
+
     /** 拖出来的时间吸附到 0.01 秒的格子上，并夹在 [0, duration] 里。 */
     fun snapTime(t: Float, duration: Float): Float {
         val clamped = t.coerceIn(0f, max(0f, duration))

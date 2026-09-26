@@ -77,6 +77,15 @@ class TimelineView @JvmOverloads constructor(
 
     /** 点了一个姿态锚点（小方块）：和点图那一块一样要跳播放头 + 载入姿势，但说法不同。 */
     var onAnchorPicked: ((Int) -> Unit)? = null
+
+    /**
+     * **图**那一行的方块被左右拖了（1.28.0）：这一帧要走多久，拖出来的。
+     *
+     * 报的是**位移**（秒），不是"改成几秒"：基准是宿主手里那一份（拖动期间它一直在变），
+     * 而"从哪儿开始拖"这件事只有宿主知道（它得从拖动开始那一刻的时长算起）。
+     * [done] = 手指抬起来了 —— 拖动期间界面立刻跟着变，只有抬手那一次才落盘。
+     */
+    var onFrameStretched: ((Int, Float, Boolean) -> Unit)? = null
     var onBonePicked: ((String) -> Unit)? = null
 
     // ── 输入 ───────────────────────────────────────────────────────────────
@@ -139,6 +148,18 @@ class TimelineView @JvmOverloads constructor(
         if (y < first) return -1
         val row = ((y - first) / dp(ROW_DP)).toInt()
         return if (row in bones.indices) row else -1
+    }
+
+    /** 第 x 列落在哪一帧的方块里（不在任何一块里就是 null）。 */
+    private fun frameAtX(spec: AnimationSpec, lane: TimelineLayout.Lane, x: Float): Int? {
+        val t = TimelineLayout.xToTime(lane, x)
+        var acc = 0f
+        for ((i, f) in spec.frames.withIndex()) {
+            val d = Anim.frameSeconds(f)
+            if (t >= acc && t < acc + d) return i
+            acc += d
+        }
+        return null
     }
 
     private fun keysOf(bone: String): List<AnimKey> =
@@ -367,6 +388,11 @@ class TimelineView @JvmOverloads constructor(
     private var downX = 0f
     private var downY = 0f
 
+    /** 图那一行正在拖哪一块（-1 = 没在拖），以及它从哪儿开始拖的。 */
+    private var frameDragIndex = -1
+    private var frameDownX = 0f
+    private var frameDragMoved = false
+
     override fun onTouchEvent(event: MotionEvent): Boolean {
         val s = spec ?: return false
         when (event.actionMasked) {
@@ -393,20 +419,15 @@ class TimelineView @JvmOverloads constructor(
                     }
                     return false
                 }
-                // 图那一行：点一块就是选中那一帧。
+                // 图那一行：**点**一块 = 选中那一帧，**拖**它 = 改这一帧到下一帧的时间（1.28.0）。
                 if (event.y < dp(RULER_DP) + dp(ANCHOR_ROW_DP) + dp(ART_ROW_DP)) {
                     val lane = artLane()
-                    val t = TimelineLayout.xToTime(lane, event.x)
-                    var acc = 0f
-                    for ((i, f) in s.frames.withIndex()) {
-                        val d = Anim.frameSeconds(f)
-                        if (t >= acc && t < acc + d) {
-                            onFramePicked?.invoke(i)
-                            return true
-                        }
-                        acc += d
-                    }
-                    return false
+                    val i = frameAtX(s, lane, event.x) ?: return false
+                    frameDragIndex = i
+                    frameDownX = event.x
+                    frameDragMoved = false
+                    grabParent()
+                    return true
                 }
                 val row = rowAt(event.y)
                 if (row < 0) return false
@@ -445,6 +466,22 @@ class TimelineView @JvmOverloads constructor(
                     scrubTo(event.x)
                     return true
                 }
+                if (frameDragIndex >= 0) {
+                    // 先过阈值：手指落下几毫米是常态，而那一下是"选这一帧"，不是"改它的时长"。
+                    if (!frameDragMoved &&
+                        kotlin.math.hypot(event.x - frameDownX, 0f) < dp(TOUCH_SLOP_DP)
+                    ) {
+                        return true
+                    }
+                    frameDragMoved = true
+                    val lane = artLane()
+                    onFrameStretched?.invoke(
+                        frameDragIndex,
+                        TimelineLayout.secondsDelta(lane, event.x - frameDownX),
+                        false,
+                    )
+                    return true
+                }
                 val bone = dragBone ?: return false
                 val row = bones.indexOf(bone)
                 if (row < 0 || dragKey < 0) return false
@@ -479,6 +516,23 @@ class TimelineView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 图方块：拖过就是改时长（这一次才落盘），没拖过就是"点了一下 = 选中这一帧"。
+                if (frameDragIndex >= 0) {
+                    val lane = artLane()
+                    if (frameDragMoved && event.actionMasked == MotionEvent.ACTION_UP) {
+                        onFrameStretched?.invoke(
+                            frameDragIndex,
+                            TimelineLayout.secondsDelta(lane, event.x - frameDownX),
+                            true,
+                        )
+                    } else if (!frameDragMoved) {
+                        onFramePicked?.invoke(frameDragIndex)
+                    }
+                    frameDragIndex = -1
+                    frameDragMoved = false
+                    releaseParent()
+                    return true
+                }
                 // 抬手 = "就停在这儿"：这一次才写文件（见 onKeyMoved 的说明）。
                 val bone = dragBone
                 val index = dragKey

@@ -969,6 +969,22 @@ def main():
            "channel == Timeline.ROTATION" in view_kt
            and "fun hitKeyInRow(keys: List<AnimKey>, lane: Lane, px: Float, radiusPx: Float): Int" in tl_layout
            and "TimelineLayout.hitKeyInRow(" in view_kt)
+    report("图那一行的方块能左右拖，拖出来的是这一帧到下一帧的时间（1.28.0）",
+           "var onFrameStretched: ((Int, Float, Boolean) -> Unit)?" in view_kt
+           and "animTimeline.onFrameStretched = { index, delta, done ->" in activity
+           and "private fun stretchStudioFrame(index: Int, delta: Float, done: Boolean)" in activity
+           and "fun secondsDelta(lane: Lane, dx: Float): Float" in tl_layout)
+    report("拖动期间只改内存 + 重画，**抬手才落盘**（和拖关键帧同一条规矩）",
+           "if (!done) {" in activity.split("private fun stretchStudioFrame")[1].split("private fun ")[0]
+           and "animFrameDragBase = null\n        pushStudioUndo(base)" in activity)
+    report("基准是**拖动开始那一刻**的动画（不然越拖越快）",
+           "val base = animFrameDragBase ?: live.also { animFrameDragBase = it }" in activity)
+    report("时长变了，后面的关键帧跟着挪（和 −0.1s 那条按钮同一条规矩）",
+           "Timeline.shifted(\n            base.tracks" in activity
+           and "MIN_FRAME_SECONDS, MAX_FRAME_SECONDS" in activity)
+    report("拖完仍然能点一下选中那一帧（没过阈值就是点）",
+           "} else if (!frameDragMoved) {" in view_kt
+           and "onFramePicked?.invoke(frameDragIndex)" in view_kt)
     report("参考图在动画页也画（跟着用户的开关，默认画）",
            "reference = animShowReference" in activity
            and "private var animShowReference = true" in activity

@@ -297,6 +297,9 @@ class MainActivity : AppCompatActivity() {
      */
     private var animPending: Map<String, BoneTrack>? = null
 
+    /** 拖「图」方块时，拖动开始那一刻的动画（时长和通道都从它算起）。 */
+    private var animFrameDragBase: AnimationSpec? = null
+
     /** Which pane is on screen, so leaving one can do its own cleanup. See show(). */
     private var currentPane = Pane.PLACEHOLDER
 
@@ -470,6 +473,7 @@ class MainActivity : AppCompatActivity() {
         animTimeline.onKeyMoved = { bone, index, t, v, done -> moveStudioKey(bone, index, t, v, done) }
         animTimeline.onFramePicked = { index -> pickStudioFrame(index) }
         animTimeline.onAnchorPicked = { index -> pickStudioAnchor(index) }
+        animTimeline.onFrameStretched = { index, delta, done -> stretchStudioFrame(index, delta, done) }
         animTimeline.onBonePicked = { bone -> pickStudioBone(bone) }
         findViewById<View>(R.id.animMeta).setOnClickListener {
             // 名字/速度/循环，外加"删掉这一段"。帧本身在这页里编，所以那个弹窗不带帧那一半。
@@ -6357,6 +6361,52 @@ class MainActivity : AppCompatActivity() {
         // 选中**留着**（原来这里清成 -1）：拖完还想接着调这一帧的值，而"拖一下就没选中了"
         // 正是"选中不了已有关键帧"的另一半。
         buildAnimList()
+    }
+
+    /**
+     * 「图」那一行的方块被左右拖了：**这一帧要走多久**（1.28.0）。
+     *
+     * 基准是**拖动开始那一刻**的动画（[animFrameDragBase]）：拖动期间每一帧都在变，用"现在的
+     * 时长 + 位移"会越拖越快（位移是相对起点算的）。所以起点那一份留着，每次都从它算。
+     *
+     * 时长变了，**后面的关键帧跟着挪**（`Timeline.shifted`）—— 和「帧 −0.1s」那条按钮同一个
+     * 规矩：图往后走一格而通道留在原地，动作和画就对不上了。
+     *
+     * 拖动期间不落盘（只改内存 + 重画），抬手那一次才写文件，和拖关键帧一样。
+     */
+    private fun stretchStudioFrame(index: Int, delta: Float, done: Boolean) {
+        val folder = studioFolder() ?: return
+        val live = studioAnimation(folder) ?: return
+        val base = animFrameDragBase ?: live.also { animFrameDragBase = it }
+        val frame = base.frames.getOrNull(index) ?: return
+        val seconds = (Anim.frameSeconds(frame) + delta)
+            .coerceIn(MIN_FRAME_SECONDS, MAX_FRAME_SECONDS)
+        val next = base.frames.toMutableList().apply { this[index] = frame.copy(seconds = seconds) }
+        val shifted = Timeline.shifted(
+            base.tracks, TimelineLayout.frameStarts(base).getOrElse(index + 1) { 0f },
+            seconds - Anim.frameSeconds(frame), Anim.duration(base.copy(frames = next)),
+        )
+        val spec = base.copy(frames = next, tracks = shifted)
+        animFrameIndex = index
+        if (!done) {
+            // 拖动中：只重画（时间轴、标尺、状态行都跟着走）。**不碰姿势** —— 用户拖的是时间，
+            // 不是"现在看哪一刻"。
+            animTimeline.setData(spec, animTimeline.bones, animChannel)
+            animTimeline.setSelection(animBone, animKeyIndex, index)
+            animStatus.text = getString(
+                R.string.anim_frame_stretched, index + 1, "%.2f".format(seconds),
+                "%.2f".format(Anim.duration(spec)),
+            )
+            return
+        }
+        animFrameDragBase = null
+        pushStudioUndo(base)
+        if (!writeStudioAnimation(folder, spec)) return
+        buildAnimList()
+        animStatus.text = getString(
+            R.string.anim_frame_stretched, index + 1, "%.2f".format(seconds),
+            "%.2f".format(Anim.duration(spec)),
+        )
     }
 
     /** 点了"图"那一行的一块：选中那一帧（右边摆成它的样子）。 */

@@ -394,6 +394,13 @@ def hit_key_in_row(keys, lane, px, radius):
     return best
 
 
+def seconds_delta(lane, dx):
+    """横向拖了多少像素 = 改了多少秒（镜像 TimelineLayout.secondsDelta）。"""
+    if lane.width <= 0:
+        return 0.0
+    return dx / lane.width * lane.duration
+
+
 def snap_time(t, dur):
     clamped = min(max(0.0, dur), max(0.0, t))
     return round(clamped / TIME_GRID) * TIME_GRID
@@ -626,6 +633,15 @@ def main():
     report("换算互逆", all(abs(x_to_time(lane, time_to_x(lane, t)) - t) < 1e-3
                            for t in (0.0, 0.13, 0.5, 1.0, 1.99)))
     report("时长是 0 时不除零", time_to_x(Lane(80.0, 0.0, 400.0, 40.0, 0.0), 1.0) == 80.0)
+
+    print("\n拖方块：拖了多少像素 = 改了多少秒（1.28.0）")
+    lane_drag = Lane(left=80.0, top=0.0, width=400.0, height=20.0, dur=2.0)
+    report("拖过四分之一条轨道 = 改半秒（2 秒的动画）",
+           abs(seconds_delta(lane_drag, 100.0) - 0.5) < 1e-6,
+           "%.3f 秒" % seconds_delta(lane_drag, 100.0))
+    report("往左拖是负数（时长变短）", seconds_delta(lane_drag, -50.0) < 0)
+    report("拖过整条轨道 = 整段时长", abs(seconds_delta(lane_drag, 400.0) - 2.0) < 1e-6)
+    report("轨道宽度是 0 时不除零", seconds_delta(Lane(80.0, 0.0, 0.0, 20.0, 2.0), 10.0) == 0.0)
 
     print("\n几何：值和高度（上大下小）")
     lo, hi = range_of([key(0.0, 0.0, EASE_LINEAR), key(1.0, 100.0, EASE_LINEAR)], 0)
