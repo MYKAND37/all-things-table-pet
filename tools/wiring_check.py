@@ -969,6 +969,15 @@ def main():
            "channel == Timeline.ROTATION" in view_kt
            and "fun hitKeyInRow(keys: List<AnimKey>, lane: Lane, px: Float, radiusPx: Float): Int" in tl_layout
            and "TimelineLayout.hitKeyInRow(" in view_kt)
+    report("参考图在动画页也画（跟着用户的开关，默认画）",
+           "reference = animShowReference" in activity
+           and "private var animShowReference = true" in activity
+           and "@+id/animReference" in layout_text
+           and "toggleStudioReference()" in activity
+           and "R.string.anim_reference_none" in activity)
+    report("而且拖播放头不会把它关掉（这页原来硬写 reference = false）",
+           "reference = false" not in code_only(activity)
+           or "setPreview(map, true, reference = false)" not in code_only(activity))
     report("④ 帧模型改成每根骨头各自在提到过它的帧之间插值（跨帧不再瞬移）",
            "private fun poseAt(a: AnimationSpec, t: Float)" in anim_kt
            and "private fun valueOf(" in anim_kt and "private fun blend(" not in anim_kt)
@@ -1048,7 +1057,8 @@ def main():
                              ("animLonger", "nudgeStudioFrame(0.1f)"), ("animDropFrame", "dropStudioFrame()"),
                              ("animResetPose", "animView.resetPose()"),
                              ("animFit", "animView.resetView()"), ("animBones", "toggleStudioBones()"),
-                             ("animEditBones", "toggleStudioBoneMode()"))))
+                             ("animEditBones", "toggleStudioBoneMode()"),
+                             ("animReference", "toggleStudioReference()"))))
     # 「转 90°」那个按钮 1.22.1 删过一次（它和双指旋转共用一段漏了 canvas.save() 的代码，
     # 点了就闪退）；1.25.0 把旋转整个拿掉，于是"按钮"和"手势"两条路都没有了。
     report("旋转两条路都没了：没有那个按钮，也没有双指旋转的手势",

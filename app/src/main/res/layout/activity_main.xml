@@ -512,6 +512,12 @@
                             style="@style/AlignButton"
                             android:text="@string/anim_bones" />
 
+                        <!-- 参考图：这套骨骼那张（骨骼页导入的）。默认画着 —— 它是用户选的图。 -->
+                        <TextView
+                            android:id="@+id/animReference"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_reference" />
+
                         <TextView
                             android:id="@+id/animEditBones"
                             style="@style/AlignButton"

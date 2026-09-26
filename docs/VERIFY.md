@@ -317,6 +317,12 @@ TimelineView 里，而且那一段里同时出现 `hypot` 和这个常数）、�
 编辑器四选一之后还要选"排到哪一节"（不能选它自己）、`bone2` 是**自己的字段**（不是挤进
 `text`）、动作在图上说得出来（原来落到原始 id `depth`）、以及部位列表标出场上穿的是哪一套。
 
+## 动画页的参考图（1.27.1）
+
+`wiring_check` 三句 —— 这一页的 `setPreview` 传的是**用户的开关**（`reference = animShowReference`，
+默认 `true`）而不是硬写的 `false`；底栏那个「参考图」chip 挂上了动作、而且会画出自己是开是关；
+没有参考图时说清楚去哪儿导入。照例把真错误写回去验过（改回 `reference = false` 立刻红）。
+
 ## 免责声明确认门这一版的验证
 
 `tools/wiring_check.py` 八句 —— 一条门要成立，四件事都要在：**关不掉**（`setCancelable(false)`，

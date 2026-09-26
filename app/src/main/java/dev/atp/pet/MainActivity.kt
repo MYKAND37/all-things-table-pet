@@ -232,6 +232,15 @@ class MainActivity : AppCompatActivity() {
     private val animLiveStates = linkedSetOf<String>()
     private var animViewRig = ""
     private var animShowBones = true
+
+    /**
+     * 动画页的预览里画不画**这套骨骼的参考图**（1.27.1）。
+     *
+     * 1.22.0 起这一页是硬关着它的（"工作台问的是这一帧长什么样"）—— 而用户报的正是这个：
+     * 「点动画编辑的那个光标会把我选择的参考图直接取消掉，导致我看不了参考」。他选的那张图
+     * 本来就该一直在，所以默认**画**，开关留在底栏（「参考图」）。
+     */
+    private var animShowReference = true
     private var animBoneMode = false
     private var animPlaying = false
     private var animClock = 0f
@@ -447,6 +456,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.animResetPose).setOnClickListener { animView.resetPose() }
         findViewById<View>(R.id.animFit).setOnClickListener { animView.resetView() }
         animBonesChip.setOnClickListener { toggleStudioBones() }
+        findViewById<View>(R.id.animReference).setOnClickListener { toggleStudioReference() }
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
         findViewById<View>(R.id.animKeyAdd).setOnClickListener { addStudioKey() }
@@ -5963,6 +5973,7 @@ class MainActivity : AppCompatActivity() {
         val rigKey = folder.rigDir.absolutePath
         if (rigKey != animViewRig) {
             animView.load(folder)
+            // load 会把参考图从磁盘重新读一次（骨骼页刚导入的那张因此立刻就看得见）。
             animView.setShowSkeleton(animShowBones)
             animView.setBoneEditMode(animBoneMode)
             animView.resetView()
@@ -6051,8 +6062,8 @@ class MainActivity : AppCompatActivity() {
     private fun applyStudioStates() {
         val map = LinkedHashMap<String, Boolean>()
         for (tag in animLiveStates) map[tag] = true
-        // 参考图不画：工作台问的是"这一帧看起来是什么样"，rig 的参考图回答的是另一个问题。
-        animView.setPreview(map, true, reference = false)
+        // 参考图跟着用户的选择（默认画）：它是**用户自己选的那张图**，不该因为进了这一页就消失。
+        animView.setPreview(map, true, reference = animShowReference)
     }
 
     /**
@@ -6758,6 +6769,25 @@ class MainActivity : AppCompatActivity() {
         applyAnimBoneMode()
     }
 
+    /**
+     * 「参考图」：这一页的预览里画不画这套骨骼的参考图。
+     *
+     * 没有参考图时说清楚**去哪儿弄**（骨骼页 → 参考图），而不是给一个按了没反应的按钮。
+     */
+    private fun toggleStudioReference() {
+        animShowReference = !animShowReference
+        applyStudioStates()
+        applyAnimBoneMode()
+        val folder = studioFolder()
+        if (animShowReference && folder != null && !folder.referenceFile.isFile) {
+            animStatus.text = getString(R.string.anim_reference_none)
+        } else {
+            animStatus.text = getString(
+                if (animShowReference) R.string.anim_reference_on else R.string.anim_reference_off,
+            )
+        }
+    }
+
     /** 「改骨骼 / 摆姿势」：把骨架本身拖到画上（改完要按「存骨骼」）。 */
     private fun toggleStudioBoneMode() {
         animBoneMode = !animBoneMode
@@ -6779,6 +6809,8 @@ class MainActivity : AppCompatActivity() {
             if (animBoneMode) R.drawable.menu_item_selected else R.drawable.menu_item_idle
         )
         animBonesChip.text = getString(R.string.anim_bones) + if (animShowBones) " ✓" else ""
+        findViewById<TextView>(R.id.animReference).text =
+            getString(R.string.anim_reference) + if (animShowReference) " ✓" else ""
         animSaveBones.visibility = if (animBoneMode) View.VISIBLE else View.GONE
         if (animBoneMode) animStatus.text = getString(R.string.anim_bone_mode_hint)
     }

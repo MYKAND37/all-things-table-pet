@@ -455,6 +455,10 @@
     <string name="anim_reset_pose">复位姿势</string>
     <string name="anim_fit">摆正视角</string>
     <string name="anim_bones">骨骼</string>
+    <string name="anim_reference">参考图</string>
+    <string name="anim_reference_on">参考图画着：它垫在角色下面，摆姿势时对得上</string>
+    <string name="anim_reference_off">参考图收起来了（再点一下「参考图」就回来）</string>
+    <string name="anim_reference_none">这套骨骼还没有参考图 —— 去 桌宠管理 → 骨架 → 参考图 导入一张</string>
     <string name="anim_edit_bones">改骨骼</string>
     <string name="anim_pose_mode">摆姿势</string>
     <string name="anim_save_bones">存骨骼</string>

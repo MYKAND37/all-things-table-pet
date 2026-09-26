@@ -67,6 +67,7 @@
     <string name="anim_reset_pose">Reset pose</string>
     <string name="anim_fit">Fit view</string>
     <string name="anim_bones">Bones</string>
+    <string name="anim_reference">Reference</string>
     <string name="anim_edit_bones">Edit rig</string>
     <string name="anim_pose_mode">Pose</string>
     <string name="anim_save_bones">Save rig</string>
