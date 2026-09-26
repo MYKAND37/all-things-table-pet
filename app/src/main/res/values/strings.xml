@@ -440,6 +440,7 @@
     <string name="anim_bind_cleared">锚点 %1$d 不绑规则了</string>
     <string name="anim_bind_where">（规则只在测试场和桌面上播的时候才会响 —— 编辑这一页没有世界可跑）</string>
     <string name="anim_key_added">给 %1$s 打了一个 %2$s 关键帧：%3$s · 第 %4$s 秒</string>
+    <string name="anim_key_only_one">（这一节现在只有这一个关键帧，它不会动 —— 把播放头拖到别的时刻、再摆一个姿势，中间才会走）</string>
     <string name="anim_key_dropped">%1$s 的 %2$s 关键帧删掉了</string>
     <string name="anim_key_saved">%1$s 的 %2$s 关键帧存好了：%3$s · 第 %4$s 秒</string>
     <string name="anim_key_status">%1$s · %2$s %3$s · 第 %4$s 秒（往上拖变大，左右拖改时间）</string>
@@ -457,6 +458,18 @@
     <string name="anim_fit">摆正视角</string>
     <string name="anim_bones">骨骼</string>
     <string name="anim_reference">参考图</string>
+    <string name="anim_timeline_toggle">时间轴</string>
+    <string name="anim_snap">吸附帧</string>
+    <string name="anim_snap_off">自由</string>
+    <string name="anim_snap_hint">吸附：拖播放头/关键帧时吸到帧边界上（图就是在那儿换的）。关掉就能落在两个帧之间。</string>
+    <string name="anim_timeline_hidden">时间轴收起来了（再点一下「时间轴」放回来）</string>
+    <string name="anim_copy_suffix"> 副本</string>
+    <string name="anim_row_actions">这一段动画</string>
+    <string name="anim_row_hint">长按一段就能改名、复制、删掉 —— 复制是整段复制（帧、通道、绑的规则都在）</string>
+    <string name="anim_row_copy">复制一段</string>
+    <string name="anim_row_rename">改名与速度</string>
+    <string name="anim_row_delete">删掉这一段</string>
+    <string name="anim_copied">复制成了「%1$s」</string>
     <string name="anim_reference_on">参考图画着：它垫在角色下面，摆姿势时对得上</string>
     <string name="anim_reference_off">参考图收起来了（再点一下「参考图」就回来）</string>
     <string name="anim_reference_none">这套骨骼还没有参考图 —— 去 桌宠管理 → 骨架 → 参考图 导入一张</string>

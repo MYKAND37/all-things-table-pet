@@ -241,6 +241,10 @@ class MainActivity : AppCompatActivity() {
      * 本来就该一直在，所以默认**画**，开关留在底栏（「参考图」）。
      */
     private var animShowReference = true
+
+    /** 时间轴整块显示着没有（烤完一大堆骨头之后它很占地方），以及吸附开不开。 */
+    private var animTimelineShown = true
+    private var animSnap = true
     private var animBoneMode = false
     private var animPlaying = false
     private var animClock = 0f
@@ -338,6 +342,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var animRow: View
     private lateinit var animView: SkeletonView
     private lateinit var animTimeline: TimelineView
+    private lateinit var animTimelineScroll: View
     private lateinit var animStates: LinearLayout
     private lateinit var animPlay: TextView
     private lateinit var animBonesChip: TextView
@@ -442,6 +447,7 @@ class MainActivity : AppCompatActivity() {
         animRow = findViewById(R.id.animRow)
         animView = findViewById(R.id.animView)
         animTimeline = findViewById(R.id.animTimeline)
+        animTimelineScroll = findViewById(R.id.animTimelineScroll)
         animStates = findViewById(R.id.animStates)
         animPlay = findViewById(R.id.animPlay)
         animBonesChip = findViewById(R.id.animBones)
@@ -460,6 +466,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.animFit).setOnClickListener { animView.resetView() }
         animBonesChip.setOnClickListener { toggleStudioBones() }
         findViewById<View>(R.id.animReference).setOnClickListener { toggleStudioReference() }
+        findViewById<View>(R.id.animTimelineToggle).setOnClickListener { toggleStudioTimeline() }
+        findViewById<View>(R.id.animSnap).setOnClickListener { toggleStudioSnap() }
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
         findViewById<View>(R.id.animKeyAdd).setOnClickListener { addStudioKey() }
@@ -484,6 +492,10 @@ class MainActivity : AppCompatActivity() {
         animView.onInfo = { animStatus.text = it }
         animView.onPoseEdited = {
             if (animPlaying) haltStudioPlay()
+            // **你刚拖过的那一节就是现在这一节**（1.28.1 修的）：`animBone` 原来一旦被设上
+            // 就粘住了，于是"先给手打了个关键帧、再去拖腿"的话，第二个关键帧还是写进手里 ——
+            // 用户看到的正是「一开始是，选中其他骨骼拖动后就不是了」。
+            syncStudioBone()
             markStudioDirty()
         }
         particleList = findViewById(R.id.particleList)
@@ -5911,6 +5923,12 @@ class MainActivity : AppCompatActivity() {
                 }
                 buildAnimList()
             }
+            // 长按 = "这一段我要动它"（1.29.0）：改名、复制、删掉 —— 都在手边。
+            // 删除原来只藏在「名字/速度」那个弹窗里，而"删一段动画"是最常找的一件事。
+            row.setOnLongClickListener {
+                askAnimationActions(folder, anim)
+                true
+            }
             animList.addView(row)
         }
 
@@ -5937,6 +5955,56 @@ class MainActivity : AppCompatActivity() {
         }
 
         loadAnimationStudio(folder)
+    }
+
+    /** 长按一段动画：改名与速度、复制一段、删掉这一段。 */
+    private fun askAnimationActions(folder: CharacterFolder, anim: AnimationSpec) {
+        pickList(
+            title = getString(R.string.anim_row_actions) + " · " + anim.name,
+            options = listOf(
+                "rename" to getString(R.string.anim_row_rename),
+                "copy" to getString(R.string.anim_row_copy),
+                "delete" to getString(R.string.anim_row_delete),
+            ),
+            hint = getString(R.string.anim_row_hint),
+            current = null,
+        ) { picked ->
+            when (picked) {
+                "rename" -> askAnimation(folder, anim, withFrames = false) { buildAnimList() }
+                "copy" -> {
+                    // 复制的是**整段**：帧、通道、规则绑定、速度、循环，一样不少 ——
+                    // "在原来那段上改"是它唯一的用途。
+                    val id = nextAnimationId(folder)
+                    val name = anim.name + getString(R.string.anim_copy_suffix)
+                    if (store.saveAnimation(folder, anim.copy(id = id, name = name))) {
+                        animEditId = id
+                        animFrameIndex = 0
+                        buildAnimList()
+                        Toast.makeText(
+                            this, getString(R.string.anim_copied, name), Toast.LENGTH_SHORT,
+                        ).show()
+                    } else {
+                        Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+                    }
+                }
+                "delete" -> AlertDialog.Builder(this)
+                    // 删除要问一句：里面是用户一帧一帧抓出来的东西。
+                    .setTitle(getString(R.string.anim_delete, anim.name))
+                    .setPositiveButton(R.string.depth_remove) { _, _ ->
+                        store.deleteAnimation(folder, anim.id)
+                        if (animEditId == anim.id) {
+                            animEditId = null
+                            haltStudioPlay()
+                        }
+                        sandboxView.stopAnimation()
+                        refreshAnimations(folder)
+                        buildAnimList()
+                    }
+                    .setNegativeButton(R.string.depth_cancel, null)
+                    .show()
+            }
+            true
+        }
     }
 
     // ── 动画工作台（1.22.0）────────────────────────────────────────────────
@@ -6130,6 +6198,21 @@ class MainActivity : AppCompatActivity() {
     private fun studioBone(): String? = animBone ?: animView.selected
 
     /**
+     * 把"现在这一节"跟着预览里刚碰过的那一节走。
+     *
+     * [SkeletonView.selected] 在拖关节（以及点骨头名字）时就被设上了 —— 那是用户**刚刚**
+     * 指过的那一节，比 `animBone` 里存着的旧名字新。所以每次姿势改动都同步一次，
+     * 而时间轴上的选中也跟着挪（用户看到的高亮和"要打给谁"是同一个事实）。
+     */
+    private fun syncStudioBone() {
+        val bone = animView.selected ?: return
+        if (bone == animBone) return
+        animBone = bone
+        animKeyIndex = -1
+        animTimeline.setSelection(bone, -1, animFrameIndex)
+    }
+
+    /**
      * 「＋关键帧」：把**这一刻、这一节的当前值**记成一个关键帧。
      *
      * 同一个时刻已经有一个就直接改它（[Timeline.withKey] 的规矩），所以这一下不会插出两个
@@ -6154,7 +6237,7 @@ class MainActivity : AppCompatActivity() {
         buildAnimList()
         animStatus.text = getString(
             R.string.anim_key_added, bone, channelLabel(), formatValue(value), "%.2f".format(t),
-        )
+        ) + (if (keys.size < 2) " " + getString(R.string.anim_key_only_one) else "")
     }
 
     /**
@@ -6820,6 +6903,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 「时间轴」：把下面那一整块收起来 / 放回来（1.29.0）。
+     *
+     * 烤完一段动画之后时间轴会长出一大堆行（每根骨头一行），挡住预览 —— 而那时用户往往只是
+     * 在看效果。收起来只是**不显示**：数据还在，播放还在走，再点一下就回来。
+     */
+    private fun toggleStudioTimeline() {
+        animTimelineShown = !animTimelineShown
+        animTimelineScroll.visibility = if (animTimelineShown) View.VISIBLE else View.GONE
+        paintStudioChips()
+        animStatus.text = getString(
+            if (animTimelineShown) R.string.anim_page_hint else R.string.anim_timeline_hidden,
+        )
+    }
+
+    /** 「吸附帧 / 自由」：拖播放头和关键帧时吸不吸到帧边界上（1.29.0）。 */
+    private fun toggleStudioSnap() {
+        animSnap = !animSnap
+        animTimeline.setSnapFrames(animSnap)
+        paintStudioChips()
+        animStatus.text = getString(R.string.anim_snap_hint)
+    }
+
+    /**
      * 「参考图」：这一页的预览里画不画这套骨骼的参考图。
      *
      * 没有参考图时说清楚**去哪儿弄**（骨骼页 → 参考图），而不是给一个按了没反应的按钮。
@@ -6850,6 +6956,18 @@ class MainActivity : AppCompatActivity() {
         applyAnimBoneMode()
     }
 
+    /** 底下那条里那几个开关的字：骨骼、参考图、时间轴、吸附（开着的写 ✓）。 */
+    private fun paintStudioChips() {
+        animBonesChip.text = getString(R.string.anim_bones) + if (animShowBones) " ✓" else ""
+        findViewById<TextView>(R.id.animReference).text =
+            getString(R.string.anim_reference) + if (animShowReference) " ✓" else ""
+        findViewById<TextView>(R.id.animTimelineToggle).text =
+            getString(R.string.anim_timeline_toggle) + if (animTimelineShown) " ✓" else ""
+        findViewById<TextView>(R.id.animSnap).text = getString(
+            if (animSnap) R.string.anim_snap else R.string.anim_snap_off,
+        ) + if (animSnap) " ✓" else ""
+    }
+
     /** 底下那条里跟着状态变的字：骨骼开关、改骨骼/摆姿势、存骨骼。 */
     private fun applyAnimBoneMode() {
         animEditBones.text = getString(
@@ -6858,9 +6976,7 @@ class MainActivity : AppCompatActivity() {
         animEditBones.background = getDrawable(
             if (animBoneMode) R.drawable.menu_item_selected else R.drawable.menu_item_idle
         )
-        animBonesChip.text = getString(R.string.anim_bones) + if (animShowBones) " ✓" else ""
-        findViewById<TextView>(R.id.animReference).text =
-            getString(R.string.anim_reference) + if (animShowReference) " ✓" else ""
+        paintStudioChips()
         animSaveBones.visibility = if (animBoneMode) View.VISIBLE else View.GONE
         if (animBoneMode) animStatus.text = getString(R.string.anim_bone_mode_hint)
     }

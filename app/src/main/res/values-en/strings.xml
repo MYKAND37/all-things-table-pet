@@ -68,6 +68,15 @@
     <string name="anim_fit">Fit view</string>
     <string name="anim_bones">Bones</string>
     <string name="anim_reference">Reference</string>
+    <string name="anim_timeline_toggle">Timeline</string>
+    <string name="anim_snap">Snap to frames</string>
+    <string name="anim_snap_off">Free</string>
+    <string name="anim_row_actions">This animation</string>
+    <string name="anim_copied">Copied as "%1$s"</string>
+    <string name="anim_row_copy">Duplicate</string>
+    <string name="anim_row_rename">Name and speed</string>
+    <string name="anim_row_delete">Delete</string>
+    <string name="anim_copy_suffix"> copy</string>
     <string name="anim_edit_bones">Edit rig</string>
     <string name="anim_pose_mode">Pose</string>
     <string name="anim_save_bones">Save rig</string>

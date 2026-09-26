@@ -513,6 +513,19 @@
                             android:text="@string/anim_bones" />
 
                         <!-- 参考图：这套骨骼那张（骨骼页导入的）。默认画着 —— 它是用户选的图。 -->
+                        <!-- 时间轴整块收起来：烤完一大堆骨头之后它占掉半屏，而那时用户
+                             往往只是在看预览。 -->
+                        <TextView
+                            android:id="@+id/animTimelineToggle"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_timeline_toggle" />
+
+                        <!-- 吸附：拖播放头时吸不吸到帧边界上。 -->
+                        <TextView
+                            android:id="@+id/animSnap"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_snap" />
+
                         <TextView
                             android:id="@+id/animReference"
                             style="@style/AlignButton"

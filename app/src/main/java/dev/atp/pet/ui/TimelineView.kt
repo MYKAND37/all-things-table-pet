@@ -52,6 +52,21 @@ class TimelineView @JvmOverloads constructor(
     var playhead: Float = 0f
         private set
 
+    /**
+     * 拖播放头（和拖关键帧）时**吸不吸到帧边界**上（1.29.0）。
+     *
+     * 吸附是有用的默认（图就是在帧边界换的，关键帧落在边界上最省事），但它会挡住"两个帧之间
+     * 也可以有一个关键帧"这件事 —— 而这个功能的全部意思就是**每根骨头有自己的时刻**。所以
+     * 它必须能关。关了之后仍然吸到 0.01 秒的格子上（那是精度，不是帧）。
+     */
+    var snapFrames = true
+        private set
+
+    fun setSnapFrames(on: Boolean) {
+        snapFrames = on
+        invalidate()
+    }
+
     var selectedBone: String? = null
         private set
     var selectedFrame: Int = 0
@@ -495,12 +510,14 @@ class TimelineView @JvmOverloads constructor(
                 val lane = laneOf(row)
                 val keys = keysOf(bone)
                 val range = TimelineLayout.rangeOf(keys, channel)
+                val raw = TimelineLayout.xToTime(lane, event.x)
                 val t = TimelineLayout.snapTime(
-                    TimelineLayout.snapToFrame(
-                        TimelineLayout.xToTime(lane, event.x),
-                        TimelineLayout.frameStarts(s),
-                        TimelineLayout.FRAME_SNAP,
-                    ),
+                    if (snapFrames) {
+                        TimelineLayout.snapToFrame(raw, TimelineLayout.frameStarts(s),
+                            TimelineLayout.FRAME_SNAP)
+                    } else {
+                        raw
+                    },
                     duration(),
                 )
                 // 旋转：值跟着手指走是**错的**（把刚摆好的角度拖歪）；位置/缩放没有别的输入方式。
@@ -559,12 +576,14 @@ class TimelineView @JvmOverloads constructor(
             duration(),
         )
         val spec0 = spec ?: return
+        val raw = TimelineLayout.xToTime(lane, x)
         val t = TimelineLayout.snapTime(
-            TimelineLayout.snapToFrame(
-                TimelineLayout.xToTime(lane, x),
-                TimelineLayout.frameStarts(spec0),
-                TimelineLayout.FRAME_SNAP,
-            ),
+            if (snapFrames) {
+                TimelineLayout.snapToFrame(raw, TimelineLayout.frameStarts(spec0),
+                    TimelineLayout.FRAME_SNAP)
+            } else {
+                raw
+            },
             duration(),
         )
         playhead = t

@@ -958,6 +958,31 @@ def main():
            and "showStudioMoment(folder, step.spec, step.playhead)" in activity)
 
     print("== 关键帧用起来该有的样子（1.25.0，四条都是用户报的）==")
+    report("吸附可以关：关了之后播放头/关键帧能落在两个帧之间（1.29.0）",
+           "var snapFrames = true" in view_kt and "fun setSnapFrames(on: Boolean)" in view_kt
+           and view_kt.count("if (snapFrames)") == 2
+           and "animTimeline.setSnapFrames(animSnap)" in activity
+           and "@+id/animSnap" in layout_text and "R.string.anim_snap_hint" in activity)
+    report("时间轴那一整块能收起来（烤完一长串骨头之后它挡预览）",
+           "@+id/animTimelineToggle" in layout_text and "private fun toggleStudioTimeline(" in activity
+           and "animTimelineScroll.visibility = if (animTimelineShown)" in activity
+           and "R.string.anim_timeline_hidden" in activity)
+    report("长按一段动画：改名/复制/删除，删除仍然要问一句",
+           "row.setOnLongClickListener {" in activity
+           and "private fun askAnimationActions(" in activity
+           and "R.string.anim_row_copy" in activity and "R.string.anim_row_delete" in activity
+           and "getString(R.string.anim_delete, anim.name)" in activity)
+    report("复制是**整段**复制（帧、通道、图、绑的规则一起走）",
+           "store.saveAnimation(folder, anim.copy(id = id, name = name))" in activity)
+    report("拖关节之后，关键帧打的是**刚拖的那一节**（1.28.1 修的那条：animBone 原来会粘住）",
+           "animView.onPoseEdited = {" in activity
+           and "syncStudioBone()" in activity.split("animView.onPoseEdited")[1].split("}")[0]
+           and "private fun syncStudioBone()" in activity
+           and "val bone = animView.selected ?: return" in activity)
+    report("而且时间轴上的选中跟着挪（高亮和要打给谁是同一个事实）",
+           "animTimeline.setSelection(bone, -1, animFrameIndex)" in activity)
+    report("只有一个关键帧时把话说出来（那样它不会动，用户需要知道为什么）",
+           "R.string.anim_key_only_one" in activity)
     report("① 有关键帧也能存（不只是 ＋）：把现在的姿势写进选中的那一个",
            "private fun saveStudioKey(" in activity and "@+id/animKeySave" in layout_text
            and "Timeline.moved(keys, animKeyIndex, key.t, value)" in activity)
