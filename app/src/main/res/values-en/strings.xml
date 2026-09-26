@@ -69,6 +69,8 @@
     <string name="anim_bones">Bones</string>
     <string name="anim_reference">Reference</string>
     <string name="anim_timeline_toggle">Timeline</string>
+    <string name="anim_rows_one">This part</string>
+    <string name="anim_rows_all">All bones</string>
     <string name="anim_snap">Snap to frames</string>
     <string name="anim_snap_off">Free</string>
     <string name="anim_row_actions">This animation</string>

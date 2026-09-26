@@ -349,6 +349,13 @@ TimelineView 里，而且那一段里同时出现 `hypot` 和这个常数）、�
 长按弹出改名/复制/删除、删除仍然要问一句、**复制是整段复制**
 （`anim.copy(id = …, name = …)` 带着帧、通道、图、绑的规则）。
 
+## 时间轴只显示这一节（1.29.1）
+
+`wiring_check` 两句 —— 默认是 `animRowsAll = false`，行由
+`ordered.filter { it == animBone }.ifEmpty { ordered.take(1) }` 选出来（"现在这一节"，没有就
+给第一根有通道的骨头，免得一行都没有、连名字都没得点），底栏那个「全部骨骼 / 这一节」是那个
+"重新关掉"的开关，而且状态栏写明了换一节的入口（去右边拖它一下）。
+
 ## 免责声明确认门这一版的验证
 
 `tools/wiring_check.py` 八句 —— 一条门要成立，四件事都要在：**关不掉**（`setCancelable(false)`，

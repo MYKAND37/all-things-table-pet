@@ -459,6 +459,10 @@
     <string name="anim_bones">骨骼</string>
     <string name="anim_reference">参考图</string>
     <string name="anim_timeline_toggle">时间轴</string>
+    <string name="anim_rows_one">这一节</string>
+    <string name="anim_rows_all">全部骨骼</string>
+    <string name="anim_rows_one_hint">时间轴只显示现在这一节 —— 想换一节，去右边拖它一下（拖哪儿就是哪一节）；想看全部就按「全部骨骼」</string>
+    <string name="anim_rows_all_hint">时间轴摊开了所有有通道的骨头（按「这一节」收回来）</string>
     <string name="anim_snap">吸附帧</string>
     <string name="anim_snap_off">自由</string>
     <string name="anim_snap_hint">吸附：拖播放头/关键帧时吸到帧边界上（图就是在那儿换的）。关掉就能落在两个帧之间。</string>

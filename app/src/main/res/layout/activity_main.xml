@@ -520,6 +520,13 @@
                             style="@style/AlignButton"
                             android:text="@string/anim_timeline_toggle" />
 
+                        <!-- 这一节 / 全部骨骼：烤完之后每根骨头一行会把窗口挤满，
+                             默认只看现在这一节。 -->
+                        <TextView
+                            android:id="@+id/animRows"
+                            style="@style/AlignButton"
+                            android:text="@string/anim_rows_one" />
+
                         <!-- 吸附：拖播放头时吸不吸到帧边界上。 -->
                         <TextView
                             android:id="@+id/animSnap"

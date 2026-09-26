@@ -245,6 +245,15 @@ class MainActivity : AppCompatActivity() {
     /** 时间轴整块显示着没有（烤完一大堆骨头之后它很占地方），以及吸附开不开。 */
     private var animTimelineShown = true
     private var animSnap = true
+
+    /**
+     * 时间轴上是**只显示现在这一节**，还是把所有有通道的骨头都摊出来（1.29.1）。
+     *
+     * 「转成时间轴」会给每一根在帧里写到过的骨头都建一条通道 —— 19 行一下子把窗口挤满，
+     * 而用户当时往往只是**在给某一节调时间**。所以默认只看这一节（换骨头就是"去拖它一下"），
+     * 想一次看全部再按「全部骨骼」。
+     */
+    private var animRowsAll = false
     private var animBoneMode = false
     private var animPlaying = false
     private var animClock = 0f
@@ -468,6 +477,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.animReference).setOnClickListener { toggleStudioReference() }
         findViewById<View>(R.id.animTimelineToggle).setOnClickListener { toggleStudioTimeline() }
         findViewById<View>(R.id.animSnap).setOnClickListener { toggleStudioSnap() }
+        findViewById<View>(R.id.animRows).setOnClickListener { toggleStudioRows() }
         animEditBones.setOnClickListener { toggleStudioBoneMode() }
         animSaveBones.setOnClickListener { studioFolder()?.let { saveStudioBones(it) } }
         findViewById<View>(R.id.animKeyAdd).setOnClickListener { addStudioKey() }
@@ -6121,7 +6131,16 @@ class MainActivity : AppCompatActivity() {
         }
         animBone?.let { rows.add(it) }
         val ordered = rigBoneOrder().filter { it in rows } + rows.filter { it !in rigBoneOrder() }
-        animTimeline.setData(anim.copy(tracks = animPending ?: anim.tracks), ordered.toList(), animChannel)
+        // 只看这一节：没有"现在这一节"时给第一根有通道的骨头（不然一行都没有，用户连名字
+        // 都没得点）。换骨头的办法是**去右边拖它一下**（拖关节会把当前这一节同步过来）。
+        val shown = if (animRowsAll || ordered.isEmpty()) {
+            ordered
+        } else {
+            ordered.filter { it == animBone }.ifEmpty { ordered.take(1) }
+        }
+        animTimeline.setData(
+            anim.copy(tracks = animPending ?: anim.tracks), shown.toList(), animChannel,
+        )
         animTimeline.setPlayhead(playhead)
         animPlayhead = playhead
         animTimeline.setSelection(animBone, animKeyIndex, animFrameIndex)
@@ -6917,6 +6936,25 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * 「这一节 / 全部骨骼」：时间轴摊开所有骨头那一大排，还是只留现在这一节（1.29.1）。
+     *
+     * 烤完之后每根骨头一行、把窗口挤满 —— 用户要的是"能重新关掉"。默认关着（只看这一节），
+     * 这个按钮就是那个"重新打开/重新关掉"。
+     */
+    private fun toggleStudioRows() {
+        animRowsAll = !animRowsAll
+        val folder = studioFolder()
+        val anim = folder?.let { studioAnimation(it) }
+        if (folder != null && anim != null) {
+            refreshTimeline(folder, anim, animPlayhead)
+        }
+        paintStudioChips()
+        animStatus.text = getString(
+            if (animRowsAll) R.string.anim_rows_all_hint else R.string.anim_rows_one_hint,
+        )
+    }
+
     /** 「吸附帧 / 自由」：拖播放头和关键帧时吸不吸到帧边界上（1.29.0）。 */
     private fun toggleStudioSnap() {
         animSnap = !animSnap
@@ -6966,6 +7004,9 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.animSnap).text = getString(
             if (animSnap) R.string.anim_snap else R.string.anim_snap_off,
         ) + if (animSnap) " ✓" else ""
+        findViewById<TextView>(R.id.animRows).text = getString(
+            if (animRowsAll) R.string.anim_rows_all else R.string.anim_rows_one,
+        ) + if (!animRowsAll) " ✓" else ""
     }
 
     /** 底下那条里跟着状态变的字：骨骼开关、改骨骼/摆姿势、存骨骼。 */

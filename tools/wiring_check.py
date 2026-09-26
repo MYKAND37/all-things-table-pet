@@ -958,6 +958,14 @@ def main():
            and "showStudioMoment(folder, step.spec, step.playhead)" in activity)
 
     print("== 关键帧用起来该有的样子（1.25.0，四条都是用户报的）==")
+    report("时间轴默认**只显示现在这一节**，想看全部才摊开（1.29.1）",
+           "private var animRowsAll = false" in activity
+           and "ordered.filter { it == animBone }.ifEmpty { ordered.take(1) }" in activity
+           and "private fun toggleStudioRows(" in activity
+           and "@+id/animRows" in layout_text and "R.string.anim_rows_one_hint" in activity)
+    report("换一节的入口说清楚了（去右边拖它一下）",
+           "拖哪儿就是哪一节" in activity or "拖哪儿就是哪一节" in open(
+               os.path.join(REPO, "app/src/main/res/values/strings.xml"), encoding="utf-8").read())
     report("吸附可以关：关了之后播放头/关键帧能落在两个帧之间（1.29.0）",
            "var snapFrames = true" in view_kt and "fun setSnapFrames(on: Boolean)" in view_kt
            and view_kt.count("if (snapFrames)") == 2
