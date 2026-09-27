@@ -118,6 +118,35 @@ def drawn(layers, states, library):
     return out
 
 
+def variant_tag(folder_parts, global_ids, bone, state):
+    """镜像 CharacterStore.variantTag（1.31.2）：部位自己声明的带骨头标签，全局的用 id。
+
+    [folder_parts] 是**这一只**的部位文件（`part:hand_L -> [状态 id]`）。这里刻意把它当参数，
+    因为那个 bug 就是**查询时没把这一只传进去** —— 传了个空表，于是每一处都判成"全局的"，
+    图层上写 `出汗`、开关点亮 `hand_L:出汗`，永远对不上（灯亮着，图不画）。
+    """
+    own = folder_parts.get("part:" + bone, [])
+    return bone + ":" + state if state in own else state
+
+
+def repair_plan(layers, folder_parts, global_ids):
+    """镜像 CharacterStore.repairPartStateTags：老文件里被写坏的那些标签怎么改回来。"""
+    out = []
+    for layer in layers:
+        raw = layer.get("state", "")
+        neg = raw.startswith("!")
+        bare = raw[1:] if neg else raw
+        if not bare or ":" in bare:
+            continue
+        if bare in global_ids:
+            continue
+        bone = layer.get("bone", "")
+        if not bone or bare not in folder_parts.get("part:" + bone, []):
+            continue
+        out.append(("!" if neg else "") + bone + ":" + bare)
+    return out
+
+
 def main():
     print("no state, or a state that is on or off")
     report("no tag always draws", visible("", {}) and visible("", {"x": False}))
@@ -287,6 +316,47 @@ def main():
            drawn([{"bone": "arm", "z": 10, "art": "arm", "prio": 0},
                   {"bone": "arm", "z": 11, "state": "绷带", "art": "arm__bandage", "prio": 0}],
                  {"绷带": True}, lib) == ["arm", "arm__bandage"])
+
+    print("\n部位状态：它挂在哪个开关上（1.31.2 修的那条）")
+    parts = {"part:hand_L": ["出汗"], "part:head": ["汗"]}
+    report("这一节自己声明的状态带骨头标签",
+           variant_tag(parts, [], "hand_L", "出汗") == "hand_L:出汗")
+    report("角色声明的全局状态就是它自己的名字（同名也不歧义）",
+           variant_tag(parts, ["出汗"], "hand_L", "别的") == "别的"
+           and variant_tag({}, ["出汗"], "hand_L", "出汗") == "出汗")
+    # 这一条就是那个 bug：查询时没把这一只传进去（等于传空表），于是部位状态被判成全局的。
+    report("**查询时必须带上这一只**：空表会把部位状态判成全局状态（图就永远不画）",
+           variant_tag({}, [], "hand_L", "出汗") == "出汗"
+           and variant_tag(parts, [], "hand_L", "出汗") != "出汗")
+
+    print("\n老文件里被写坏的标签：修回来（只修错得毫无歧义的）")
+    broken = [
+        {"bone": "hand_L", "state": "出汗", "art": "hand_L__出汗"},
+        {"bone": "hand_L", "state": "!出汗", "art": "hand_L"},
+        {"bone": "hand_L", "state": "", "art": "hand_L"},
+    ]
+    report("写坏的那两层都改成带标签（`!` 也留着）",
+           repair_plan(broken, parts, []) == ["hand_L:出汗", "!hand_L:出汗"])
+    report("平时就画的那一层不动（空状态本来就不该改）",
+           len(repair_plan([{"bone": "hand_L", "state": ""}], parts, [])) == 0)
+    report("已经带标签的不重复加（修两次和修一次一样）",
+           repair_plan([{"bone": "hand_L", "state": "hand_L:出汗"}], parts, []) == [])
+    report("角色也声明了同名的 → 不碰（那可能是他真的要的全局状态）",
+           repair_plan([{"bone": "hand_L", "state": "出汗"}], parts, ["出汗"]) == [])
+    report("这一节没声明这个名字 → 不碰（宁可留着让人自己看，也不猜）",
+           repair_plan([{"bone": "hand_L", "state": "别的"}], parts, []) == [])
+    # 判据的来源：那三处查询必须把这一只传进去（`loadObjectLogic(folder)`）。
+    store_kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/data/CharacterStore.kt"),
+                    encoding="utf-8").read()
+    report("Kotlin 里没有一处**不带这一只**的查询（那个默认值已经拿掉了）",
+           "loadObjectLogic()" not in store_kt
+           and "fun loadObjectLogic(folder: CharacterFolder?)" in store_kt
+           and "loadObjectLogic(folder)[Subjects.part(bone)]" in store_kt)
+    # 三个地方要回答同一个问题（加变体 / 改叠加 / 改权重），而**判断本身只有一份**
+    # （variantTag 里那一句）：抄成三份的话，下一次改语义就会漏掉其中一两份。
+    report("三处都走同一个判断，而判断只有一份（抄一遍就多一个会忘的参数）",
+           store_kt.count("val tag = variantTag(folder, bone, state)") == 3
+           and store_kt.count("?.states?.any { it.id == state }") == 1)
 
     print("")
     if FAILURES:

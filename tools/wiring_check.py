@@ -568,10 +568,12 @@ def main():
     # 面板：一张表给「如果」和「就」共用，主体自己的在前，然后是全局的、别的部件的。
     switches = activity[activity.find("private fun switchChoices()"):]
     switches = switches[:switches.find("\n    private fun buildPetChooser")]
-    report("面板有一张开关表：主体自己的 + 全局的 + 别的部件的",
+    # 1.31.2：第三段原来走 boneNames（只骨骼），节点上的状态因此在这一栏里选不到。
+    report("面板有一张开关表：主体自己的 + 全局的 + 别的部件的（骨骼和节点都算）",
            "Subjects.stateTag(part, s.id)" in switches
            and "store.loadLogic(folder.id).states" in switches
-           and "store.loadObjectLogic(folder)[Subjects.part(bone)]?.states" in switches)
+           and "store.loadObjectLogic(folder)[Subjects.part(name)]?.states" in switches
+           and "partNames(folder)" in switches)
     report("「如果」和「就」共用这一张表（能问的就能改）",
            "switchChoices().choices" in activity and "options = switchChoices().choices" in activity)
     report("重名够不着的那些会说一声，不装作不存在",
@@ -1385,6 +1387,50 @@ def main():
                 info("%-22s %s:%d" % (name, os.path.basename(path), i + 1))
     if orphans == 0:
         report("every function is called from somewhere", True)
+
+    print("== 部位状态的图不显示：真的 bug（1.31.2）==")
+    # 用户报的是"开关能找到、能点亮，但宠物身上那张图不显示"。真因是**写文件的时候就写错了**：
+    # 判断"这个状态是不是这一节自己声明的"那三处都调了 `loadObjectLogic()`（不传 folder），
+    # 而那个默认值 null **不读任何部位文件** —— 一律判成全局状态，图层上写 `出汗`，开关点亮的
+    # 却是 `hand_L:出汗`，两边永远对不上。写坏了的是文件，所以修代码之外还得修数据。
+    report("判断「这一节自己声明的状态」时带上了这一只（不然部位状态永远判成全局）",
+           "loadObjectLogic(folder)[Subjects.part(bone)]" in store_text
+           and "loadObjectLogic()" not in store_text
+           and "fun loadObjectLogic(folder: CharacterFolder?)" in store_text)
+    report("那个会答错的默认值已经拿掉（参数必须写）",
+           "fun loadObjectLogic(folder: CharacterFolder? = null)" not in store_text)
+    report("老文件里被写坏的标签会修回来（不然用户装上新版还是不显示）",
+           "fun repairPartStateTags(folder: CharacterFolder): Int" in store_text
+           and "repairPartStateTags(folder)" in activity
+           and "R.string.part_state_tag_fixed" in activity)
+    # 两个入口各修一次：上测试场之前，和打开"部位"这一页之前（用户是在那一页看到"我那张图挂在
+    # 出汗上"的）。修完是幂等的，所以多修一次没有代价。
+    report("上测试场之前和打开部位页之前各修一次（修完幂等）",
+           activity.count("repairPartStateTags(folder)") >= 2
+           and "private fun repairPartStateTags(folder: CharacterFolder)" in activity)
+
+    print("== 部位的状态：骨骼和节点都算（1.31.2）==")
+    # "部位"在这个 App 里有两个来源：骨骼，和长在骨骼上的节点。好几处要"每一个部位"的地方
+    # 各写各的 boneNames(...)，于是**节点上的状态在那些地方一律消失**（测试场那排开关、
+    # 写规则的状态栏、把状态给某个部位），而逻辑页那一排 chip 却把节点和它的状态个数一起列着
+    # —— 用户看到的正是"我刚给那个部位建的状态不见了"。名单只有一份，就没有第二次机会漏。
+    bench_body = activity.split("private fun benchStates(")[1].split("private fun ")[0]
+    switch_body = activity.split("private fun switchChoices(")[1].split("private fun ")[0]
+    report("「每一个部位」只有一份名单（骨骼 + 节点）",
+           "private fun partNames(folder: CharacterFolder): List<String> =\n        boneNames(folder) + nodeNames(folder)" in activity
+           and "private fun partChoices(folder: CharacterFolder)" in activity)
+    report("测试场那排状态开关列到节点上的状态（不然它永远不出现）",
+           "for (part in partNames(folder))" in bench_body
+           and "boneNames(folder)" not in bench_body
+           and "Subjects.stateTag(part, state.id)" in bench_body)
+    report("写规则时的「状态」那一栏也列到节点上的状态",
+           "for (name in partNames(folder))" in switch_body
+           and "boneNames(folder)" not in switch_body
+           and "Subjects.stateTag(name, s.id)" in switch_body)
+    report("「把状态给某个部位」也能给节点（不然节点根本拿不到状态）",
+           "partNames(folder).map { name ->" in activity
+           and "Subjects.part(name) to (" in activity
+           and "private fun partChoices(" in activity)
 
     print("== 叠加：一段加在另一段上（1.31.0）==")
     # 这一句问的是"叠加能不能用上"，不是"加法对不对"（加法在 tools/anim_check.py 里逐点量过）。

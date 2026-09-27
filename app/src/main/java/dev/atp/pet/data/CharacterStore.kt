@@ -515,9 +515,7 @@ class CharacterStore(private val context: Context) {
         // The two levels may share a name -- a hand that sweats and a character that sweats are
         // two different switches -- so a drawing has to say which one it is for. See
         // Subjects.stateTag, and LayerSpec.visible, which looks the tag up as a key.
-        val local = loadObjectLogic()[Subjects.part(bone)]
-            ?.states?.any { it.id == state } == true
-        val tag = if (local) Subjects.stateTag(bone, state) else state
+        val tag = variantTag(folder, bone, state)
         return try {
             val root = JSONObject(folder.specText())
             val arr = root.optJSONArray("layers") ?: JSONArray()
@@ -575,9 +573,7 @@ class CharacterStore(private val context: Context) {
         state: String,
         overlay: Boolean,
     ): Boolean {
-        val local = loadObjectLogic()[Subjects.part(bone)]
-            ?.states?.any { it.id == state } == true
-        val tag = if (local) Subjects.stateTag(bone, state) else state
+        val tag = variantTag(folder, bone, state)
         return try {
             val root = JSONObject(folder.specText())
             val arr = root.optJSONArray("layers") ?: JSONArray()
@@ -1196,9 +1192,69 @@ class CharacterStore(private val context: Context) {
         }
     }
 
-    /** 这一张变体图挂在哪个开关上（部件自己声明的带骨头标签，全局的就用 id）。 */
+    /**
+     * 把**过去写错的部位状态标签**修回来（1.31.2）。
+     *
+     * 怎么回事：判"这个状态是不是这一节自己声明的"那三处都忘了传 folder，而
+     * `loadObjectLogic(null)` **不读任何部位文件** —— 于是它一律回答"不是"，部位状态被当成
+     * 全局状态写进图层：图层写着 `出汗`，而开关点亮的键是 `hand_L:出汗`，两边永远对不上。
+     * 用户报的那一句正是这个症状：**灯能点亮，图不画**。
+     *
+     * 修代码只让**以后**写对，已经写坏的是**文件**，所以还得把老的那些改回来 —— 不改的话，
+     * 用户装上新版会发现"那几张图还是不显示"，而他在界面上根本没有"改这一张图挂哪个状态"
+     * 这个动作（只有删掉重加）。
+     *
+     * 判据只收**错得毫无歧义**的那一种：这一层的状态是个纯 id（没有 `!`、没有冒号）、
+     * **角色没有声明它**、而**它自己那根骨头声明了它**。这时它只可能是指这根骨头的那个状态
+     * —— 全局的那一个根本不存在。带标签的、`!` 开头的、两边都声明的、这根骨头没声明的，
+     * 一律不碰（宁可留着让人自己看，也不猜）。
+     *
+     * 幂等：没有一处要改就一个字都不写。返回改了几层。
+     */
+    fun repairPartStateTags(folder: CharacterFolder): Int {
+        if (!folder.specFile.isFile) return 0
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.optJSONArray("layers") ?: return 0
+            val global = loadLogic(folder.id).states.map { it.id }.toSet()
+            val objects = loadObjectLogic(folder)
+            fun own(bone: String): Set<String> =
+                objects[Subjects.part(bone)]?.states?.map { it.id }?.toSet() ?: emptySet()
+            var fixed = 0
+            for (i in 0 until arr.length()) {
+                val l = arr.getJSONObject(i)
+                val raw = l.optString("state", "")
+                val neg = raw.startsWith("!")
+                val bare = raw.removePrefix("!")
+                // 空的（平时就画）、带冒号的（已经是对的）、`!` 之外还写了别的一律不看。
+                if (bare.isEmpty() || bare.contains(Subjects.STATE_SEPARATOR)) continue
+                if (bare in global) continue
+                val bone = l.optString("bone", "")
+                if (bone.isEmpty() || bare !in own(bone)) continue
+                l.put("state", (if (neg) "!" else "") + Subjects.stateTag(bone, bare))
+                fixed++
+            }
+            if (fixed > 0) {
+                root.put("layers", arr)
+                root.put("version", root.optInt("version", 0) + 1)
+                writeSpec(folder, root)
+            }
+            fixed
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /**
+     * 这一张变体图挂在哪个开关上：**这一节自己**声明的带骨头标签（`hand_L:出汗`），
+     * 角色的全局状态就用 id。
+     *
+     * 这一句是"部位状态"和"全局状态"同名的分界线，所以它只有这一处：另有两处（加变体、
+     * 改叠加）原来各抄了一遍，而三份都忘了传 folder —— 于是**永远**判成全局状态。
+     * 抄一遍的成本不是多几行，是多一个会忘的参数。
+     */
     private fun variantTag(folder: CharacterFolder, bone: String, state: String): String {
-        val local = loadObjectLogic()[Subjects.part(bone)]
+        val local = loadObjectLogic(folder)[Subjects.part(bone)]
             ?.states?.any { it.id == state } == true
         return if (local) Subjects.stateTag(bone, state) else state
     }
@@ -1450,7 +1506,15 @@ class CharacterStore(private val context: Context) {
      * that EXISTS AND IS EMPTY is not a file that is missing. Empty means "this thing has no
      * rules"; falling back would be the app putting back rules somebody deleted.
      */
-    fun loadObjectLogic(folder: CharacterFolder? = null): Map<String, LogicSpec> {
+    /**
+     * Every subject's own logic file for [folder] (a null folder reads only the shared props).
+     *
+     * **这个参数没有默认值是有意的**（1.31.2）：它原来自带 `= null`，而 `null` 会**静默跳过
+     * 所有部位文件** —— 于是三处"这个状态是不是部位自己声明的"都查了个空表，一律回答"不是"，
+     * 部位状态被当成全局状态写进图层（图层写 `出汗`、开关点亮 `hand_L:出汗`，永远对不上，
+     * 症状正是"灯能点亮、图不画"）。一个会答错的默认值比一个必须写的参数危险得多。
+     */
+    fun loadObjectLogic(folder: CharacterFolder?): Map<String, LogicSpec> {
         val out = LinkedHashMap<String, LogicSpec>()
         for ((subject, spec) in readObjectLogicFile(File(propsDir, OBJECT_LOGIC_FILE))) {
             out[subject] = spec

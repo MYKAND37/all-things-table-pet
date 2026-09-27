@@ -735,6 +735,7 @@
     <string name="part_own_rules">这个部件自己的规则（让「%1$s」流汗、着火、说话……）</string>
     <string name="part_files_add">＋ 加一张图</string>
     <string name="part_files_add_state">＋ 加一张状态「%1$s」的图</string>
+    <string name="part_state_tag_fixed">修好了 %1$d 张部位状态图：它们原来被挂在"全局状态"上（旧版本的 bug），所以开关能点亮、图却不画。现在挂回它自己那一节了。</string>
     <string name="part_files_none">这个部位还没有图。下面加一张，或者直接在这里导入。</string>
     <string name="part_files_delete">删掉这张图</string>
     <string name="liquid_spilled">喷了 %1$s · 去测试场看</string>

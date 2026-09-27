@@ -731,6 +731,10 @@ class MainActivity : AppCompatActivity() {
      * character is a second thing that can disagree with itself.
      */
     private fun reloadSandbox(folder: CharacterFolder): Boolean {
+        // 上测试场之前先把过去写坏的部位状态标签修回来（1.31.2）：那几张图原来永远画不出来，
+        // 而界面上没有"改这一张图挂哪个状态"这个动作 —— 不修的话用户只能删掉重加。
+        // 放在这里是因为它是"要把这一只画出来"的第一个入口，而且它**幂等**（没要改的不写盘）。
+        repairPartStateTags(folder)
         val poses = store.loadPoses(folder)
         val animations = store.loadAnimations(folder)
         // The bench starts at the stiffness 全局设置 asks for, and the chip row is moved to
@@ -1006,12 +1010,14 @@ class MainActivity : AppCompatActivity() {
         val folder = summoned ?: return emptyList()
         val out = mutableListOf<Pair<String, String>>()
         for (state in store.loadLogic(folder.id).states) out.add(state.id to state.name)
-        for (bone in boneNames(folder)) {
-            val own = store.loadObjectLogic(folder)[Subjects.part(bone)]?.states ?: continue
+        // **每一个部位**（骨骼和节点）：只走 boneNames 的话，声明在节点上的状态在这里永远
+        // 不出现 —— 而用户刚在逻辑页给那个节点建过它。见 [partNames]。
+        for (part in partNames(folder)) {
+            val own = store.loadObjectLogic(folder)[Subjects.part(part)]?.states ?: continue
             for (state in own) {
                 out.add(
-                    Subjects.stateTag(bone, state.id) to
-                        state.name + "·" + boneLabel(bone).ifEmpty { bone },
+                    Subjects.stateTag(part, state.id) to
+                        state.name + "·" + boneLabel(part).ifEmpty { part },
                 )
             }
         }
@@ -1066,13 +1072,15 @@ class MainActivity : AppCompatActivity() {
         // 最后是每一个部件自己的开关：一条规则可以问它们，和它可以问角色的 穿着 是同一件事。
         // 带标签，所以撞名也不会歧义。
         if (folder != null) {
-            for (bone in boneNames(folder)) {
-                if (bone == part) continue
-                val theirs = store.loadObjectLogic(folder)[Subjects.part(bone)]?.states ?: continue
+            // 每一个部位（骨骼和节点），理由见 partNames：少列了节点，那一节自己的状态在
+            // 「状态」这一栏里就选不到 —— 而条件里写不出它，等于这个状态没用。
+            for (name in partNames(folder)) {
+                if (name == part) continue
+                val theirs = store.loadObjectLogic(folder)[Subjects.part(name)]?.states ?: continue
                 for (s in theirs) {
                     out.add(
-                        Subjects.stateTag(bone, s.id) to
-                            s.name + "·" + boneLabel(bone).ifEmpty { bone },
+                        Subjects.stateTag(name, s.id) to
+                            s.name + "·" + boneLabel(name).ifEmpty { name },
                     )
                 }
             }
@@ -2470,6 +2478,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun buildPartFiles(folder: CharacterFolder) {
         val bone = partFolderBone
+        // 同一件事的第二个人口：用户是**先在这一页看到**"我那张图挂在出汗上"的，所以进来之前
+        // 也得修一次 —— 不然这一页上写的还是那个错的键，看到的和实际画的又是两回事。
+        repairPartStateTags(folder)
         partFilesList.removeAllViews()
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -5841,10 +5852,12 @@ class MainActivity : AppCompatActivity() {
                     val declared = store.loadObjectLogic(folder)
                     pickList(
                         getString(R.string.logic_states_to_part),
-                        boneNames(folder).map { bone ->
-                            val n = declared[Subjects.part(bone)]?.states?.size ?: 0
-                            Subjects.part(bone) to (
-                                partText(bone) +
+                        // 每一个部位（骨骼和节点）：节点也要能拿到状态，不然"状态是局部的"
+                        // 这件事在节点上根本没法发生（见 partNames）。
+                        partNames(folder).map { name ->
+                            val n = declared[Subjects.part(name)]?.states?.size ?: 0
+                            Subjects.part(name) to (
+                                partText(name) +
                                     if (n > 0) getString(R.string.logic_states_count, n) else ""
                                 )
                         },
@@ -8988,7 +9001,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun askRulePart(index: Int) {
         val rule = logicRules.getOrNull(index) ?: return
-        val parts = summoned?.let { partNames(it) } ?: emptyList()
+        val parts = summoned?.let { partChoices(it) } ?: emptyList()
         val options = mutableListOf("" to getString(R.string.logic_pick_any_part))
         options.addAll(parts)
         pickList(
@@ -9965,7 +9978,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pickBoneName(title: String, current: String?, onPick: (String) -> Unit) {
-        val parts = summoned?.let { partNames(it) } ?: emptyList()
+        val parts = summoned?.let { partChoices(it) } ?: emptyList()
         val options = mutableListOf("" to getString(R.string.logic_pick_any_part))
         options.addAll(parts)
         pickList(title, options, "", current) { id ->
@@ -10150,18 +10163,27 @@ class MainActivity : AppCompatActivity() {
      * that names a fingertip is a better answer than the finger, not a different kind of thing.
      * They are told apart in the label, which is the only place it matters.
      */
-    private fun partNames(folder: CharacterFolder): List<Pair<String, String>> {
-        val spec = CharacterSpec.parseOrNull(folder.specText())
-        val bones = spec?.bones?.map { it.name }.orEmpty()
-        val out = bones.map { b ->
+    /**
+     * 每一个部位的名字：**骨骼和节点都算**（"谁被碰到了"只有一个答案，一个叫"指尖"的节点
+     * 比那根手指更准确 —— 见 [partChoices]）。
+     *
+     * 这个函数存在的理由是一个反复犯过的错：这个仓库里有好几处要"每一个部位"，而它们各写各的
+     * `boneNames(...)`，于是**节点上的东西在那几处一律消失** —— 节点自己声明的状态在测试场那排
+     * 开关里不出现、在写规则的状态栏里选不到、也没法从「把状态给某个部位」给它。逻辑页那一排
+     * chip 却会把节点和它的状态个数一起列出来（它用的是 [partChoices]），所以看起来是"我刚建
+     * 的状态不见了"。名单只有一份，就没有第二次机会漏。
+     */
+    private fun partNames(folder: CharacterFolder): List<String> =
+        boneNames(folder) + nodeNames(folder)
+
+    /** 同上，但带给人看的标签（选择器用）：骨骼是"手 hand_L"，节点是"节点 · 指尖"。 */
+    private fun partChoices(folder: CharacterFolder): List<Pair<String, String>> =
+        boneNames(folder).map { b ->
             val zh = boneLabel(b)
             b to (if (zh.isEmpty()) b else zh + "   " + b)
-        }.toMutableList()
-        for (n in spec?.nodes.orEmpty()) {
-            out.add(n.name to (getString(R.string.rig_node_list) + " · " + n.name))
+        } + nodeNames(folder).map { n ->
+            n to (getString(R.string.rig_node_list) + " · " + n)
         }
-        return out
-    }
 
     /** The nodes of the summoned character, for the places that need them by themselves. */
     private fun nodeNames(folder: CharacterFolder): List<String> =
@@ -10203,6 +10225,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun boneLabel(bone: String): String = Labels.bone(this, bone)
+
+    /**
+     * 修老文件里被写坏的部位状态标签，修到了就说一句。
+     *
+     * 说话是必须的：用户装上新版之后，那几张**本来不显示的**图会突然出现在宠物身上 ——
+     * 没人告诉他为什么，那就是"我的宠物怎么自己变了"。这句话只说一次（修完就幂等了）。
+     */
+    private fun repairPartStateTags(folder: CharacterFolder) {
+        val fixed = store.repairPartStateTags(folder)
+        if (fixed > 0) {
+            Toast.makeText(
+                this, getString(R.string.part_state_tag_fixed, fixed), Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
 
     /** 「版本 1.12.4 · 构建 137」, read from the installed package. See buildSettingsPane. */
     private fun versionLine(): String = try {
