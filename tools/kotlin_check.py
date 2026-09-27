@@ -322,7 +322,11 @@ def check_local_function_scope():
         members = set(re.findall(r"^    (?:@\w+\s+)?(?:private |internal |override |open )*fun\s+(\w+)",
                                  text, re.M))
         # 局部函数：8 空格或更深缩进的 fun，以及它在哪个函数里面。
-        stack = []          # (depth, enclosing function name)
+        # (depth, enclosing function name, 它的缩进)。缩进要留着：**归属**只认成员函数
+        # （缩进 4），不认最近的局部函数 —— 见下面那句注释（这一版就是被它坑了一次：
+        # 新弹窗里把行放进了局部的 `fill()`，于是"最近的函数"是个局部名，规则保守地沉默了，
+        # 一个调不存在的 `row()` 一路绿到 CI）。
+        stack = []
         depth = 0
         owner_of_line = []
         # 局部函数名 -> **一组**声明它的函数。一个名字可以在两个函数里各有一个局部版本
@@ -335,15 +339,24 @@ def check_local_function_scope():
                 owner_of_line.append(stack[-1][1] if stack else "")
                 continue
             m = re.match(r"^(\s*)(?:private |internal |override |open )*fun\s+(\w+)", code)
-            owner_of_line.append(stack[-1][1] if stack else "")
+            # 归属 = 最近的**成员**函数（缩进 4）。局部函数里再声明局部函数是合法的，而
+            # "我在哪个成员函数体里"才是"这个局部名字能不能在这儿用"的答案 —— 取最近的函数
+            # 会在中间隔着一层局部函数（`askAlt` → 局部 `fill` → 调用）时退化成那个局部名，
+            # 于是这条规则选择不说话（保守），而 real bug 就从那儿溜过去了。
+            member_owner = ""
+            for entry in reversed(stack):
+                if entry[2] < 8:
+                    member_owner = entry[1]
+                    break
+            owner_of_line.append(member_owner)
             if m and len(m.group(1)) >= 8 and code.strip().endswith("{"):
                 # owner 是空的时候，这不是"某个函数里的局部函数"，而是 **companion object /
                 # object 里的成员**（它们的缩进也是 8）。那类成员本来就能被实例方法调用。
                 if stack:
                     local_decl.setdefault(m.group(2), set()).add(stack[-1][1])
-                stack.append((depth, m.group(2)))
+                stack.append((depth, m.group(2), len(m.group(1))))
             elif m and len(m.group(1)) >= 4 and code.strip().endswith("{"):
-                stack.append((depth, m.group(2)))
+                stack.append((depth, m.group(2), len(m.group(1))))
             depth += code.count("{") - code.count("}")
             while stack and depth <= stack[-1][0]:
                 stack.pop()
@@ -357,8 +370,7 @@ def check_local_function_scope():
                 if re.search(r"(?<![\w.])" + name + r"\s*\(", code):
                     here = owner_of_line[i - 1]
                     # 只在"确实身处某个**成员**函数体内、而那个函数不是有这个名字的函数"时
-                    # 才报。花括号的深度对字符串里的 `{}` 是数不准的，所以这一条宁可漏，
-                    # 不可误报：`here` 是个局部函数名时说明跟踪已经不可信，那就不说话。
+                    # 才报（`here` 是空的时候说明这一行在 object/companion 里，不说话）。
                     if here in members and here not in homes:
                         bad.append("%s:%d 调了 %s()，而它是 %s() 里的局部函数"
                                    % (os.path.basename(path), i, name, "/".join(sorted(homes))))

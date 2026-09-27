@@ -8976,6 +8976,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 一个弹窗里的「一行字 + 点开它」。
+     *
+     * 几个编辑弹窗（否则如果 / 或者 / 规则设置）都是"一列能点开的行"，各写一遍就是几处会漂的
+     * 样式（字号、内边距、圆角）。它不吃 dialog：关闭的动作由调用方在闭包里做 ——
+     * "点开另一层"和"就地改"在这几个弹窗里不一样。
+     */
+    private fun dialogRow(box: LinearLayout, text: String, onClick: () -> Unit) {
+        val view = label(text, 13f, INK)
+        view.setPadding(dp(12), dp(11), dp(12), dp(11))
+        view.background = getDrawable(R.drawable.menu_item_idle)
+        view.layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { bottomMargin = dp(4) }
+        view.setOnClickListener { onClick() }
+        box.addView(view)
+    }
+
     /** A brand new 如果, with the defaults every other "add a clause" path uses. */
     private fun newCondition(): ConditionSpec = ConditionSpec(
         kind = "stat",
@@ -10026,7 +10045,7 @@ class MainActivity : AppCompatActivity() {
             box.removeAllViews()
             box.addView(label(getString(R.string.logic_alt_hint), 11f, MUTED, bottom = 6))
             // 权重：相对值。同一级的每一支都能改，包括主「就」（它在另一个入口 —— 见 askStep）。
-            row(box, getString(R.string.logic_alt_weight, alt.weight)) {
+            dialogRow(box, getString(R.string.logic_alt_weight, alt.weight)) {
                 askNumber(getString(R.string.logic_alt_weight), alt.weight.toFloat(), 0f, 999f) { v ->
                     setAltWeight(index, step, at, v.toInt())
                     dialog.dismiss()
@@ -10034,20 +10053,20 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             for ((ai, a) in alt.actions.withIndex()) {
-                row(box, actionText(a)) {
+                dialogRow(box, actionText(a)) {
                     dialog.dismiss()
                     editingStep = step.alt(at + 1)
                     askAction(index, ai, step.alt(at + 1))
                 }
             }
-            row(box, getString(R.string.logic_module_action)) {
+            dialogRow(box, getString(R.string.logic_module_action)) {
                 val actions = alt.actions.toMutableList()
                 actions.add(ActionSpec("say", text = "……"))
                 putActions(index, actions, step.alt(at + 1))
                 dialog.dismiss()
                 askAction(index, actions.size - 1, step.alt(at + 1))
             }
-            row(box, getString(R.string.logic_alt_remove)) {
+            dialogRow(box, getString(R.string.logic_alt_remove)) {
                 removeAlt(index, step, at)
                 dialog.dismiss()
             }
@@ -10096,7 +10115,7 @@ class MainActivity : AppCompatActivity() {
                 else -> rule.elseAlts
             }
             if (alts.isNotEmpty()) {
-                row(box, getString(R.string.logic_alt_weight, weightOf())) {
+                dialogRow(box, getString(R.string.logic_alt_weight, weightOf())) {
                     askNumber(
                         getString(R.string.logic_alt_weight), weightOf().toFloat(), 0f, 999f,
                     ) { v ->
@@ -10107,25 +10126,25 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             for ((ai, a) in editTarget(rule, step).orEmpty().withIndex()) {
-                row(box, actionText(a)) {
+                dialogRow(box, actionText(a)) {
                     dialog.dismiss()
                     askAction(index, ai, step)
                 }
             }
-            row(box, getString(R.string.logic_module_action)) {
+            dialogRow(box, getString(R.string.logic_module_action)) {
                 val actions = editTarget(rule, step).orEmpty().toMutableList()
                 actions.add(ActionSpec("say", text = "……"))
                 putActions(index, actions, step)
                 dialog.dismiss()
                 askAction(index, actions.size - 1, step)
             }
-            row(box, getString(R.string.logic_module_alt)) {
+            dialogRow(box, getString(R.string.logic_module_alt)) {
                 val at = addAlt(index, step, ActionAlt(actions = listOf(ActionSpec("say", text = "……"))))
                 dialog.dismiss()
                 if (at != null) askAlt(index, step, at)
             }
             if (step.kind == Step.ELSE_IF) {
-                row(box, getString(R.string.logic_else_if_remove)) {
+                dialogRow(box, getString(R.string.logic_else_if_remove)) {
                     removeStep(index, step.index)
                     dialog.dismiss()
                 }
