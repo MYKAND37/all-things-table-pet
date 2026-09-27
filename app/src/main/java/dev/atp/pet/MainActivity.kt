@@ -7138,6 +7138,8 @@ class MainActivity : AppCompatActivity() {
      */
     private fun setStudioBase(folder: CharacterFolder, angles: Map<String, Float>) {
         val anim = studioAnimation(folder) ?: return
+        // 换基准是**改动**（它改的是这段动画怎么演），所以和其它编辑一样能撤销。
+        pushStudioUndo(anim)
         if (!writeStudioAnimation(folder, anim.copy(base = angles))) return
         val next = studioAnimation(folder) ?: return
         if (next.frames.isEmpty()) {
