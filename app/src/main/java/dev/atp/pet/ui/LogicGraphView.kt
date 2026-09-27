@@ -53,9 +53,10 @@ class LogicGraphView @JvmOverloads constructor(
      *     A gap in the 否则 list is [TIMER_ELSE], because a box cannot say which of a rule's two
      *     action lists it is in — the same reason an 否则 action box is role ELSE and not THEN.
      *
-     * [branch] is which 并行分支 row the box sits on, or -1 for the rule's own row. Both rows
-     * hold the same three boxes -- a 当, an 如果, a 就 -- and they look identical on purpose, so
-     * "which row" is the one thing a box cannot say about itself and has to be told.
+     * [row] is which row of this rule the box sits on: 0 is the rule's own row, 1.. are the rows
+     * that hang below it (「否则如果」一级一行，「或者」一支一行). The rows hold the same boxes --
+     * a 当, an 如果, a 就 -- and they look identical on purpose, so "which row" is the one thing
+     * a box cannot say about itself and has to be told.
      *
      * The view still does not know what any of it means; it reports the box and lets the
      * caller decide, which is the whole reason the drawing is testable by looking at it.
@@ -64,7 +65,7 @@ class LogicGraphView @JvmOverloads constructor(
         val role: Int,
         val lines: List<String>,
         val index: Int,
-        val branch: Int = -1,
+        val row: Int = 0,
     ) {
         companion object {
             const val WHEN = 0
@@ -76,10 +77,35 @@ class LogicGraphView @JvmOverloads constructor(
             const val TIMER = 6
             const val TIMER_ELSE = 7
 
+            /** 「或者」：挂在「就」下面的一支备选（1.32.0）。和「否则」一样是向下的一行。 */
+            const val OR = 8
+
             const val ADD_CONDITION = 1
             const val ADD_ACTION = 2
             const val ADD_ELSE = 3
+
+            /**
+             * 「否则如果」：往「否则」那一行里再加一个「如果」（1.32.0）。
+             *
+             * 和 [ADD_CONDITION] 分开，是因为它们加的东西不一样：后者给**这一行**加一个如果，
+             * 前者是**再挂一行**（否则如果）= 一条新的判断级。一个「＋」说不清这两种。
+             */
+            const val ADD_ELSE_IF = 4
+
+            /** 「或者」：给这一行的「就」再加一支备选（1.32.0）。 */
+            const val ADD_ALT = 5
         }
+    }
+
+    /**
+     * 一行**从哪里吊下来**（1.32.0）：第 [parent] 行的第 [box] 个方块底下。
+     *
+     * 原来这里只记"这一行上面有几行"（并行分支全是挂在同一个侦测器下面的，所以那么记够了）。
+     * 现在向下的行有两种挂法 —— 「否则」挂在**如果**下面、「或者」挂在**就**下面 —— 于是
+     * "挂在哪一行的第几个方块上"成了必须说出来的东西。
+     */
+    class Drop(val parent: Int, val box: Int) {
+        companion object { val NONE = Drop(-1, -1) }
     }
 
     private class Placed(val node: Node, val rule: Int, val rect: RectF)
@@ -114,7 +140,7 @@ class LogicGraphView @JvmOverloads constructor(
      * graph has to draw is a FORK -- one detector, arrows going down and splitting to each
      * executor. See RuleSpec.branches.
      */
-    private var branches: List<Int> = emptyList()
+    private var drops: List<Drop> = emptyList()
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     /** The fork that says one detector has several executors. */
@@ -149,15 +175,15 @@ class LogicGraphView @JvmOverloads constructor(
 
     /** Replace the model. Layout is recomputed; the pan and zoom are kept. */
     /**
-     * The rows, plus how many 并行分支 rows follow each one.
+     * The rows, plus where each row hangs from ([Drop], aligned with [next]).
      *
-     * A branch row is a row like any other -- it holds one executor's actions -- and the fork
-     * drawn from the rule's detector down to it is what says "these all run". The rows stay in
-     * the order the file has them, which is the one thing about rule order anybody can rely on.
+     * A row that hangs below another is one level of the same rule: 「否则如果」问下一级，
+     * 「或者」给这一行的「就」多一支备选。The rows stay in the order the file has them, which is
+     * the one thing about rule order anybody can rely on.
      */
-    fun setRules(next: List<List<Node>>, nextBranches: List<Int> = emptyList()) {
+    fun setRules(next: List<List<Node>>, nextDrops: List<Drop> = emptyList()) {
         rules = next
-        branches = nextBranches
+        drops = nextDrops
         layout()
         if (!fitted) fit()
         invalidate()
@@ -174,6 +200,9 @@ class LogicGraphView @JvmOverloads constructor(
         Node.IF -> 0xFFE08A2E.toInt()
         Node.THEN -> 0xFF2E9E6B.toInt()
         Node.ELSE -> 0xFF7A7A88.toInt()
+        // 「或者」和「否则」是同一类东西（都是向下的一行），颜色也挨着 —— 但不一样：
+        // 一个是"条件不成立"，一个是"这一支按权重挑"，混起来就该出事了。
+        Node.OR -> 0xFF8A6BA8.toInt()
         Node.CONNECTOR -> 0xFFB0752A.toInt()
         // 计时器在"就"那一段里，所以它借"就"的颜色：它是一次执行的一部分，只是先等一下。
         Node.TIMER, Node.TIMER_ELSE -> 0x662E9E6B.toInt()
@@ -185,6 +214,7 @@ class LogicGraphView @JvmOverloads constructor(
         Node.IF -> "如果"
         Node.THEN -> "就"
         Node.ELSE -> "否则"
+        Node.OR -> "或者"
         Node.CONNECTOR -> ""
         // 计时器盒子是"这里还空着"的盒子（和 ADD 一样是 ＋），里面的字说明插什么。
         else -> "＋"
@@ -312,32 +342,39 @@ class LogicGraphView @JvmOverloads constructor(
             drawNode(canvas, p)
         }
         // The forks last, on top: a line the boxes hide under is a line nobody sees.
-        drawForks(canvas)
+        drawDrops(canvas)
         canvas.restore()
     }
 
     /**
-     * 岔开: one detector with its executors forked off it, drawn (箭头向下指过去).
+     * 向下挂的行：从上面那个方块底下吊一根线，拐进这一行的第一个方块（箭头指过去）。
      *
-     * A spine drops from the detector's own box and splits -- a tick and an arrowhead into the
-     * first box of every branch row below it. The rule's own 就 is the first executor and needs
-     * no arrow, because it is on the same row as the detector it came from.
+     * 「否则」吊在**如果**底下（"这些如果都不成立时"），「或者」吊在**就**底下（"这一支的
+     * 备选"）—— 挂在哪一个方块下面 therefore 是有意思的，不是排版细节：用户看图的时候，
+     * 线的起点就是他问的问题。同一个方块下面挂好几行时，线会**并成一条主干再分叉**：
+     * 各画各的会得到一捆看不出关系的斜线。
      */
-    private fun drawForks(canvas: Canvas) {
-        for ((i, n) in branches.withIndex()) {
-            if (n <= 0 || i >= rows.size) continue
-            val parent = rows[i].firstOrNull() ?: continue
-            val last = min(i + n, rows.size - 1)
+    private fun drawDrops(canvas: Canvas) {
+        // 先按"从哪个方块下来"归堆，再一堆画一根主干。
+        val groups = LinkedHashMap<Pair<Int, Int>, MutableList<Int>>()
+        for ((i, d) in drops.withIndex()) {
+            if (d.parent < 0 || d.parent >= rows.size) continue
+            if (i >= rows.size || i == d.parent) continue
+            groups.getOrPut(d.parent to d.box) { mutableListOf() }.add(i)
+        }
+        for ((from, below) in groups) {
+            val parentRow = rows.getOrNull(from.first) ?: continue
+            val parent = parentRow.getOrNull(from.second) ?: parentRow.firstOrNull() ?: continue
             val x = (parent.rect.left + parent.rect.right) / 2f
             val top = parent.rect.bottom
             var bottom = top
-            for (b in i + 1..last) {
-                val head = rows[b].firstOrNull() ?: continue
+            for (b in below) {
+                val head = rows.getOrNull(b)?.firstOrNull() ?: continue
                 bottom = max(bottom, (head.rect.top + head.rect.bottom) / 2f)
             }
             canvas.drawLine(x, top, x, bottom, fork)
-            for (b in i + 1..last) {
-                val head = rows[b].firstOrNull() ?: continue
+            for (b in below) {
+                val head = rows.getOrNull(b)?.firstOrNull() ?: continue
                 val ty = (head.rect.top + head.rect.bottom) / 2f
                 val tx = head.rect.left
                 canvas.drawLine(x, ty, tx, ty, fork)
@@ -397,6 +434,11 @@ class LogicGraphView @JvmOverloads constructor(
     override fun onTouchEvent(event: MotionEvent): Boolean {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 图在一层会滚动的页面里，而"点一个方块"和"滚这一页"在 DOWN 那一刻长得一样。
+                // 不拦住父容器的话，手指稍微一动，父容器就把这一串触摸抢走，方块于是**点不动**
+                // —— 用户报的"方块不能点"最可能就是这一条（图自己会平移缩放，所以父容器在这块
+                // 地上本来也不该抢）。UP/CANCEL 时放回去。
+                parent?.requestDisallowInterceptTouchEvent(true)
                 lastTapAt = System.currentTimeMillis()
                 lastTapX = event.x
                 lastTapY = event.y
@@ -446,6 +488,7 @@ class LogicGraphView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                parent?.requestDisallowInterceptTouchEvent(false)
                 panning = false
                 pinchSpan = 0f
                 // A tap is a press that did not travel. Anything else was a pan, and a pan

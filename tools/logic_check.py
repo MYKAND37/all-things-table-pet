@@ -200,6 +200,26 @@ class Facts:
         return True
 
 
+def pick_weighted(weights, roll):
+    """镜像 Weights.pick（1.32.0）：按**相对权重**挑第几支。
+
+    [roll] 是 [0, total) 里的一个整数 —— 掷骰子那一步留在引擎里，所以这一句是纯函数：
+    边界（第一支、最后一支、权重 0 的那些永远轮不到）都能在本地逐点钉死。
+    总权重是 0（全填 0）时挑第一支：一条写着"就 A 或者 B"的规则什么都不做，没人能解释。
+    """
+    clamped = [max(0, min(999, w)) for w in weights]
+    total = sum(clamped)
+    if total <= 0:
+        return 0
+    at = roll % total
+    acc = 0
+    for i, w in enumerate(clamped):
+        acc += w
+        if at < acc:
+            return i
+    return max(0, len(weights) - 1)
+
+
 class Engine:
     def __init__(self, spec, seed=20260915):
         self.spec = spec
@@ -407,10 +427,10 @@ class Engine:
             return []
 
         holds = self.holds(rule)
-        # Without an else, a rule whose conditions fail is skipped WITHOUT consuming
-        # its cooldown, so it can fire the instant they become true. That is what every
-        # rule did before there was an else, and it has to keep doing it.
-        if not holds and not rule.get("else"):
+        # 没有下文（没有「否则如果」也没有「否则」）而「如果」不成立：整个跳过，**不花冷却**，
+        # 所以条件一成立就能立刻响。这是有「否则」之前每条规则的行为，必须原样留着。
+        has_else = bool(rule.get("else")) or bool(rule.get("elseIfs"))
+        if not holds and not has_else:
             return []
 
         last = self.last_fired.get(index)
@@ -422,45 +442,31 @@ class Engine:
         self.last_fired[index] = self.clock
         if rule.get("once"):
             self.fired_once.add(index)
-        # 否则 是条件**不成立**的那条路，没有岔开可谈：一个没响的侦测器上挂不了分支。
-        if not holds:
-                return self.follow(rule.get("else", []), ran)
-        branches = rule.get("branches", [])
-        if not branches:
-            return self.follow(rule.get("then", []), ran)
-        # 并行：这一个侦测器岔开的每一支都执行，按写下的顺序。规则自己的「就」是第一支。
-        out = list(self.follow(rule.get("then", []), ran))
-        for b in branches:
-            # 有自己的当的那一支不归这里管：它等自己的事件，resolve() 会交给它。
-            if isinstance(b, dict) and b.get("on"):
+        if holds:
+            return self.follow(self.pick(rule.get("thenWeight", 1), rule.get("then", []),
+                                         rule.get("alts", [])), ran)
+        # 否则如果链：从头往下问，第一个成立的做它那一支（1.32.0）。
+        for step in rule.get("elseIfs", []):
+            if not self.holds_conditions(step.get("if", [])):
                 continue
-            # 分支自己的如果：组已经说了"是"（侦测器响了、组自己的如果也成立），这一句是
-            # 这一支**自己**要问的，所以它只可能让这一支少做，不会影响别的支。
-            if isinstance(b, dict) and not self.holds_conditions(b.get("if", [])):
-                continue
-            out.extend(self.follow(b.get("actions", []) if isinstance(b, dict) else b, ran))
-        return out
+            return self.follow(self.pick(step.get("weight", 1), step.get("then", []),
+                                         step.get("alts", [])), ran)
+        return self.follow(self.pick(rule.get("elseWeight", 1), rule.get("else", []),
+                                     rule.get("elseAlts", [])), ran)
 
-    def branch_actions(self, index, rule, branch):
-        """带自己的当的分支的执行器。用的是**规则自己的**冷却和一次：一个组是一件事，
-        两个执行器各走各的节奏不是谁要的功能。
+    def pick(self, weight, actions, alts):
+        """这一支的「就」：有「或者」时按相对权重挑一支（1.32.0）。
 
-        分支自己的如果在**冷却之前**问：被看过又说了"不"的一支还没轮到过它，和一条没有
-        否则、条件不成立的规则一样，所以条件一成立就能立刻响。
+        骰子那一步用引擎自己的 rng（种子和 Kotlin 那边一样是"每个引擎一颗"），挑选那一步是
+        [pick_weighted]（纯函数），所以边界能在本地逐点断言。
         """
-        b = rule["branches"][branch]
-        if not self.holds_conditions(b.get("if", [])):
-            return []
-        last = self.last_fired.get(index)
-        cd = rule.get("cooldown", 0.0)
-        if cd > 0 and last is not None and self.clock - last < cd:
-            return []
-        if rule.get("once") and index in self.fired_once:
-            return []
-        self.last_fired[index] = self.clock
-        if rule.get("once"):
-            self.fired_once.add(index)
-        return self.follow(rule["branches"][branch]["actions"], {index})
+        if not alts:
+            return actions
+        weights = [weight] + [a.get("weight", 1) for a in alts]
+        total = sum(max(0, min(999, w)) for w in weights)
+        roll = self.rng.randrange(total) if total > 0 else 0
+        chosen = pick_weighted(weights, roll)
+        return actions if chosen == 0 else alts[chosen - 1].get("then", [])
 
     def follow(self, actions, ran):
         """跑一串动作，并追它末尾的跳转。"""
@@ -481,30 +487,14 @@ class Engine:
         out = []
         # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
         ran = set()
-        # 带自己的当的分支：它们不是规则，ran 管不到，两个监听者会各响一次。
-        branch_ran = set()
         for index, rule in enumerate(self.spec["rules"]):
-            # 规则自己的「当」和挂在它上面的分支在 fire() 里执行；**带自己的当**的分支在
-            # 同一趟里、但在这些过滤**之外**检查 —— 那正是它们的意义：它们等的是自己的
-            # 事件，所以"这条规则的当是别的东西"不能决定它们会不会被看一眼。
+            # 一条规则一个「当」（1.32.0 起「当」只有这一个）：并行分支那一版删掉了 ——
+            # 用户的原话是"跟新建一条规则没有区别"，而"另开一条规则"确实什么都做得到。
             heard = (rule.get("on") == event.get("type")
                      and self.touches(event, rule.get("part", ""))
                      and self.about_is(event, rule.get("about", "")))
             if heard:
                 out.extend(self.fire(index, rule, ran))
-            for bi, branch in enumerate(rule.get("branches", [])):
-                if not isinstance(branch, dict) or not branch.get("on"):
-                    continue
-                if branch["on"] != event.get("type"):
-                    continue
-                if not self.touches(event, branch.get("part", "")):
-                    continue
-                if not self.about_is(event, branch.get("about", "")):
-                    continue
-                if (index, bi) in branch_ran:
-                    continue
-                branch_ran.add((index, bi))
-                out.extend(self.branch_actions(index, rule, bi))
         return out
 
     def run_rule(self, index):
@@ -1444,150 +1434,188 @@ def main():
     report("换完发的 rigSwap 能被另一条规则听到", says(rig.handle("rigSwap")) == ["换好了"])
     report("rigSwap 是 Kotlin 里声明的事件", "rigSwap" in events)
 
-    print("\n并行分支：一个侦测器，岔开的每一支都执行")
-    # 「并行逻辑也有完整的侦测器和执行器，箭头是向下指过去的，就是岔开」。
-    # 这条规则自己的「当」就是组的侦测器，自己的「就」是第一支执行器，branches 里每一
-    # 项是另一支 —— **全部响**，按写下的顺序。它换掉的是一套同组随机挑一条的机制：那
-    # 东西没法有自己的侦测器和执行器（没有地方挂）。
-    def fork_engine(branches, conditions=None):
-        rules = [{
-            "on": "tick", "part": "", "if": conditions or [],
-            "then": [{"kind": "say", "text": "就"}],
-            "branches": [[{"kind": "say", "text": "支%d" % (i + 1)}] for i in range(branches)],
-        }]
-        return Engine({"stats": [], "states": [], "rules": rules})
+    print("\n否则如果链：如果 A 就 X，否则如果 B 就 Y，否则就 Z（1.32.0）")
+    # 用户要的那句话：「每一个如果后面都可以加一个否则」，而且"否则跟在多个如果后面时，就是
+    # 那些如果的反方向"。**反方向这件事由条件本身决定**：`holds_conditions` 算的是整组条件的
+    # 真值（而且/或者按德摩根），`otherwise` 就是它不成立的那一半 —— 所以"并且连着的一组"
+    # 取反成"任一不成立"，"或者连着的一组"取反成"全都不成立"，两句话都对，而且只有一处实现。
+    def step_engine(steps, else_actions, conditions=None, cooldown=0.0):
+        return Engine({
+            "stats": [{"id": "H", "name": "生命", "value": 100, "min": 0, "max": 100},
+                      {"id": "P", "name": "疼", "value": 0, "min": 0, "max": 100}],
+            "states": [], "rules": [{
+                "on": "click", "part": "", "cooldown": cooldown,
+                "if": conditions or [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+                "then": [{"kind": "say", "text": "就X"}],
+                "elseIfs": steps,
+                "else": else_actions,
+            }]})
 
-    lit = fork_engine(2)
-    out = lit.handle("tick")
-    report("两条分支全响，加上规则自己的就一共三条",
-           [a.get("text") for a in out] == ["就", "支1", "支2"], str([a.get("text") for a in out]))
-    report("顺序是写下的顺序，不是随机的",
-           all([a.get("text") for a in lit.handle("tick")] == ["就", "支1", "支2"] for _ in range(5)))
+    chain = step_engine([
+        {"if": [{"kind": "stat", "stat": "P", "op": ">", "value": 50}],
+         "then": [{"kind": "say", "text": "就Y"}]},
+    ], [{"kind": "say", "text": "否则Z"}])
+    report("第一级成立：只走第一级的就", says(chain.handle("click")) == ["就X"],
+           str(says(chain.handle("click"))))
+    chain.set("H", 10)          # 第一级不成立，第二级（P）也还没成立
+    report("第一级不成立、第二级也不成立 → 走最后的否则",
+           says(chain.handle("click")) == ["否则Z"], str(says(chain.handle("click"))))
+    chain.set("P", 80)          # 现在第二级成立了
+    report("第一级不成立 → 问第二级，第二级成立走它",
+           says(chain.handle("click")) == ["就Y"], str(says(chain.handle("click"))))
+    n_else = step_engine([
+        {"if": [{"kind": "stat", "stat": "P", "op": ">", "value": 50}],
+         "then": [{"kind": "say", "text": "就Y"}]},
+    ], [])
+    n_else.set("H", 10)
+    n_else.set("P", 10)
+    report("没有最后的否则：都不成立时什么都不做（不崩、也不硬走一支）",
+           says(n_else.handle("click")) == [], str(says(n_else.handle("click"))))
 
-    plain = Engine({"stats": [], "states": [], "rules": [
-        {"on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "A"}],
-         "branches": []},
-    ]})
-    report("没有分支的规则和以前一模一样",
-           [a.get("text") for a in plain.handle("tick")] == ["A"])
+    # 「否则」的反方向：一组"并且"连着的不成立 = 其中任一不成立；一组"或者"连着的不成立 = 全都
+    # 不成立。两句话都由 holds_conditions 一处算出来，这里各钉一条。
+    both = step_engine([], [{"kind": "say", "text": "否则Z"}], conditions=[
+        {"kind": "stat", "stat": "H", "op": ">", "value": 50, "join": "and"},
+        {"kind": "stat", "stat": "P", "op": ">", "value": 50, "join": "and"},
+    ])
+    both.set("H", 10)          # 第一个不成立
+    report("（并且）只要有一个不成立，否则就成立",
+           says(both.handle("click")) == ["否则Z"], str(says(both.handle("click"))))
+    both.set("H", 90)
+    both.set("P", 90)
+    report("（并且）两个都成立时不走否则", says(both.handle("click")) == ["就X"])
 
-    # 分支自己的当：一条有自己侦测器的分支是一条自己的线，等它自己的事件。
-    both = Engine({"stats": [], "states": [], "rules": [{
-        "on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "组的就"}],
-        "branches": [
-            {"on": "click", "part": "", "actions": [{"kind": "say", "text": "点它"}]},
-            [{"kind": "say", "text": "跟组"}],
-        ],
+    # join 写在**后面**那一条上（"和上一条怎么连"），所以 H 或者 P 要这样写。
+    anyof = step_engine([], [{"kind": "say", "text": "否则Z"}], conditions=[
+        {"kind": "stat", "stat": "H", "op": ">", "value": 50},
+        {"kind": "stat", "stat": "P", "op": ">", "value": 50, "join": "or"},
+    ])
+    anyof.set("H", 10)
+    anyof.set("P", 10)
+    report("（或者）全都不成立时否则才成立",
+           says(anyof.handle("click")) == ["否则Z"], str(says(anyof.handle("click"))))
+    anyof.set("P", 90)
+    report("（或者）有一个成立就不走否则", says(anyof.handle("click")) == ["就X"])
+
+    # 没有下文的老规则：条件不成立就整个跳过，而且**不消耗冷却**（条件一成立就能立刻响）。
+    plain_skip = Engine({
+        "stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
+        "states": [], "rules": [{
+            "on": "click", "part": "", "cooldown": 5.0,
+            "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
+            "then": [{"kind": "say", "text": "就X"}],
+        }]})
+    report("没有否则的老规则：不成立就跳过", says(plain_skip.handle("click")) == [])
+    plain_skip.set("H", 90)
+    report("而且没被冷却挡住（跳过的不算轮到过它）",
+           says(plain_skip.handle("click")) == ["就X"])
+    report("响了之后冷却照旧管着", says(plain_skip.handle("click")) == [])
+
+    print("\n「就」的或者：按相对权重挑一支做（1.32.0）")
+    # 用户要的：「就」后面能加「或者」，多个「或者」各自填权重，**哪个触发频率高**。
+    # 挑选那一步（pick_weighted）是纯函数，所以边界能逐点钉死；骰子那一步在引擎里。
+    report("权重 1:1:1：三支各占三分之一（边界逐点）",
+           [pick_weighted([1, 1, 1], r) for r in range(3)] == [0, 1, 2]
+           and [pick_weighted([1, 1, 1], r) for r in range(3, 6)] == [0, 1, 2])
+    report("权重 1:2:3：边界落在累加值上",
+           [pick_weighted([1, 2, 3], r) for r in range(6)] == [0, 1, 1, 2, 2, 2])
+    report("权重 0 的那一支永远轮不到（但不是删掉它）",
+           [pick_weighted([1, 0, 1], r) for r in range(2)] == [0, 2])
+    report("全填 0：挑第一支（什么都不做没人能解释）",
+           pick_weighted([0, 0], 0) == 0 and pick_weighted([0, 0], 7) == 0)
+    report("第一支和最后一支都够得着",
+           pick_weighted([5, 1], 0) == 0 and pick_weighted([5, 1], 5) == 1)
+    def cycle(weights):
+        """一整圈（总权重那么多次）里每一支被挑中几次。"""
+        total = sum(weights)
+        out = [0] * len(weights)
+        for r in range(total):
+            out[pick_weighted(weights, r)] += 1
+        return out
+    report("权重是相对值：1:3 和 2:6 是同一件事", cycle([1, 3]) == [1, 3] and cycle([2, 6]) == [2, 6])
+    report("负数/超大的权重被夹住，不会算出负的概率",
+           pick_weighted([-5, 2], 0) == 1 and pick_weighted([99999, 1], 0) == 0)
+    report("越界的 roll 也不会崩（取模）",
+           pick_weighted([1, 1], 99) == pick_weighted([1, 1], 99 % 2))
+
+    alt_engine = Engine({
+        "stats": [], "states": [], "rules": [{
+            "on": "tick", "part": "", "if": [],
+            "thenWeight": 1,
+            "then": [{"kind": "say", "text": "A"}],
+            "alts": [
+                {"weight": 0, "then": [{"kind": "say", "text": "B"}]},
+                {"weight": 3, "then": [{"kind": "say", "text": "C"}]},
+            ],
+        }]})
+    seen = set()
+    for _ in range(40):
+        out = says(alt_engine.handle("tick"))
+        seen.update(out)
+    report("引擎里：权重 0 的那一支一次都没出现，别的两支都出现过",
+           "B" not in seen and "A" in seen and "C" in seen, str(sorted(seen)))
+    report("每次只做**一支**（不是全都做）",
+           all(len(says(alt_engine.handle("tick"))) == 1 for _ in range(20)))
+
+    no_alt = Engine({"stats": [], "states": [], "rules": [{
+        "on": "tick", "part": "", "if": [],
+        "then": [{"kind": "say", "text": "A"}, {"kind": "say", "text": "B"}],
     }]})
-    out = both.handle("tick")
-    report("带自己的当的分支不被组的当带动",
-           [a.get("text") for a in out] == ["组的就", "跟组"], str([a.get("text") for a in out]))
-    out = both.handle("click")
-    report("它自己的事件来了才响", [a.get("text") for a in out] == ["点它"],
-           str([a.get("text") for a in out]))
-    # 分支的部位也是它自己的侦测器的一部分。
-    part = Engine({"stats": [], "states": [], "rules": [{
-        "on": "tick", "part": "", "if": [], "then": [],
-        "branches": [{"on": "click", "part": "hand_L", "actions": [{"kind": "say", "text": "手"}]}],
-    }]})
-    report("分支部位不对就不响",
-           part.resolve({"type": "click", "part": "hand_R", "value": 0.0, "prop": ""}) == [])
-    report("部位对了才响",
-           [a.get("text") for a in
-            part.resolve({"type": "click", "part": "hand_L", "value": 0.0, "prop": ""})] == ["手"])
+    report("没有「或者」的老规则：两个动作照旧都做（权重不起作用）",
+           says(no_alt.handle("tick")) == ["A", "B"], str(says(no_alt.handle("tick"))))
 
-    # 一个没响的侦测器上挂不了分支：条件不成立时走的是「否则」，分支一条都不跑。
-    blocked = Engine({"stats": [{"id": "H", "name": "生命", "value": 0, "min": 0, "max": 100}],
-                      "states": [], "rules": [{
+    else_alt = Engine({"stats": [], "states": [], "rules": [{
         "on": "tick", "part": "",
         "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
-        "then": [{"kind": "say", "text": "就"}],
-        "else": [{"kind": "say", "text": "否则"}],
-        "branches": [[{"kind": "say", "text": "支1"}]],
-    }]})
-    report("条件不成立时只有「否则」响，分支一条都不跑",
-           [a.get("text") for a in blocked.handle("tick")] == ["否则"],
-           str([a.get("text") for a in blocked.handle("tick")]))
+        "then": [],
+        "else": [{"kind": "say", "text": "E1"}],
+        "elseWeight": 0,
+        "elseAlts": [{"weight": 1, "then": [{"kind": "say", "text": "E2"}]}],
+    }], })
+    else_alt.spec["stats"] = [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}]
+    report("「否则」那一支也能有「或者」",
+           says(else_alt.handle("tick")) == ["E2"], str(says(else_alt.handle("tick"))))
 
-    print("\n分支自己的如果：每个分支自己的判断器")
-    # 「每个分支自己的判断器（如果）」。分支先有了自己的当，然后还是文件里唯一一个不能问
-    # 问题的行 —— 这一步把那个问题补上。组说了"是"之后，这一支再问自己一句。
-    fork_if = Engine({
-        "stats": [{"id": "H", "name": "生命", "value": 100, "min": 0, "max": 100}],
-        "states": [], "rules": [{
-            "on": "tick", "part": "", "if": [], "then": [{"kind": "say", "text": "就"}],
-            "branches": [
-                {"if": [{"kind": "stat", "stat": "H", "op": "<", "value": 50}],
-                 "actions": [{"kind": "say", "text": "疼"}]},
-                [{"kind": "say", "text": "总是"}],
-            ],
-        }]})
-    out = says(fork_if.handle("tick"))
-    report("条件不成立的那一支不跑，别的支照旧",
-           out == ["就", "总是"], str(out))
-    fork_if.set("H", 10)
-    out = says(fork_if.handle("tick"))
-    report("它自己的条件成立时，那一支在它的位置上响",
-           out == ["就", "疼", "总是"], str(out))
-
-    # 组自己的如果不过 = 走否则，分支一条都不跑（这条本来就有）；反过来，组的如果过了、
-    # 某一支自己的如果没过，也只有那一支安静 —— 「全部响」说的是岔开，不是每支做同一件事。
-    mix = Engine({
-        "stats": [{"id": "H", "name": "H", "value": 100, "min": 0, "max": 100},
-                  {"id": "P", "name": "P", "value": 0, "min": 0, "max": 100}],
-        "states": [], "rules": [{
-            "on": "click", "part": "",
-            "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
-            "then": [], "else": [{"kind": "say", "text": "否则"}],
-            "branches": [
-                {"if": [{"kind": "stat", "stat": "P", "op": ">", "value": 50}],
-                 "actions": [{"kind": "say", "text": "很疼"}]},
-                {"if": [{"kind": "stat", "stat": "P", "op": "<", "value": 50}],
-                 "actions": [{"kind": "say", "text": "不疼"}]},
-            ],
-        }]})
-    out = says(mix.handle("click"))
-    report("两支的条件互斥时只响成立的那一支", out == ["不疼"], str(out))
-    dead = Engine({
-        "stats": [{"id": "H", "name": "H", "value": 0, "min": 0, "max": 100}],
-        "states": [], "rules": [{
-            "on": "click", "part": "",
-            "if": [{"kind": "stat", "stat": "H", "op": ">", "value": 50}],
-            "then": [], "else": [{"kind": "say", "text": "否则"}],
-            "branches": [[{"kind": "say", "text": "支1"}]],
-        }]})
-    report("组的如果不过：只有否则，分支一条都不跑",
-           says(dead.handle("click")) == ["否则"], str(says(dead.handle("click"))))
-
-    # 带自己的当的分支：如果不过就不响，而且**不消耗组的冷却**（和没有否则的规则一样，
-    # 被看过又跳过的不算轮到过它）。响了之后冷却照旧管着。
-    own_if = Engine({
-        "stats": [{"id": "H", "name": "生命", "value": 100, "min": 0, "max": 100}],
-        "states": [], "rules": [{
-            "on": "click", "part": "", "if": [], "then": [], "cooldown": 5.0,
-            "branches": [{
-                "on": "tick", "part": "",
-                "if": [{"kind": "stat", "stat": "H", "op": "<", "value": 50}],
-                "actions": [{"kind": "say", "text": "响"}],
-            }],
-        }]})
-    report("自己的当响了，但自己的如果不过：不响", says(own_if.handle("tick")) == [])
-    own_if.set("H", 10)
-    report("条件一成立就响，没有被组的冷却挡住",
-           says(own_if.handle("tick")) == ["响"], "跳过的不算轮到过它")
-    report("响了之后，组的冷却照旧管着", says(own_if.handle("tick")) == [])
-
-    # 文件格式的两半：解析读 branch 的 "if"，落盘写 branch 的 "if"，而且有如果的分支
-    # 不能退回裸数组那种写法（裸数组装不下一个如果）。这个项目踩过一次"只加了读、忘了写"，
-    # 而 Kotlin 的 toJson 本地跑不起来 —— 所以两半在源码里点名一次。
+    # 文件格式：新增的键读写两半都要在（这个项目踩过一次"只加了读、忘了写"）。
     src = open(LOGIC_KT, encoding="utf-8").read()
-    report("解析：分支的如果从 \"if\" 读进来",
-           'conditions = condsOf(b.optJSONArray("if"))' in src)
-    report("落盘：分支的如果有值才写 \"if\"",
-           'if (b.conditions.isNotEmpty()) put("if", condJson(b.conditions))' in src)
-    report("形状：有如果的分支走长写法，不是裸数组",
-           re.search(r"if \(!b\.ownDetector && b\.part\.isEmpty\(\) && b\.about\.isEmpty\(\) &&"
-                     r"\s*\n?\s*b\.conditions\.isEmpty\(\)\s*\n?\s*\)", src) is not None)
+    report("解析：否则如果从 elseIfs 读进来",
+           'val elseIfArr = r.optJSONArray("elseIfs")' in src
+           and 'conditions = condsOf(e.optJSONArray("if"))' in src)
+    report("落盘：否则如果写回 elseIfs（有才写）",
+           '.apply { if (r.elseIfs.isNotEmpty()) put("elseIfs", elseIfs) }' in src)
+    report("解析/落盘：或者的权重两半都在（缺一半就会存不下去）",
+           'weight = raw.optInt("weight", 1)' in src
+           and '.apply { if (a.weight != 1) put("weight", a.weight) }' in src)
+    # 判据按**代码**：那个老键的名字在注释里必须还能出现（不然没人知道它被丢掉了），
+    # 但读写两半都不许再碰它。branch 这个字段在引擎和界面里也不许再出现。
+    engine_src = open(os.path.join(
+        REPO, "app/src/main/java/dev/atp/pet/engine/logic/RuleEngine.kt"), encoding="utf-8").read()
+    # 挑选那一步：上面那些边界断言量的是**这份镜像**，所以还得有一条把 Kotlin 那句钉住 ——
+    # 不然"改了 Kotlin 的挑选、镜像没改"会一路绿到底（这一版自己就踩过：反向验证时把
+    # 加权挑一支改成永远第一支，居然没有一条红）。
+    report("Kotlin 的挑选和这份镜像逐句一致（漂了会红）",
+           "fun pick(weights: List<Int>, roll: Int): Int" in src
+           and "if (sum <= 0) return 0" in src
+           and "acc += clamp(w)" in src
+           and "if (at < acc) return i" in src)
+    # 三级都走**同一个**挑选（一处 pick 收三个调用点，而不是三段各写一遍）：抄三遍就是
+    # 三个会漏的地方，而"权重没生效"这种毛病只在其中一级上出现时最难看出来。
+    report("三级（就 / 否则如果 / 否则）都走同一个挑选，骰子来自引擎自己那颗",
+           engine_src.count("pick(rule.thenWeight, rule.actions, rule.alts)") == 1
+           and engine_src.count("pick(step.weight, step.actions, step.alts)") == 1
+           and engine_src.count("pick(rule.elseWeight, rule.elseActions, rule.elseAlts)") == 1
+           and engine_src.count("Weights.pick(") == 1
+           and "random.nextInt(Weights.total(weights).coerceAtLeast(1))" in engine_src
+           and "if (alts.isEmpty()) return actions" in engine_src)
+    report("否则如果链按顺序问、第一个成立的走（不是问最后一个）",
+           "for ((ei, step) in rule.elseIfs.withIndex())" in engine_src
+           and "if (!holdsConditions(step.conditions)) continue" in engine_src)
+
+    report("并行分支已经删干净（模型里没有这个类型、读写两半都不认那个键）",
+           "BranchSpec" not in src
+           and 'optJSONArray("branches")' not in src
+           and 'put("branches"' not in src
+           and ".branches" not in src and ".branches" not in engine_src)
 
     print("")
     if FAILURES:

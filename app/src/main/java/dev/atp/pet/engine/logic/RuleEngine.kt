@@ -229,30 +229,15 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         // The rules that have FIRED during this one event. See fire() for why it is filled in
         // there and not when a rule is considered.
         val ran = mutableSetOf<Int>()
-        // 分支 with a detector of their own, once each per event: they are not rules, so `ran`
-        // does not cover them, and two listeners for one event would otherwise fire twice.
-        val branchRan = mutableSetOf<Pair<Int, Int>>()
         for ((index, rule) in spec.rules.withIndex()) {
-            // The rule's own 当, and the branches that hang off it, are fired inside fire().
-            //
-            // The branches that carry a detector of their own are checked in the SAME pass but
-            // OUTSIDE those filters, and that is the whole point of them: they are waiting for
-            // their own event, so a rule whose 当 is something else entirely must not be what
-            // decides whether they are looked at.
+            // 一个规则一个「当」（1.32.0 起「当」只有这一个）：并行分支那一版删掉了 ——
+            // 用户的原话是"跟新建一条规则没有区别"，而"另开一条规则"确实什么都做得到。
             val heard = rule.on == event.type.id &&
                 event.touches(rule.part) &&
                 // WHICH prop or particle. Two rules can otherwise be identical on the screen
                 // and behave differently for reasons nobody can see. See RuleSpec.about.
                 event.aboutIs(rule.about)
             if (heard) out.addAll(fire(index, rule, ran))
-            for ((bi, branch) in rule.branches.withIndex()) {
-                if (!branch.ownDetector) continue
-                if (branch.on != event.type.id) continue
-                if (!event.touches(branch.part)) continue
-                if (!event.aboutIs(branch.about)) continue
-                if (!branchRan.add(index to bi)) continue
-                out.addAll(branchActions(index, rule, bi))
-            }
         }
         return out
     }
@@ -282,10 +267,11 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         if (index in firedOnce) return emptyList()
 
         val holds = holds(rule)
-        // A rule whose conditions fail and which has no else is skipped WITHOUT consuming its
-        // cooldown, so it can fire the instant they become true. That is what every rule did
-        // before there was an else, and it has to keep doing it.
-        if (!holds && rule.elseActions.isEmpty()) return emptyList()
+        // 一条规则**没有下文**（没有「否则如果」也没有「否则」）而「如果」又不成立时：整个跳过，
+        // 而且**不花冷却** —— 这样它可以在条件刚成立的那一刻立刻响。这就是有「否则」之前
+        // 每一条规则的行为，必须原样留着。
+        val hasElse = rule.elseActions.isNotEmpty() || rule.elseIfs.isNotEmpty()
+        if (!holds && !hasElse) return emptyList()
 
         val last = lastFired[index]
         if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) return emptyList()
@@ -293,62 +279,35 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         ran.add(index)
         lastFired[index] = clock
         if (rule.once) firedOnce.add(index)
-        // 否则 is the path where the conditions did NOT hold, so there is nothing to fork:
-        // a detector that did not fire cannot have branches hanging off it.
-        if (!holds) {
-            log("  规则 " + (index + 1) + " → 否则")
-            return follow(rule.elseActions, ran)
-        }
-        if (rule.branches.isEmpty()) {
+        if (holds) {
             log("  规则 " + (index + 1) + " →")
-            return follow(rule.actions, ran)
+            return follow(pick(rule.thenWeight, rule.actions, rule.alts), ran)
         }
-        // 并行: every executor forked off this one detector, in the order they were written.
-        // The rule's own 就 is the first of them -- a group is a rule that grew more executors,
-        // not a second kind of thing.
-        log("  规则 " + (index + 1) + " → 并行 " + (rule.branches.size + 1) + " 支")
-        val out = follow(rule.actions, ran).toMutableList()
-        for ((bi, branch) in rule.branches.withIndex()) {
-            // A branch with its own 当 is not driven by this one; it is waiting for its own
-            // event and resolve() will hand it over when that arrives.
-            if (branch.ownDetector) continue
-            // 分支自己的如果: the group has already said yes -- its detector fired and its own
-            // 如果 held -- so this is the question this executor asks about itself, and it can
-            // only ever narrow what this one branch does. The other branches are unaffected:
-            // 全部响 is about the fork, not about every executor doing the same thing.
-            if (!holdsConditions(branch.conditions)) {
-                log("  规则 " + (index + 1) + " 的分支 " + (bi + 2) + " → 如果不对，跳过")
-                continue
-            }
-            out.addAll(follow(branch.actions, ran))
+        // 否则如果链（1.32.0）：从头往下问，第一个成立的做它那一支。顺序就是文件里的顺序。
+        for ((ei, step) in rule.elseIfs.withIndex()) {
+            if (!holdsConditions(step.conditions)) continue
+            log("  规则 " + (index + 1) + " → 否则如果 " + (ei + 1))
+            return follow(pick(step.weight, step.actions, step.alts), ran)
         }
-        return out
+        log("  规则 " + (index + 1) + " → 否则")
+        return follow(pick(rule.elseWeight, rule.elseActions, rule.elseAlts), ran)
     }
 
     /**
-     * One 并行分支's executor, for a branch that carries its own detector.
+     * 这一支的「就」：有「或者」时按相对权重**挑一支**，没有时就是它自己（1.32.0）。
      *
-     * It is the rule's 冷却 and 一次 that apply, not the branch's own: a group is one thing that
-     * happens, and two executors of it getting out of step with each other is not a feature
-     * anybody asked for. The branch's own 如果 IS checked here -- that one is the branch's, so
-     * it is asked before the group's cooldown is spent. 当 and 部位 are not: the branch said
-     * WHEN, and the event has already matched it.
+     * 掷骰子的那一步在这里（引擎自己那颗 [random]，种子按引擎给，所以一个场景能重复出来），
+     * 挑选那一步在 [Weights.pick]（纯函数，本地逐点镜像过）。分开是为了让"挑中了哪一支"
+     * 这件事可测：一个把骰子和判断搅在一起的函数，只能靠跑 App 才知道对不对。
+     *
+     * 一支都没有（比如空列表）时返回空表 —— "什么都不做"是合法的动作列表。
      */
-    private fun branchActions(index: Int, rule: RuleSpec, branch: Int): List<ActionSpec> {
-        // 分支自己的如果 comes first, and BEFORE the group's cooldown is spent: a branch that
-        // was looked at and said no has not had its turn, exactly like a rule whose conditions
-        // fail and which has no else. It can therefore fire the instant they become true.
-        if (!holdsConditions(rule.branches[branch].conditions)) {
-            log("  规则 " + (index + 1) + " 的分支 " + (branch + 2) + " → 如果不对，跳过")
-            return emptyList()
-        }
-        val last = lastFired[index]
-        if (rule.cooldown > 0f && last != null && clock - last < rule.cooldown) return emptyList()
-        if (rule.once && index in firedOnce) return emptyList()
-        lastFired[index] = clock
-        if (rule.once) firedOnce.add(index)
-        log("  规则 " + (index + 1) + " 的分支 " + (branch + 2) + " →")
-        return follow(rule.branches[branch].actions, mutableSetOf(index))
+    private fun pick(weight: Int, actions: List<ActionSpec>, alts: List<ActionAlt>): List<ActionSpec> {
+        if (alts.isEmpty()) return actions
+        val weights = listOf(weight) + alts.map { it.weight }
+        val chosen = Weights.pick(weights, random.nextInt(Weights.total(weights).coerceAtLeast(1)))
+        if (chosen == 0) return actions
+        return alts[chosen - 1].actions
     }
 
     /**

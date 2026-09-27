@@ -300,40 +300,34 @@ data class ActionSpec(
  * that should happen exactly once in a life, like dying.
  */
 /**
- * One 并行分支: its own detector, and the executor that answers it.
+ * 一支「就」的备选：`就 A 或者 B 或者 C`（1.32.0）。
  *
- * 「并行逻辑也有完整的侦测器和执行器」, and then 「分支没有侦测器，加上」: a branch is not just a
- * second action list hanging off the group's 当, it is a LINE of its own -- its own trigger,
- * beside the group's. Two triggers with their lines drawn parallel is what the owner asked for
- * at the very beginning, and a branch that cannot say WHEN is only half of that.
+ * 多支之间是**按相对权重挑一支做**，不是都做 —— 「哪个触发频率高」正是权重在说的那件事。
+ * 权重是**相对**的（1 / 2 / 3 就是 1:2:3 的概率），不用凑总数：凑总数的话，改一支就得改
+ * 其他所有支，而用户想说的只是"这一支多一点"。[Weights.pick] 是挑选那一步，纯函数。
  *
- * An empty [on] means "同一个当": the branch fires with the group's detector, which is what a
- * branch that has not been given one should do. Set it and the branch fires on THAT event
- * instead -- the group's own 当 no longer reaches it, because a line with its own trigger is
- * not also driven by somebody else's.
+ * 主「就」自己也是一支（它的权重写在 [RuleSpec.thenWeight] 上）：没有「或者」时那一份权重
+ * 没有意义，行为就是老行为（全部做）。
  */
-data class BranchSpec(
-    val on: String = "",
-    val part: String = "",
-    val about: String = "",
-    /**
-     * 分支自己的如果: what has to be true for THIS executor to run.
-     *
-     * A branch is a line, and a line has three boxes, not two: it was given a 当 of its own and
-     * then it was still the only line in the file that could not ask a question. The owner asked
-     * for the missing one in as many words: 「每个分支自己的判断器（如果）」.
-     *
-     * Empty means "no question", exactly like a rule with no 如果: the branch runs whenever its
-     * detector fires. The branch's conditions are checked whether the branch brought its own 当
-     * or hangs off the group's -- in the second case the group's conditions have already held,
-     * and this is the extra one that belongs to this executor alone.
-     */
-    val conditions: List<ConditionSpec> = emptyList(),
+data class ActionAlt(
+    val weight: Int = 1,
     val actions: List<ActionSpec> = emptyList(),
-) {
-    /** Does this branch have a detector of its own, or does it hang off the group's? */
-    val ownDetector: Boolean get() = on.isNotEmpty()
-}
+)
+
+/**
+ * 「否则如果」：上面那些都不成立时，才轮到问它（1.32.0）。
+ *
+ * 一条规则因此是一串 if / else if / else：主「如果」→ 一级级往下的「否则如果」→ 最后的
+ * 「否则」（没有条件，兜底）。每一级有它**自己**的「如果」、自己的「就」、自己的「或者」，
+ * 所以"一级里再分几种情况"不需要再嵌一层结构。
+ */
+data class ElseIfSpec(
+    val conditions: List<ConditionSpec> = emptyList(),
+    /** 这一级的「就」的权重（只在它有「或者」时起作用）。 */
+    val weight: Int = 1,
+    val actions: List<ActionSpec> = emptyList(),
+    val alts: List<ActionAlt> = emptyList(),
+)
 
 data class RuleSpec(
     val on: String,
@@ -353,6 +347,27 @@ data class RuleSpec(
      */
     val elseActions: List<ActionSpec> = emptyList(),
     /**
+     * 主「就」这一支的权重，只在它有「或者」时起作用（1.32.0）。
+     *
+     * 没有「或者」时它是 1，而且**不起作用**：一支的时候没有"挑"这回事，行为和老文件完全
+     * 一样（照旧做全部动作）。
+     */
+    val thenWeight: Int = 1,
+    /** 「就」后面的「或者」：多支备选，按相对权重挑一支（1.32.0）。 */
+    val alts: List<ActionAlt> = emptyList(),
+    /**
+     * 「否则如果」链（1.32.0）：主「如果」不成立时，**从头往下问**，第一个成立的做它那一支；
+     * 一个都不成立才轮到 [elseActions]。
+     *
+     * 一条规则的读法因此是一句话：「如果 A 就 X，否则如果 B 就 Y，否则就 Z」。级数没有上限，
+     * 顺序就是文件里的顺序（和规则本身一样，顺序是唯一能靠得住的东西）。
+     */
+    val elseIfs: List<ElseIfSpec> = emptyList(),
+    /** 最后那个「否则」的权重，同上（只在它有「或者」时起作用）。 */
+    val elseWeight: Int = 1,
+    /** 最后那个「否则」的「或者」分支。 */
+    val elseAlts: List<ActionAlt> = emptyList(),
+    /**
      * WHICH prop or particle this rule is about, or empty for "any of them".
      *
      * The event already carried it ([GameEvent.prop] and [GameEvent.particle]) and the log
@@ -362,28 +377,43 @@ data class RuleSpec(
      * thing.
      */
     val about: String = "",
-    /**
-     * 并行分支: the executors that fork off this rule's detector.
-     *
-     * The owner asked for this in as many words: 「并行逻辑也有完整的侦测器和执行器，箭头是向下
-     * 指过去的，就是岔开」. So a rule with branches is a GROUP, and it has the whole of a rule:
-     * its own 当 is the group's detector, its own 如果 is the group's condition, and [actions]
-     * is its first executor -- each entry here is ANOTHER executor, forked off the same 当.
-     *
-     * Every branch RUNS. This replaced a 随机组 that shared a name and rolled once between its
-     * members: that was a way of saying "either A or B", it could not have a detector or an
-     * executor of its own (there was nothing to hang them on), and it is gone.「全部响」 is what
-     * the owner asked for when the two were put side by side.
-     *
-     * [elseActions] is deliberately NOT forked: 否则 is the path where the conditions did not
-     * hold, and there is nothing to fork from a detector that did not fire.
-     *
-     * The group's own 如果 is the group's condition. A branch may carry one of its own
-     * ([BranchSpec.conditions]) and that one belongs to the executor alone: it is asked after
-     * the group has already said yes, so it can only ever narrow what this one branch does.
-     */
-    val branches: List<BranchSpec> = emptyList(),
 )
+
+/**
+ * 「或者」的挑选：按**相对权重**在几支里挑一支（1.32.0）。
+ *
+ * 单独一个 object 而不是写在引擎里，是为了让"挑选"这一步是**纯函数**：掷骰子那一步
+ * （`Random.nextInt(total)`）留在引擎里，[pick] 只吃一个 [0, total) 的整数 —— 于是它可以
+ * 在本地被逐点镜像和测试（tools/logic_check.py），而"哪一支被挑中"这件事不靠跑 App 才知道。
+ */
+object Weights {
+    /** 权重是让人填的小整数：0 = 永不（除非全都 0），上限只是防手滑打出一串 9。 */
+    const val MIN = 0
+    const val MAX = 999
+
+    fun clamp(w: Int): Int = w.coerceIn(MIN, MAX)
+
+    /** 总权重。全 0 时按"总是第一支"处理（见 [pick]）。 */
+    fun total(weights: List<Int>): Int = weights.sumOf { clamp(it) }
+
+    /**
+     * 挑第几支。[roll] 是 [0, total) 里的一个整数。
+     *
+     * 全填 0 时挑**第一支**，而不是"什么都不做"：一条写着"就 A 或者 B"的规则什么都不做，
+     * 是没人能解释的行为；而"我把权重都填成 0"最接近的意思就是"还是走第一支"。
+     */
+    fun pick(weights: List<Int>, roll: Int): Int {
+        val sum = total(weights)
+        if (sum <= 0) return 0
+        val at = ((roll % sum) + sum) % sum
+        var acc = 0
+        for ((i, w) in weights.withIndex()) {
+            acc += clamp(w)
+            if (at < acc) return i
+        }
+        return weights.lastIndex.coerceAtLeast(0)
+    }
+}
 
 /** What a rule can do, with the parameter the editor has to ask for. */
 enum class ActionKind(val id: String, val label: String, val needs: String) {
@@ -659,9 +689,10 @@ class LogicSpec(
             }
 
             // One place that knows how an action is written down. It was inline three times
-            // (then, else, and now the branches), which is three places for a new action field
-            // to be forgotten in -- and a forgotten field is an action that silently loses a
-            // setting every time the file is saved.
+            // (then, else, and the branches), which is three places for a new action field to be
+            // forgotten in -- and a forgotten field is an action that silently loses a setting
+            // every time the file is saved. 1.32.0 added two more lists to that set (每一级
+            // 「否则如果」的 then、每一支「或者」的 then), which is exactly why it stays one place.
             fun actionsOf(arr: JSONArray?): List<ActionSpec> =
                 (0 until (arr?.length() ?: 0)).map { j ->
                     val a = arr!!.getJSONObject(j)
@@ -680,8 +711,9 @@ class LogicSpec(
                     )
                 }
 
-            // Same argument as actionsOf, one box up the chain: a branch grew an 如果, which
-            // would have been the second place that knows how a condition is written down.
+            // Same argument as actionsOf, one box up the chain: the 否则如果 steps each carry an
+            // 如果, which would have been the second place that knows how a condition is written
+            // down.
             fun condsOf(arr: JSONArray?): List<ConditionSpec> =
                 (0 until (arr?.length() ?: 0)).map { j ->
                     val c = arr!!.getJSONObject(j)
@@ -704,7 +736,18 @@ class LogicSpec(
                 val condArr = r.optJSONArray("if")
                 val actArr = r.optJSONArray("then")
                 val elseArr = r.optJSONArray("else")
-                val branchArr = r.optJSONArray("branches")
+                // 否则如果链（1.32.0）。老的 `branches` 键**不再读**：并行分支这一版删掉了
+                // （用户的原话是"跟新建一条规则没有区别"），老文件里还留着的那一段会被忽略，
+                // 下一次存盘就没了 —— 这是有意选的"直接删"，不是漏读。
+                val elseIfArr = r.optJSONArray("elseIfs")
+                fun altsOf(arr: JSONArray?): List<ActionAlt> =
+                    (0 until (arr?.length() ?: 0)).map { k ->
+                        val raw = arr!!.getJSONObject(k)
+                        ActionAlt(
+                            weight = raw.optInt("weight", 1),
+                            actions = actionsOf(raw.optJSONArray("then")),
+                        )
+                    }
                 RuleSpec(
                     on = r.optString("on", "tick"),
                     part = r.optString("part", ""),
@@ -713,27 +756,22 @@ class LogicSpec(
                     about = r.optString("about", ""),
                     conditions = condsOf(condArr),
                     actions = actionsOf(actArr),
-                    branches = (0 until (branchArr?.length() ?: 0)).map { k ->
-                        // A bare array is how branches were written before they could have a
-                        // detector of their own: it means "同一个当", and files in that shape
-                        // have to keep working.
-                        val raw = branchArr!!.get(k)
-                        if (raw is JSONArray) {
-                            BranchSpec(actions = actionsOf(raw))
-                        } else {
-                            val b = branchArr.getJSONObject(k)
-                            BranchSpec(
-                                on = b.optString("on", ""),
-                                part = b.optString("part", ""),
-                                about = b.optString("about", ""),
-                                conditions = condsOf(b.optJSONArray("if")),
-                                actions = actionsOf(b.optJSONArray("then")),
-                            )
-                        }
-                    },
                     cooldown = r.optDouble("cooldown", 0.0).toFloat(),
                     once = r.optBoolean("once", false),
                     elseActions = actionsOf(elseArr),
+                    thenWeight = r.optInt("thenWeight", 1),
+                    alts = altsOf(r.optJSONArray("alts")),
+                    elseIfs = (0 until (elseIfArr?.length() ?: 0)).map { k ->
+                        val e = elseIfArr!!.getJSONObject(k)
+                        ElseIfSpec(
+                            conditions = condsOf(e.optJSONArray("if")),
+                            weight = e.optInt("weight", 1),
+                            actions = actionsOf(e.optJSONArray("then")),
+                            alts = altsOf(e.optJSONArray("alts")),
+                        )
+                    },
+                    elseWeight = r.optInt("elseWeight", 1),
+                    elseAlts = altsOf(r.optJSONArray("elseAlts")),
                 )
             }
             return LogicSpec(stats, rules, states, liquids, particles)
@@ -830,28 +868,28 @@ class LogicSpec(
                     return arr
                 }
                 val acts = actionJson(r.actions)
-                val branches = JSONArray()
-                for (b in r.branches) {
-                    // A branch with nothing of its own stays a bare array: it is an executor,
-                    // and saying "when: nothing" in the file would be noise. An 如果 is NOT
-                    // nothing -- it is a question the branch asks -- so it brings the long
-                    // form with it, and an empty 当 next to it still means 跟组一样.
-                    if (!b.ownDetector && b.part.isEmpty() && b.about.isEmpty() &&
-                        b.conditions.isEmpty()
-                    ) {
-                        branches.put(actionJson(b.actions))
-                    } else {
-                        branches.put(
+                // 「或者」的写法：一支一个对象，权重只在不是 1 的时候写出去（和别的默认值一样，
+                // "没选过的东西不长出一个键"）。
+                fun altsJson(alts: List<ActionAlt>): JSONArray {
+                    val arr = JSONArray()
+                    for (a in alts) {
+                        arr.put(
                             JSONObject()
-                                .put("on", b.on)
-                                .put("part", b.part)
-                                .apply { if (b.about.isNotEmpty()) put("about", b.about) }
-                                // Written only when it was chosen, like every other default:
-                                // a branch that asks nothing does not grow a key that says so.
-                                .apply { if (b.conditions.isNotEmpty()) put("if", condJson(b.conditions)) }
-                                .put("then", actionJson(b.actions))
+                                .apply { if (a.weight != 1) put("weight", a.weight) }
+                                .put("then", actionJson(a.actions))
                         )
                     }
+                    return arr
+                }
+                val elseIfs = JSONArray()
+                for (e in r.elseIfs) {
+                    elseIfs.put(
+                        JSONObject()
+                            .apply { if (e.conditions.isNotEmpty()) put("if", condJson(e.conditions)) }
+                            .apply { if (e.weight != 1) put("weight", e.weight) }
+                            .put("then", actionJson(e.actions))
+                            .apply { if (e.alts.isNotEmpty()) put("alts", altsJson(e.alts)) }
+                    )
                 }
                 val elses = actionJson(r.elseActions)
                 rules.put(
@@ -859,11 +897,15 @@ class LogicSpec(
                         .put("on", r.on).put("part", r.part)
                         .put("cooldown", r.cooldown.toDouble()).put("once", r.once)
                         .put("if", condJson(r.conditions)).put("then", acts).put("else", elses)
-                        // Only when it was chosen: a rule that is about anything does not
-                        // grow a key that says "anything", and a rule with no branches does
-                        // not grow an empty fork.
+                        // Only when it was chosen: a rule that is about anything does not grow a
+                        // key that says "anything", and a rule with no 或者 does not grow an
+                        // empty alternatives list.
                         .apply { if (r.about.isNotEmpty()) put("about", r.about) }
-                        .apply { if (r.branches.isNotEmpty()) put("branches", branches) }
+                        .apply { if (r.thenWeight != 1) put("thenWeight", r.thenWeight) }
+                        .apply { if (r.alts.isNotEmpty()) put("alts", altsJson(r.alts)) }
+                        .apply { if (r.elseIfs.isNotEmpty()) put("elseIfs", elseIfs) }
+                        .apply { if (r.elseWeight != 1) put("elseWeight", r.elseWeight) }
+                        .apply { if (r.elseAlts.isNotEmpty()) put("elseAlts", altsJson(r.elseAlts)) }
                 )
             }
             root.put("rules", rules)

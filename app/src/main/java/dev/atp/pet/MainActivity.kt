@@ -35,8 +35,10 @@ import dev.atp.pet.data.CharacterStore
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.fluid.LiquidSpec
 import dev.atp.pet.engine.logic.ActionKind
+import dev.atp.pet.engine.logic.ActionAlt
+import dev.atp.pet.engine.logic.ElseIfSpec
+import dev.atp.pet.engine.logic.Weights
 import dev.atp.pet.engine.logic.ActionSpec
-import dev.atp.pet.engine.logic.BranchSpec
 import dev.atp.pet.engine.logic.CompareOp
 import dev.atp.pet.engine.logic.ConditionSpec
 import dev.atp.pet.engine.logic.Joins
@@ -525,27 +527,23 @@ class MainActivity : AppCompatActivity() {
         logicFolderBar = findViewById(R.id.logicFolderBar)
         logicBar = findViewById(R.id.logicBar)
         logicGraph.onTap = { rule, node ->
-            // A box on a 并行分支 row: the same three boxes as the rule's own row, belonging to
-            // a different line. See LogicGraphView.Node.branch.
-            if (node.branch >= 0) {
-                when (node.role) {
-                    LogicGraphView.Node.WHEN -> askBranch(rule, node.branch)
-                    LogicGraphView.Node.IF -> askCondition(rule, node.index, node.branch)
-                    LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index, node.branch)
-                    LogicGraphView.Node.ADD -> addModule(rule, node.index, node.branch)
-                    LogicGraphView.Node.TIMER -> askTimer(rule, node.index, false, node.branch)
-                    // The row's own label ("分支 2 · 都会响") is the way into the branch.
-                    LogicGraphView.Node.ELSE -> askBranch(rule, node.branch)
-                    else -> askAction(rule, node.index, branch = node.branch)
-                }
-            } else when (node.role) {
+            // 图上每一个方块都点得开它自己那件事（1.32.0 的判据就是这一条：**没有点不开的
+            // 方块**）。行 → 步 的映射由 buildLogicPane 建图时一起建（[logicRowSteps]），
+            // 因为"哪一行是哪一步"是**建的人**知道的，图只管画和报坐标。
+            val step = logicStepOf(rule, node.row)
+            when (node.role) {
                 LogicGraphView.Node.WHEN -> askRuleSettings(rule)
-                LogicGraphView.Node.IF -> askCondition(rule, node.index)
-                LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index)
-                LogicGraphView.Node.ADD -> addModule(rule, node.index)
-                LogicGraphView.Node.TIMER -> askTimer(rule, node.index, false, -1)
-                LogicGraphView.Node.TIMER_ELSE -> askTimer(rule, node.index, true, -1)
-                else -> askAction(rule, node.index, node.role == LogicGraphView.Node.ELSE)
+                LogicGraphView.Node.IF -> askCondition(rule, node.index, step)
+                LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index, step)
+                LogicGraphView.Node.ADD -> addModule(rule, node.index, step)
+                LogicGraphView.Node.TIMER, LogicGraphView.Node.TIMER_ELSE ->
+                    askTimer(rule, node.index, step)
+                // 一支「或者」：点它改它的权重和动作。
+                LogicGraphView.Node.OR -> askAlt(rule, step, node.index)
+                // 「否则」那一格：主行上它是「＋否则」（还没加），向下的行上它是那一步的标题。
+                LogicGraphView.Node.ELSE ->
+                    if (node.row == 0) toggleElse(rule) else askStep(rule, step)
+                else -> askAction(rule, node.index, step)
             }
         }
         skeletonView = findViewById(R.id.skeletonView)
@@ -5212,161 +5210,202 @@ class MainActivity : AppCompatActivity() {
      */
     private fun buildLogicPane() {
         val graph = mutableListOf<List<LogicGraphView.Node>>()
-        val counts = mutableListOf<Int>()
+        val drops = mutableListOf<LogicGraphView.Drop>()
+        val rowSteps = mutableListOf<MutableList<Step>>()
         for ((ri, rule) in logicRules.withIndex()) {
-            val row = mutableListOf<LogicGraphView.Node>()
-            val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
-            val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
-            val with = if (rule.branches.isEmpty()) "" else " · 并行 " + (rule.branches.size + 1) + " 支"
-            row.add(
-                LogicGraphView.Node(
-                    LogicGraphView.Node.WHEN,
-                    listOf(Labels.event(this, EventType.of(rule.on)) + who + with + where), ri,
-                )
-            )
+            val rows = mutableListOf<List<LogicGraphView.Node>>()
+            val steps = mutableListOf<Step>()
+            val mine = mutableListOf<LogicGraphView.Drop>()
+            // 每一行**第一个「就」方块**在行内的下标：「或者」那一行就挂在这个方块底下
+            // （挂在哪一个方块下面是有意思的，不是排版细节）。
+            val thenAtOf = mutableListOf<Int>()
 
-            // 如果 is a list of MODULES: each clause is a box, and the connector between two
-            // of them is a box of its own that can be flipped. A rule with no clause at all
-            // still reads as one, and says so.
-            if (rule.conditions.isEmpty()) {
-                row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1))
-            } else {
-                for ((ci, c) in rule.conditions.withIndex()) {
-                    if (ci > 0) {
-                        row.add(
-                            LogicGraphView.Node(
-                                LogicGraphView.Node.CONNECTOR, listOf(Labels.join(this, c.join)), ci,
-                            )
-                        )
-                    }
-                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf(conditionText(c)), ci))
-                }
-            }
-            row.add(
-                LogicGraphView.Node(
-                    LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
-                    LogicGraphView.Node.ADD_CONDITION,
-                )
-            )
-
-            // 执行器之间（和第一个执行器之前）各留一个「＋计时器」的盒子：一条规则是一串
-            // 顺序执行，「先做 A，等两秒，再做 B」这句话以前写不出来 —— 行尾那个「＋动作」
-            // 只会往最后追加，计时器落在最后一个执行器后面，什么也等不到。见 askTimer。
-            for ((ai, a) in rule.actions.withIndex()) {
-                if (ai == 0) row.add(timerNode(0, -1, elseList = false))
-                row.add(LogicGraphView.Node(LogicGraphView.Node.THEN, listOf(actionText(a)), ai))
-                if (ai < rule.actions.size - 1) row.add(timerNode(ai + 1, -1, elseList = false))
-            }
-            row.add(
-                LogicGraphView.Node(
-                    LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                LogicGraphView.Node.ADD_ACTION,
-                )
-            )
-
-            // The else branch continues the same line rather than branching geometrically.
-            // A row that reads left to right is still unambiguous, and a real fork would
-            // need a layout that reserves space for the shorter side -- which is a lot of
-            // machinery for a box that says 否则 on it.
-            if (rule.elseActions.isEmpty()) {
-                row.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else)),
-                        LogicGraphView.Node.ADD_ELSE,
-                    )
-                )
-            } else {
-                row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf("都不成立时"), -1))
-                for ((ai, a) in rule.elseActions.withIndex()) {
-                    if (ai == 0) row.add(timerNode(0, -1, elseList = true))
-                    row.add(LogicGraphView.Node(LogicGraphView.Node.ELSE, listOf(actionText(a)), ai))
-                    if (ai < rule.elseActions.size - 1) {
-                        row.add(timerNode(ai + 1, -1, elseList = true))
-                    }
-                }
-                row.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                        LogicGraphView.Node.ADD_ELSE,
-                    )
-                )
-            }
-            graph.add(row)
-            counts.add(rule.branches.size)
-            // One row per 并行分支, immediately under the rule it forks from: the graph draws the
-            // fork downwards, so "below" is what the picture means.
-            for ((bi, branch) in rule.branches.withIndex()) {
-                val bRow = mutableListOf<LogicGraphView.Node>()
-                // A branch with a 当 of its own gets a WHEN box like any other detector; one
-                // that hangs off the group's shows the fork's own label instead.
-                if (branch.ownDetector) {
-                    val where = if (branch.part.isEmpty()) "" else " · " + partText(branch.part)
-                    bRow.add(
-                        LogicGraphView.Node(
-                            LogicGraphView.Node.WHEN,
-                            listOf(Labels.event(this, EventType.of(branch.on)) + where), -1, bi,
-                        )
-                    )
-                }
-                bRow.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ELSE,
-                        listOf(getString(R.string.logic_branch) + " " + (bi + 2), "都会响"),
-                        -1, bi,
-                    )
-                )
-                // 分支自己的如果：the same boxes the rule's own 如果 is made of, because it is the
-                // same question asked one line down -- and a branch with none reads as 总是,
-                // for the same reason a rule with none does.
-                if (branch.conditions.isEmpty()) {
-                    bRow.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, bi))
+            /**
+             * 造一行：这一步的骨架（如果 / 就 / ＋）。
+             *
+             * [drop] 是它从哪儿吊下来（[LogicGraphView.Drop.NONE] = 顶行）。
+             * [head] 是行首那一格的字（顶行是「当 …」，向下的行是「否则如果 2」「否则」）。
+             * 返回 (最后那个如果方块的下标, 第一个就方块的下标) —— 后面挂「否则」和「或者」
+             * 要用它们：否则吊在**如果**下面，或者吊在**就**下面。
+             */
+            fun addRow(
+                step: Step,
+                drop: LogicGraphView.Drop,
+                head: List<String>?,
+            ): Pair<Int, Int> {
+                val row = mutableListOf<LogicGraphView.Node>()
+                if (head != null) {
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.WHEN, head, -1, rows.size))
                 } else {
-                    for ((ci, c) in branch.conditions.withIndex()) {
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ELSE,
+                            listOf(if (step.kind == Step.ELSE) "否则" else "否则如果 ${step.index + 1}"),
+                            -1,
+                            rows.size,
+                        )
+                    )
+                }
+                var ifAt = 0
+                val conditions = editConditions(rule, step).orEmpty()
+                if (conditions.isEmpty()) {
+                    // 一个「如果」都没有 = 总是（和以前一样：一条链上有个洞读起来像失误）。
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, rows.size))
+                    ifAt = row.size - 1
+                } else {
+                    for ((ci, c) in conditions.withIndex()) {
                         if (ci > 0) {
-                            bRow.add(
+                            row.add(
                                 LogicGraphView.Node(
                                     LogicGraphView.Node.CONNECTOR, listOf(Labels.join(this, c.join)),
-                                    ci, bi,
+                                    ci, rows.size,
                                 )
                             )
                         }
-                        bRow.add(
+                        row.add(
                             LogicGraphView.Node(
-                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, bi,
+                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, rows.size,
+                            )
+                        )
+                        ifAt = row.size - 1
+                    }
+                }
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
+                        LogicGraphView.Node.ADD_CONDITION, rows.size,
+                    )
+                )
+                // 执行器之间（和第一个之前）各留一个「＋计时器」：一条规则是一串顺序执行。
+                val actions = editTarget(rule, step).orEmpty()
+                val elseLike = step.isElse
+                var thenAt = -1
+                for ((ai, a) in actions.withIndex()) {
+                    if (ai == 0) row.add(timerNode(0, rows.size, elseLike))
+                    row.add(
+                        LogicGraphView.Node(
+                            if (elseLike) LogicGraphView.Node.ELSE else LogicGraphView.Node.THEN,
+                            listOf(actionText(a)), ai, rows.size,
+                        )
+                    )
+                    if (thenAt < 0) thenAt = row.size - 1
+                    if (ai < actions.size - 1) row.add(timerNode(ai + 1, rows.size, elseLike))
+                }
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
+                        LogicGraphView.Node.ADD_ACTION, rows.size,
+                    )
+                )
+                if (thenAt < 0) thenAt = row.size - 1
+                rows.add(row)
+                steps.add(step)
+                mine.add(drop)
+                thenAtOf.add(thenAt)
+                return ifAt to thenAt
+            }
+
+            val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
+            val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
+            val (mainIf, _) = addRow(
+                Step.MAIN_STEP,
+                LogicGraphView.Drop.NONE,
+                listOf(Labels.event(this, EventType.of(rule.on)) + who + where),
+            )
+
+            // 向下的行（1.32.0）：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行
+            // 的如果**底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
+            var fromRow = 0
+            var fromIf = mainIf
+            for ((si, _) in rule.elseIfs.withIndex()) {
+                val (ifAt, _) = addRow(
+                    Step.elseIf(si), LogicGraphView.Drop(fromRow, fromIf), null,
+                )
+                fromRow = rows.size - 1
+                fromIf = ifAt
+            }
+            if (rule.elseActions.isNotEmpty() || rule.elseIfs.isNotEmpty()) {
+                addRow(Step.ELSE_STEP, LogicGraphView.Drop(fromRow, fromIf), null)
+            }
+
+            // 每一支「或者」一行，吊在**它自己那一步的就**底下。
+            fun altRows(step: Step, rowOf: Int, thenAt: Int) {
+                val alts = when (step.kind) {
+                    Step.MAIN -> rule.alts
+                    Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.alts.orEmpty()
+                    else -> rule.elseAlts
+                }
+                for ((ai, _) in alts.withIndex()) {
+                    val row = mutableListOf<LogicGraphView.Node>()
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.OR, listOf("或者 " + (ai + 1)), ai, rows.size,
+                        )
+                    )
+                    val actions = editTarget(rule, step.alt(ai + 1)).orEmpty()
+                    for ((k, a) in actions.withIndex()) {
+                        if (k == 0) row.add(timerNode(0, rows.size, step.isElse))
+                        row.add(
+                            LogicGraphView.Node(
+                                if (step.isElse) LogicGraphView.Node.ELSE else LogicGraphView.Node.THEN,
+                                listOf(actionText(a)), k, rows.size,
+                            )
+                        )
+                        if (k < actions.size - 1) row.add(timerNode(k + 1, rows.size, step.isElse))
+                    }
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
+                            LogicGraphView.Node.ADD_ACTION, rows.size,
+                        )
+                    )
+                    rows.add(row)
+                    steps.add(step.alt(ai + 1))
+                    mine.add(LogicGraphView.Drop(rowOf, thenAt))
+                }
+            }
+            // 每一步的「就」下面挂它自己的「或者」。
+            for ((i, step) in steps.toList().withIndex()) {
+                if (step.alt != 0 || i >= thenAtOf.size) continue
+                altRows(step, i, thenAtOf[i])
+            }
+
+            // 每一行末尾那两种「＋」：这一步能不能再加一支「或者」，能不能再挂一级「否则如果」。
+            for ((i, step) in steps.toList().withIndex()) {
+                if (step.alt != 0) continue
+                val row = rows[i].toMutableList()
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_alt)),
+                        LogicGraphView.Node.ADD_ALT, i,
+                    )
+                )
+                if (i == steps.size - 1) {
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else_if)),
+                            LogicGraphView.Node.ADD_ELSE_IF, i,
+                        )
+                    )
+                    if (rule.elseActions.isEmpty()) {
+                        row.add(
+                            LogicGraphView.Node(
+                                LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else)),
+                                LogicGraphView.Node.ADD_ELSE, i,
                             )
                         )
                     }
                 }
-                bRow.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
-                        LogicGraphView.Node.ADD_CONDITION, bi,
-                    )
-                )
-                for ((ai, a) in branch.actions.withIndex()) {
-                    // 分支自己的执行器之间也一样能插计时器：每个分支是一条独立的顺序。
-                    if (ai == 0) bRow.add(timerNode(0, bi, elseList = false))
-                    bRow.add(
-                        LogicGraphView.Node(
-                            LogicGraphView.Node.THEN, listOf(actionText(a)), ai, bi,
-                        )
-                    )
-                    if (ai < branch.actions.size - 1) bRow.add(timerNode(ai + 1, bi, elseList = false))
-                }
-                bRow.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                        LogicGraphView.Node.ADD_ACTION, bi,
-                    )
-                )
-                graph.add(bRow)
-                counts.add(0)
+                rows[i] = row
             }
+
+            for (r in rows) graph.add(r)
+            for (d in mine) drops.add(d)
+            rowSteps.add(steps)
         }
-        // 每一行的随机组：图用它把同组的行括起来（并行分支）。
-        // How many branch rows follow each rule row, so the graph can draw the fork: one
-        // detector, arrows going down and splitting to each executor.
-        logicGraph.setRules(graph, counts)
+        logicRowSteps = rowSteps
+        logicGraph.setRules(graph, drops)
+
         buildLiquidBar()
 
         logicBar.removeAllViews()
@@ -5706,29 +5745,43 @@ class MainActivity : AppCompatActivity() {
                     else aboutText(rule.about)
             ) { askRuleAbout(index) }
         }
-        // 「并行逻辑也有完整的侦测器和执行器」: this rule's own 当 is the group's detector, its own
-        // 就 is the first executor, and every branch below is another executor forked off the
-        // same detector -- all of them run. See RuleSpec.branches.
+        // 否则如果链（1.32.0）：一级一行，点进去改它的就 / 权重 / 或者。这一行也**加**新的一级
+        // （加完立刻打开它）—— 用户在这儿想的是"再加一种情况"。
         row(
-            getString(R.string.logic_branch) + "：" + (rule.branches.size + 1) + " 支" +
-                if (rule.branches.isEmpty()) " · " + getString(R.string.logic_branch_none) else ""
-        ) { addBranch(index) }
-        for ((bi, b) in rule.branches.withIndex()) {
-            row(
-                getString(R.string.logic_branch) + " " + (bi + 2) + " · " +
-                    (if (b.ownDetector) getString(R.string.logic_when) + Labels.event(this, EventType.of(b.on))
-                    else getString(R.string.logic_branch_same_when)) +
-                    // 分支自己的如果, said out loud on the card: a branch that only runs when
-                    // something is true is a different line from one that always runs, and the
-                    // card is where somebody decides whether to open it.
-                    (if (b.conditions.isEmpty()) " · 没有如果"
-                    else " · " + b.conditions.size + " 个如果") +
-                    " · " + b.actions.size + " 个动作"
-            ) { askBranch(index, bi) }
+            getString(R.string.logic_else_if_count, rule.elseIfs.size) +
+                if (rule.elseIfs.isEmpty()) " · " + getString(R.string.logic_else_if_none) else ""
+        ) {
+            val steps = rule.elseIfs.toMutableList()
+            steps.add(
+                ElseIfSpec(
+                    conditions = listOf(newCondition()),
+                    actions = listOf(ActionSpec("say", text = "……")),
+                )
+            )
+            putRule(index, rule.copy(elseIfs = steps))
+            askStep(index, Step.elseIf(steps.size - 1))
         }
-        if (rule.branches.isNotEmpty()) {
-            row(getString(R.string.logic_branch_remove)) {
-                removeBranch(index, rule.branches.size - 1)
+        for ((si, _) in rule.elseIfs.withIndex()) {
+            val s = rule.elseIfs[si]
+            row(
+                getString(R.string.logic_else_if_n, si + 1) + " · " +
+                    s.conditions.size + getString(R.string.logic_if_count) + " · " +
+                    s.actions.size + getString(R.string.logic_action_count) +
+                    if (s.alts.isEmpty()) "" else " · " + getString(R.string.logic_alt_count, s.alts.size)
+            ) { askStep(index, Step.elseIf(si)) }
+        }
+        // 「或者」：主「就」有几支备选，点进去改权重/动作。没有「或者」时它只是一行提示
+        // （加一个也会立刻问它做什么）。
+        row(
+            getString(R.string.logic_alt_count, rule.alts.size) +
+                if (rule.alts.isEmpty()) " · " + getString(R.string.logic_alt_none) else ""
+        ) {
+            val at = addAlt(index, Step.MAIN_STEP, ActionAlt(actions = listOf(ActionSpec("say", text = "……"))))
+            if (at != null) askAlt(index, Step.MAIN_STEP, at)
+        }
+        for ((ai, a) in rule.alts.withIndex()) {
+            row(getString(R.string.logic_alt_row, ai + 1, a.weight, a.actions.size)) {
+                askAlt(index, Step.MAIN_STEP, ai)
             }
         }
         row(getString(R.string.logic_cooldown, trim(rule.cooldown))) { askCooldown(index) }
@@ -5738,19 +5791,14 @@ class MainActivity : AppCompatActivity() {
             buildLogicPane()
         }
         if (rule.elseActions.isEmpty()) {
-            row(getString(R.string.logic_add_else)) {
-                logicRules[index] = rule.copy(
-                    elseActions = listOf(ActionSpec("say", text = "……")),
-                )
-                saveLogic()
-                buildLogicPane()
-            }
+            row(getString(R.string.logic_add_else)) { toggleElse(index) }
         } else {
-            row(getString(R.string.logic_remove_else)) {
-                logicRules[index] = rule.copy(elseActions = emptyList())
-                saveLogic()
-                buildLogicPane()
+            // 有「否则」时这一行是**打开它**（改它的就 / 权重 / 或者），删掉是另一行 ——
+            // 一个"点一下就没了的"入口和"点一下打开的"长得一样，是这个仓库踩过的坑。
+            row(getString(R.string.logic_else_edit, rule.elseActions.size)) {
+                askStep(index, Step.ELSE_STEP)
             }
+            row(getString(R.string.logic_remove_else)) { toggleElse(index) }
         }
         row(getString(R.string.logic_delete_rule)) {
             logicRules.removeAt(index)
@@ -8839,27 +8887,16 @@ class MainActivity : AppCompatActivity() {
      * connector is a module that was added on its own, and the connector is the only thing
      * that says how they go together — so it gets a box of its own and a tap of its own.
      */
-    private fun flipJoin(index: Int, condIndex: Int, branch: Int = -1) {
+    private fun flipJoin(index: Int, condIndex: Int, step: Step = Step.MAIN_STEP) {
         val rule = logicRules.getOrNull(index) ?: return
-        val list = editConditions(rule, branch) ?: return
+        val list = editConditions(rule, step) ?: return
         val clause = list.getOrNull(condIndex) ?: return
         val conditions = list.toMutableList()
         conditions[condIndex] = clause.copy(join = Joins.flip(clause.join))
-        putConditions(index, conditions, branch)
+        putConditions(index, conditions, step)
     }
 
-    /**
-     * Add a module to a rule: another 如果, another thing to do, or the 否则 branch.
-     *
-     * It lands with a default value and the editor opens straight away, because "add a
-     * module" and "say what it does" are one action as far as anybody using this is
-     * concerned.
-     *
-     * [branch] >= 0 says the module belongs to a 并行分支 instead of to the rule: another
-     * 如果 for that executor, or another action for it. 否则 is the rule's own -- there is
-     * nothing to fork from a detector that did not fire -- so a branch asking for one gets an
-     * action, which is the only sensible reading of the tap.
-     */
+
     /**
      * 两个执行器之间那个「＋计时器」的盒子。
      *
@@ -8869,12 +8906,12 @@ class MainActivity : AppCompatActivity() {
      * [elseList] 用角色的不同来说"它属于哪一张表"（见 LogicGraphView.Node）：一个盒子说不
      * 出自己在 就 还是 否则 里，就像 否则 里的执行器盒子角色是 ELSE 而不是 THEN 一样。
      */
-    private fun timerNode(at: Int, branch: Int, elseList: Boolean): LogicGraphView.Node =
+    private fun timerNode(at: Int, row: Int, elseList: Boolean): LogicGraphView.Node =
         LogicGraphView.Node(
             if (elseList) LogicGraphView.Node.TIMER_ELSE else LogicGraphView.Node.TIMER,
             listOf(getString(R.string.logic_module_timer)),
             at,
-            branch,
+            row,
         )
 
     /**
@@ -8884,70 +8921,197 @@ class MainActivity : AppCompatActivity() {
      * 记下来、到点了接着跑），只是现在能在任何位置插进去。以前只能加在行尾，而加在行尾的
      * 计时器什么也等不到：它后面没有动作了。
      */
-    private fun askTimer(index: Int, at: Int, isElse: Boolean, branch: Int) {
+    private fun askTimer(index: Int, at: Int, step: Step) {
         // 和「就 → 等一会儿」那个动作同一组数字：两个门进的是同一个模块，范围不一样
         // 只会让人以为它们是两种东西。
         askNumber(getString(R.string.logic_timer_seconds), 0.5f, 0f, 30f) { seconds ->
-            insertAction(index, at, isElse, branch, ActionSpec(ActionKind.WAIT.id, value = seconds))
+            insertAction(index, at, step, ActionSpec(ActionKind.WAIT.id, value = seconds))
         }
     }
 
-    private fun addModule(index: Int, what: Int, branch: Int = -1) {
+    /**
+     * 「＋」盒子：加一个如果、加一个动作、加一支「或者」、往「否则」里加一个动作、
+     * 或者给这一步再挂一级「否则如果」。
+     *
+     * 每一处都落在 [step] 上（哪一步、哪一支），所以"在否则如果第 2 级的第 1 支或者里加一个
+     * 动作"不需要任何新机制 —— 加完之后立刻打开那个编辑器，因为"加一个模块"和"说它做什么"
+     * 在用户那儿是一件事。
+     */
+    private fun addModule(index: Int, what: Int, step: Step = Step.MAIN_STEP) {
         val rule = logicRules.getOrNull(index) ?: return
-        if (branch >= 0) {
-            val b = rule.branches.getOrNull(branch) ?: return
-            if (what == LogicGraphView.Node.ADD_CONDITION) {
-                val conditions = b.conditions.toMutableList()
-                conditions.add(
-                    ConditionSpec(
-                        kind = "stat",
-                        stat = logicStats.firstOrNull()?.id ?: "",
-                        op = ">=",
-                        value = 0f,
-                        join = Joins.AND,
-                    )
-                )
-                putConditions(index, conditions, branch)
-                askCondition(index, conditions.size - 1, branch)
-            } else {
-                val actions = b.actions.toMutableList()
-                actions.add(ActionSpec("say", text = "……"))
-                putActions(index, actions, isElse = false, branch = branch)
-                askAction(index, actions.size - 1, branch = branch)
-            }
-            return
-        }
         when (what) {
             LogicGraphView.Node.ADD_CONDITION -> {
-                val conditions = rule.conditions.toMutableList()
-                conditions.add(
-                    ConditionSpec(
-                        kind = "stat",
-                        stat = logicStats.firstOrNull()?.id ?: "",
-                        op = ">=",
-                        value = 0f,
-                        join = Joins.AND,
-                    )
-                )
-                putRule(index, rule.copy(conditions = conditions))
-                askCondition(index, conditions.size - 1)
+                val conditions = (editConditions(rule, step) ?: return).toMutableList()
+                conditions.add(newCondition())
+                putConditions(index, conditions, step)
+                askCondition(index, conditions.size - 1, step)
             }
 
-            LogicGraphView.Node.ADD_ELSE -> {
-                val actions = rule.elseActions.toMutableList()
-                actions.add(ActionSpec("say", text = "……"))
-                putRule(index, rule.copy(elseActions = actions))
-                askAction(index, actions.size - 1, isElse = true)
+            LogicGraphView.Node.ADD_ELSE_IF -> {
+                // 新的一级「否则如果」：条件先给一个默认的（用户马上就会改），动作给一句占位。
+                val steps = rule.elseIfs.toMutableList()
+                steps.add(
+                    ElseIfSpec(
+                        conditions = listOf(newCondition()),
+                        actions = listOf(ActionSpec("say", text = "……")),
+                    )
+                )
+                putRule(index, rule.copy(elseIfs = steps))
+                askStep(index, Step.elseIf(steps.size - 1))
+            }
+
+            LogicGraphView.Node.ADD_ALT -> {
+                // 再挂一支「或者」：默认权重 1，动作一句占位。加完就问它做什么。
+                val alt = ActionAlt(weight = 1, actions = listOf(ActionSpec("say", text = "……")))
+                val at = addAlt(index, step, alt) ?: return
+                askAlt(index, step, at)
             }
 
             else -> {
-                val actions = rule.actions.toMutableList()
+                val actions = (editTarget(rule, step) ?: return).toMutableList()
                 actions.add(ActionSpec("say", text = "……"))
-                putRule(index, rule.copy(actions = actions))
-                askAction(index, actions.size - 1)
+                putActions(index, actions, step)
+                askAction(index, actions.size - 1, step)
             }
         }
     }
+
+    /** A brand new 如果, with the defaults every other "add a clause" path uses. */
+    private fun newCondition(): ConditionSpec = ConditionSpec(
+        kind = "stat",
+        stat = logicStats.firstOrNull()?.id ?: "",
+        op = ">=",
+        value = 0f,
+        join = Joins.AND,
+    )
+
+    /**
+     * 给这一步挂一支「或者」，返回它在 alts 里的下标（越界/失败返回 null）。
+     *
+     * 主「就」之外才有"下标"：主「就」自己也是一支（权重在 thenWeight/weight/elseWeight 上），
+     * 但它不是 alts 里的元素 —— 所以这里的下标从 0 开始就是"第 1 支或者"。
+     */
+    private fun addAlt(index: Int, step: Step, alt: ActionAlt): Int? {
+        val rule = logicRules.getOrNull(index) ?: return null
+        val at = when (step.kind) {
+            Step.MAIN -> rule.alts.size
+            Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.alts?.size ?: return null
+            else -> rule.elseAlts.size
+        }
+        val next = when (step.kind) {
+            Step.MAIN -> rule.copy(alts = rule.alts + alt)
+            Step.ELSE_IF -> {
+                val steps = rule.elseIfs.toMutableList()
+                val s = steps.getOrNull(step.index) ?: return null
+                steps[step.index] = s.copy(alts = s.alts + alt)
+                rule.copy(elseIfs = steps)
+            }
+            else -> rule.copy(elseAlts = rule.elseAlts + alt)
+        }
+        putRule(index, next)
+        return at
+    }
+
+    /** 删掉一支「或者」（连同它里面的动作）。 */
+    private fun removeAlt(index: Int, step: Step, at: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val next = when (step.kind) {
+            Step.MAIN -> rule.copy(alts = rule.alts.withoutAlt(at))
+            Step.ELSE_IF -> {
+                val steps = rule.elseIfs.toMutableList()
+                val s = steps.getOrNull(step.index) ?: return
+                steps[step.index] = s.copy(alts = s.alts.withoutAlt(at))
+                rule.copy(elseIfs = steps)
+            }
+            else -> rule.copy(elseAlts = rule.elseAlts.withoutAlt(at))
+        }
+        putRule(index, next)
+    }
+
+    /** 换掉第 [at] 支「或者」的权重；越界就什么都不做。 */
+    private fun setAltWeight(index: Int, step: Step, at: Int, weight: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        fun weigh(alts: List<ActionAlt>): List<ActionAlt> {
+            if (at !in alts.indices) return alts
+            val out = alts.toMutableList()
+            out[at] = out[at].copy(weight = Weights.clamp(weight))
+            return out
+        }
+        val next = when (step.kind) {
+            Step.MAIN -> rule.copy(alts = weigh(rule.alts))
+            Step.ELSE_IF -> {
+                val steps = rule.elseIfs.toMutableList()
+                val s = steps.getOrNull(step.index) ?: return
+                steps[step.index] = s.copy(alts = weigh(s.alts))
+                rule.copy(elseIfs = steps)
+            }
+            else -> rule.copy(elseAlts = weigh(rule.elseAlts))
+        }
+        putRule(index, next)
+    }
+
+    /** 换掉主「就」那一支的权重（它不在 alts 里，所以另有一条路）。 */
+    private fun setStepWeight(index: Int, step: Step, weight: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val w = Weights.clamp(weight)
+        val next = when (step.kind) {
+            Step.MAIN -> rule.copy(thenWeight = w)
+            Step.ELSE_IF -> {
+                val steps = rule.elseIfs.toMutableList()
+                val s = steps.getOrNull(step.index) ?: return
+                steps[step.index] = s.copy(weight = w)
+                rule.copy(elseIfs = steps)
+            }
+            else -> rule.copy(elseWeight = w)
+        }
+        putRule(index, next)
+    }
+
+    /** 一列「或者」里删掉第 [at] 支；越界就原样返回。 */
+    private fun List<ActionAlt>.withoutAlt(at: Int): List<ActionAlt> {
+        if (at !in indices) return this
+        val out = toMutableList()
+        out.removeAt(at)
+        return out
+    }
+
+    /**
+     * 把最后那个「否则」加上（空的时候）或者去掉（有的时候）。
+     *
+     * 「否则」是**一步**，不是一个开关：加的时候一并给它一句占位的动作，用户马上就会改。
+     */
+    private fun toggleElse(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        if (rule.elseActions.isEmpty()) {
+            putRule(index, rule.copy(elseActions = listOf(ActionSpec("say", text = "……"))))
+        } else {
+            putRule(
+                index,
+                rule.copy(elseActions = emptyList(), elseWeight = 1, elseAlts = emptyList()),
+            )
+        }
+    }
+
+    /** 加一级「否则如果」；删掉第 [at] 级。 */
+    private fun removeStep(index: Int, at: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        if (at !in rule.elseIfs.indices) return
+        val steps = rule.elseIfs.toMutableList()
+        steps.removeAt(at)
+        putRule(index, rule.copy(elseIfs = steps))
+    }
+
+    /**
+     * 图上每一行是规则的哪一步（1.32.0），和 [buildLogicPane] 建的图**同生同死**。
+     *
+     * 图只报"哪一行的哪个方块被点了"，语义在界面这一层 —— 所以"行 → 步"的映射必须有人记着，
+     * 而记它的地方只能是**建那张图的那一段**（分开写就是两份会漂的东西）。
+     */
+    private var logicRowSteps: List<List<Step>> = emptyList()
+
+    /** 第 [rule] 条第 [row] 行是哪一步。越界时退回主行（一条点不动图的规则比崩好）。 */
+    private fun logicStepOf(rule: Int, row: Int): Step =
+        logicRowSteps.getOrNull(rule)?.getOrNull(row) ?: Step.MAIN_STEP
 
     private fun putRule(index: Int, rule: RuleSpec) {
         if (index !in logicRules.indices) return
@@ -8956,18 +9120,24 @@ class MainActivity : AppCompatActivity() {
         buildLogicPane()
     }
 
-    /** Which 如果 an edit is about: a 并行分支's own, or the rule's. */
-    private fun editConditions(rule: RuleSpec, branch: Int): List<ConditionSpec>? =
-        if (branch >= 0) rule.branches.getOrNull(branch)?.conditions else rule.conditions
+    /**
+     * 这一步的「如果」。主「如果」和每一级「否则如果」各有一份自己的；最后的「否则」没有
+     * （它按定义就是"上面都不成立"）。
+     */
+    private fun editConditions(rule: RuleSpec, step: Step): List<ConditionSpec>? = when (step.kind) {
+        Step.MAIN -> rule.conditions
+        Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.conditions
+        else -> null
+    }
 
-    /** Write a 如果 back to wherever it came from: a branch's list, or the rule's. */
-    private fun putConditions(index: Int, conditions: List<ConditionSpec>, branch: Int) {
+    /** Write a 如果 back to wherever it came from: a step's list, or the rule's own. */
+    private fun putConditions(index: Int, conditions: List<ConditionSpec>, step: Step) {
         val rule = logicRules.getOrNull(index) ?: return
-        if (branch >= 0) {
-            val branches = rule.branches.toMutableList()
-            if (branch >= branches.size) return
-            branches[branch] = branches[branch].copy(conditions = conditions)
-            putRule(index, rule.copy(branches = branches))
+        if (step.kind == Step.ELSE_IF) {
+            val steps = rule.elseIfs.toMutableList()
+            val s = steps.getOrNull(step.index) ?: return
+            steps[step.index] = s.copy(conditions = conditions)
+            putRule(index, rule.copy(elseIfs = steps))
             return
         }
         putRule(index, rule.copy(conditions = conditions))
@@ -9023,15 +9193,15 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * [condIndex] of -1 means "add another", anything else replaces that one.
+     * 改一个「如果」。同一步里的每一个如果都用这个弹窗：主「如果」、每一级「否则如果」的
+     * 如果，问的都是同一句话（"这一条成立吗"），所以用同一个编辑器 —— 第二个编辑器就是第二套
+     * 能做的事更少的东西。
      *
-     * [branch] >= 0 means this 如果 is a 并行分支's own. The dialog is the same one in every
-     * other respect -- the same three kinds of clause, the same 而且/或者 connector -- and the
-     * only difference is which list the answer goes back into. See putConditions.
+     * [step] 说这个如果属于哪一步（主行 / 第几级否则如果）。
      */
-    private fun askCondition(index: Int, condIndex: Int, branch: Int = -1) {
+    private fun askCondition(index: Int, condIndex: Int, step: Step = Step.MAIN_STEP) {
         val rule = logicRules.getOrNull(index) ?: return
-        val conds = editConditions(rule, branch) ?: return
+        val conds = editConditions(rule, step) ?: return
         val existing = conds.getOrNull(condIndex)
         // Two things a character can be asked about: a number it carries, and a fact about
         // it. The kind chips switch between them; the rest of the dialog is the same shape.
@@ -9369,14 +9539,14 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 if (condIndex in list.indices) list[condIndex] = spec else list.add(spec)
-                putConditions(index, list, branch)
+                putConditions(index, list, step)
             }
             .setNegativeButton(R.string.depth_cancel, null)
         if (condIndex >= 0) {
             builder.setNeutralButton(R.string.depth_remove) { _, _ ->
                 val list = conds.toMutableList()
                 if (condIndex in list.indices) list.removeAt(condIndex)
-                putConditions(index, list, branch)
+                putConditions(index, list, step)
             }
         }
         builder.show()
@@ -9394,19 +9564,14 @@ class MainActivity : AppCompatActivity() {
         chanceBox.visibility = if (kind == "chance") View.VISIBLE else View.GONE
     }
 
-    private fun askAction(
-        index: Int,
-        actionIndex: Int,
-        isElse: Boolean = false,
-        branch: Int = -1,
-    ) {
+    private fun askAction(index: Int, actionIndex: Int, step: Step = Step.MAIN_STEP) {
         val rule = logicRules.getOrNull(index) ?: return
         // Which list this editor is about, decided once HERE rather than when something is
-        // finally written: `branch` is -1 for the rule's own 就, 1 for its 否则 and a branch
-        // index for a 并行分支's executor, and every arm below ends in putAction(). See
-        // editingBranch for why it is a field.
-        editingBranch = branch
-        val list = editTarget(rule, isElse, branch) ?: return
+        // finally written: `step` says which 如果 branch it belongs to and, inside that, which
+        // 「或者」 alternative -- and every arm below ends in putAction(). See editingStep for
+        // why it is a field.
+        editingStep = step
+        val list = editTarget(rule, step) ?: return
         val existing = list.getOrNull(actionIndex)
         pickList(
             title = getString(R.string.logic_pick_action),
@@ -9417,7 +9582,7 @@ class MainActivity : AppCompatActivity() {
                 {
                     val actions = list.toMutableList()
                     if (actionIndex in actions.indices) actions.removeAt(actionIndex)
-                    putActions(index, actions, isElse, branch)
+                    putActions(index, actions, step)
                 }
             } else {
                 null
@@ -9426,16 +9591,16 @@ class MainActivity : AppCompatActivity() {
             val kind = ActionKind.of(id)
             when (kind.needs) {
                 "text" -> askText(getString(R.string.logic_pick_text), existing?.text ?: "") { text ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = text))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = text))
                 }
                 "stat" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 10f) { v ->
-                        putAction(index, actionIndex, isElse, ActionSpec(kind.id, stat = stat, value = v))
+                        putAction(index, actionIndex, ActionSpec(kind.id, stat = stat, value = v))
                     }
                 }
                 "statValue" -> pickStat(getString(R.string.logic_pick_stat)) { stat ->
                     askSigned(getString(R.string.logic_pick_value), existing?.value ?: 100f) { v ->
-                        putAction(index, actionIndex, isElse, ActionSpec(kind.id, stat = stat, value = v))
+                        putAction(index, actionIndex, ActionSpec(kind.id, stat = stat, value = v))
                     }
                 }
                 // A range: two numbers, asked for one after the other. The engine sorts them,
@@ -9444,7 +9609,7 @@ class MainActivity : AppCompatActivity() {
                     askSigned(getString(R.string.logic_pick_from), existing?.value ?: 0f) { lo ->
                         askSigned(getString(R.string.logic_pick_to), existing?.value2 ?: 100f) { hi ->
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, stat = stat, value = lo, value2 = hi),
                             )
                         }
@@ -9456,7 +9621,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_no_characters),
                     existing?.text,
                 ) { id ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = id))
                     true
                 }
                 // 换骨骼套: the bodies of the pet that is on the bench -- the same list the rig
@@ -9470,7 +9635,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_no_anims),
                     existing?.text ?: "",
                 ) { id ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = id))
                     true
                 }
                 "rig" -> pickList(
@@ -9479,7 +9644,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_no_rigs),
                     existing?.text ?: "",
                 ) { id ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = id))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = id))
                     true
                 }
                 "pose" -> pickList(
@@ -9488,7 +9653,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_no_poses),
                     existing?.text,
                 ) { name ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = name))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = name))
                     true
                 }
                 "prop" -> pickList(
@@ -9497,7 +9662,7 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.sandbox_props_empty),
                     existing?.prop,
                 ) { propId ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, prop = propId))
+                    putAction(index, actionIndex, ActionSpec(kind.id, prop = propId))
                     true
                 }
                 "burst" -> pickList(
@@ -9506,7 +9671,7 @@ class MainActivity : AppCompatActivity() {
                     "",
                     existing?.text,
                 ) { burstId ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
+                    putAction(index, actionIndex, ActionSpec(kind.id, text = burstId, value = existing?.value ?: 10f))
                     true
                 }
                 // 流液体：柱状还是乱撒 → 选哪种液体 → 每秒多少滴 → 流多少秒。
@@ -9533,7 +9698,7 @@ class MainActivity : AppCompatActivity() {
                                 existing?.value2 ?: 2f, 0.1f, 60f,
                             ) { seconds ->
                                 putAction(
-                                    index, actionIndex, isElse,
+                                    index, actionIndex,
                                     ActionSpec(
                                         kind.id, text = liquidId, value = rate,
                                         value2 = seconds, shape = shape,
@@ -9561,7 +9726,7 @@ class MainActivity : AppCompatActivity() {
                             getString(R.string.logic_pick_seconds), existing?.value2 ?: 2f, 0.1f, 60f,
                         ) { seconds ->
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, text = burstId, value = rate, value2 = seconds),
                             )
                         }
@@ -9569,7 +9734,7 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 "bone" -> pickBoneName(getString(R.string.logic_pick_bone), existing?.bone) { bone ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, bone = bone))
+                    putAction(index, actionIndex, ActionSpec(kind.id, bone = bone))
                 }
                 // 改变部位深度：哪一节，以及拉到最前面还是压到最后面。
                 // 主体是部件时可以留空 —— 那条规则本来就长在这一节上（测试场会自己填）。
@@ -9592,7 +9757,7 @@ class MainActivity : AppCompatActivity() {
                     ) { way ->
                         if (way != "before" && way != "after") {
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, text = way, bone = bone),
                             )
                             return@pickList true
@@ -9609,7 +9774,7 @@ class MainActivity : AppCompatActivity() {
                         ) { anchor ->
                             if (anchor.isEmpty()) return@pickList false
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, text = way, bone = bone, bone2 = anchor),
                             )
                             true
@@ -9626,7 +9791,7 @@ class MainActivity : AppCompatActivity() {
                             existing?.text ?: "up",
                         ) { dir ->
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, text = dir, bone = bone, value = v),
                             )
                             true
@@ -9634,7 +9799,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 "seconds" -> askNumber(getString(R.string.logic_pick_value), existing?.value ?: 0.5f, 0f, 30f) { v ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, value = v))
+                    putAction(index, actionIndex, ActionSpec(kind.id, value = v))
                 }
                 // 跳到规则：目标就是上面那张表的第几条。自己不在选项里——一条规则跳到它自己
                 // 身上什么也不会发生（引擎一次事件里每条规则最多跑一次），给了只会让人以为是坏的。
@@ -9650,7 +9815,7 @@ class MainActivity : AppCompatActivity() {
                     existing?.rule?.takeIf { it > 0 }?.toString(),
                 ) { picked ->
                     putAction(
-                        index, actionIndex, isElse,
+                        index, actionIndex,
                         ActionSpec(kind.id, rule = picked.toIntOrNull() ?: 0),
                     )
                     true
@@ -9672,7 +9837,7 @@ class MainActivity : AppCompatActivity() {
                             existing?.text ?: "up",
                         ) { dir ->
                             putAction(
-                                index, actionIndex, isElse,
+                                index, actionIndex,
                                 ActionSpec(kind.id, text = dir, prop = propId, value = v),
                             )
                             true
@@ -9689,13 +9854,13 @@ class MainActivity : AppCompatActivity() {
                     existing?.prop,
                 ) { propId ->
                     putAction(
-                        index, actionIndex, isElse,
+                        index, actionIndex,
                         ActionSpec(kind.id, prop = propId, text = if (propId.isEmpty()) "liquid" else ""),
                     )
                     true
                 }
                 "state" -> pickState(getString(R.string.logic_pick_state)) { state ->
-                    putAction(index, actionIndex, isElse, ActionSpec(kind.id, state = state))
+                    putAction(index, actionIndex, ActionSpec(kind.id, state = state))
                 }
                 "liquid" -> pickList(
                     getString(R.string.logic_pick_liquid),
@@ -9708,20 +9873,44 @@ class MainActivity : AppCompatActivity() {
                         existing?.value ?: 24f, 1f, 200f,
                     ) { amount ->
                         putAction(
-                            index, actionIndex, isElse,
+                            index, actionIndex,
                             ActionSpec(kind.id, text = liquid, value = amount),
                         )
                     }
                     true
                 }
-                else -> putAction(index, actionIndex, isElse, ActionSpec(kind.id))
+                else -> putAction(index, actionIndex, ActionSpec(kind.id))
             }
             true
         }
     }
 
     /**
-     * Which 并行分支 the action editor is writing into, or -1 for the rule's own list.
+     * 规则里的**哪一步**：主「如果」那一支、第几级「否则如果」、还是最后的「否则」；
+     * 加上这一步行内的**哪一支「就」**（[alt] = 0 是主「就」，1.. 是第几支「或者」）。
+     *
+     * 这是 1.32.0 把"两个参数"合成了一个概念：以前是 `isElse: Boolean` + `branch: Int`
+     * （哪一支并行分支）两样一起传，于是每加一种地方就要多传一个参数、多一个会漏的地方。
+     * 现在"这一步/这一支"是一个东西，编辑动作、编辑如果、插计时器全都只认它。
+     */
+    private class Step(val kind: Int, val index: Int = 0, val alt: Int = 0) {
+        companion object {
+            const val MAIN = 0
+            const val ELSE_IF = 1
+            const val ELSE = 2
+            val MAIN_STEP = Step(MAIN)
+            fun elseIf(i: Int) = Step(ELSE_IF, i)
+            val ELSE_STEP = Step(ELSE)
+        }
+
+        /** 同一级的第几支「就」：0 是主「就」，1.. 是「或者」。 */
+        fun alt(a: Int) = Step(kind, index, a)
+
+        val isElse: Boolean get() = kind == ELSE
+    }
+
+    /**
+     * The step the action editor is writing into.
      *
      * A field rather than a parameter, deliberately: askAction() is one long `when` with a
      * putAction() in every arm (twenty-odd of them), and threading a fifth parameter through
@@ -9729,34 +9918,60 @@ class MainActivity : AppCompatActivity() {
      * exactly one value.
      *
      * It is set by **askAction() when the editor opens**, and that is the fix for a real bug:
-     * askBranch() used to set it around the call and clear it again (`= branch; askAction();
-     * = -1`), but every dialog below comes back LATER, so by the time anything was written the
-     * field was already -1 and a branch's action was saved onto the rule's own 就 instead --
-     * silently, because both lists are just lists. A value that has to survive a dialog belongs
-     * to the dialog, not to the call that opened it.
+     * the old code used to set its predecessor around the call and clear it again (`= branch;
+     * askAction(); = -1`), but every dialog below comes back LATER, so by the time anything was
+     * written the field was already -1 and a branch's action was saved onto the rule's own 就
+     * instead -- silently, because both lists are just lists. A value that has to survive a
+     * dialog belongs to the dialog, not to the call that opened it.
      */
-    private var editingBranch = -1
+    private var editingStep: Step = Step.MAIN_STEP
 
-    /** Which action list an edit is about: a branch's, the rule's 否则, or the rule's 就. */
-    private fun editTarget(rule: RuleSpec, isElse: Boolean, branch: Int): List<ActionSpec>? =
-        if (branch >= 0) rule.branches.getOrNull(branch)?.actions
-        else if (isElse) rule.elseActions
-        else rule.actions
-
-    /** Write an action list back to wherever it came from. The one place that knows the three. */
-    private fun putActions(index: Int, actions: List<ActionSpec>, isElse: Boolean, branch: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        if (branch >= 0) {
-            val branches = rule.branches.toMutableList()
-            if (branch >= branches.size) return
-            branches[branch] = branches[branch].copy(actions = actions)
-            putRule(index, rule.copy(branches = branches))
-            return
+    /** Which action list an edit is about: one step's, one of its 「或者」, or the 否则's. */
+    private fun editTarget(rule: RuleSpec, step: Step): List<ActionSpec>? = when (step.kind) {
+        Step.MAIN -> if (step.alt == 0) rule.actions else rule.alts.getOrNull(step.alt - 1)?.actions
+        Step.ELSE_IF -> {
+            val s = rule.elseIfs.getOrNull(step.index)
+            if (s == null) null
+            else if (step.alt == 0) s.actions else s.alts.getOrNull(step.alt - 1)?.actions
         }
-        putRule(
-            index,
-            if (isElse) rule.copy(elseActions = actions) else rule.copy(actions = actions),
-        )
+        else -> if (step.alt == 0) rule.elseActions else rule.elseAlts.getOrNull(step.alt - 1)?.actions
+    }
+
+    /** Write an action list back to wherever it came from. The one place that knows the steps. */
+    private fun putActions(index: Int, actions: List<ActionSpec>, step: Step) {
+        val rule = logicRules.getOrNull(index) ?: return
+        when (step.kind) {
+            Step.MAIN -> putRule(
+                index,
+                if (step.alt == 0) rule.copy(actions = actions)
+                else rule.copy(alts = rule.alts.withActions(step.alt - 1, actions)),
+            )
+            Step.ELSE_IF -> {
+                val steps = rule.elseIfs.toMutableList()
+                val s = steps.getOrNull(step.index) ?: return
+                steps[step.index] = if (step.alt == 0) s.copy(actions = actions)
+                else s.copy(alts = s.alts.withActions(step.alt - 1, actions))
+                putRule(index, rule.copy(elseIfs = steps))
+            }
+            else -> putRule(
+                index,
+                if (step.alt == 0) rule.copy(elseActions = actions)
+                else rule.copy(elseAlts = rule.elseAlts.withActions(step.alt - 1, actions)),
+            )
+        }
+    }
+
+    /**
+     * 换掉第 [at] 支「或者」的动作表；[at] 越界就返回原表。
+     *
+     * 抽出来是因为"改一支或者"在四级（主/否则如果/否则）里是同一件事，而四处各写一遍
+     * `toMutableList()`/越界判断，就是四处能忘的地方。
+     */
+    private fun List<ActionAlt>.withActions(at: Int, actions: List<ActionSpec>): List<ActionAlt> {
+        if (at !in indices) return this
+        val out = toMutableList()
+        out[at] = out[at].copy(actions = actions)
+        return out
     }
 
     /**
@@ -9766,202 +9981,157 @@ class MainActivity : AppCompatActivity() {
      * 而这是"在这里多一个"。行尾那个「＋动作」盒子只会追加，所以一条规则以前只有一种写法
      * —— 想「先 A、等两秒、再 B」就得先加计时器再想办法挪，而挪的办法不存在。
      */
-    private fun insertAction(
-        index: Int,
-        at: Int,
-        isElse: Boolean,
-        branch: Int,
-        action: ActionSpec,
-    ) {
+    private fun insertAction(index: Int, at: Int, step: Step, action: ActionSpec) {
         val rule = logicRules.getOrNull(index) ?: return
-        val list = editTarget(rule, isElse, branch)?.toMutableList() ?: return
+        val list = editTarget(rule, step)?.toMutableList() ?: return
         list.add(at.coerceIn(0, list.size), action)
-        putActions(index, list, isElse, branch)
+        putActions(index, list, step)
     }
 
-    private fun putAction(
-        index: Int,
-        actionIndex: Int,
-        isElse: Boolean,
-        action: ActionSpec,
-    ) {
+    /** 这个编辑器开着的时候，写回哪一步 —— 见 [editingStep]（对话框回来得晚，不能靠调用点）。 */
+    private fun putAction(index: Int, actionIndex: Int, action: ActionSpec) {
         val rule = logicRules.getOrNull(index) ?: return
-        val branch = editingBranch
-        val list = editTarget(rule, isElse, branch)?.toMutableList() ?: return
+        val step = editingStep
+        val list = editTarget(rule, step)?.toMutableList() ?: return
         if (actionIndex >= 0 && actionIndex < list.size) {
             list[actionIndex] = action
         } else {
             list.add(action)
         }
-        putActions(index, list, isElse, branch)
-    }
-
-    /** 加一个并行分支: another executor forked off this rule's own 当. */
-    private fun addBranch(index: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        val branches = rule.branches.toMutableList()
-        // A new branch hangs off the group's 当 until somebody gives it one of its own: a branch
-        // that arrives already needing to be told WHEN would be a dialog nobody asked for.
-        branches.add(BranchSpec(actions = listOf(ActionSpec("say", text = "……"))))
-        putRule(index, rule.copy(branches = branches))
-    }
-
-    /** 分支自己的当: the event this branch answers, or empty for "同一个当". */
-    private fun askBranchEvent(index: Int, branch: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        val b = rule.branches.getOrNull(branch) ?: return
-        val options = mutableListOf("" to getString(R.string.logic_branch_same_when))
-        options.addAll(EventType.values().map { it.id to Labels.event(this, it) })
-        pickList(
-            title = getString(R.string.logic_branch_when),
-            options = options,
-            hint = getString(R.string.logic_branch_when_hint),
-            current = b.on,
-        ) { id ->
-            val branches = rule.branches.toMutableList()
-            branches[branch] = b.copy(on = id)
-            putRule(index, rule.copy(branches = branches))
-            true
-        }
-    }
-
-    /** 分支的部位: which part this branch's own detector listens to. */
-    private fun askBranchPart(index: Int, branch: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        val b = rule.branches.getOrNull(branch) ?: return
-        pickBoneName(getString(R.string.logic_pick_part), b.part) { id ->
-            val branches = rule.branches.toMutableList()
-            branches[branch] = b.copy(part = id)
-            putRule(index, rule.copy(branches = branches))
-        }
-    }
-
-    private fun removeBranch(index: Int, branch: Int) {
-        val rule = logicRules.getOrNull(index) ?: return
-        val branches = rule.branches.toMutableList()
-        if (branch !in branches.indices) return
-        branches.removeAt(branch)
-        putRule(index, rule.copy(branches = branches))
+        putActions(index, list, step)
     }
 
     /**
-     * One 并行分支 opened for editing: its own 当, its own 如果, and its actions.
+     * 一支「或者」打开来编辑（1.32.0）：它的**权重**、它的动作，以及删掉它。
      *
-     * 「并行逻辑也有完整的执行器和侦测器」 is the whole point: a branch holds an action list
-     * exactly like the rule's own and is edited by the same screen, because a second kind of
-     * action editor would be a second set of actions that could do less. The 如果 followed the
-     * same road: the branch asks the same question the rule asks, with the same editor.
+     * 「或者」不是一条独立的线，它是**这一支「就」的备选** —— 所以这个弹窗里没有「如果」、
+     * 没有「当」：那两样属于它挂着的那一步。挑中的那一支做，别的支不做，权重决定谁更容易被
+     * 挑中（相对值，不用凑总数）。
      */
-    private fun askBranch(index: Int, branch: Int) {
+    private fun askAlt(index: Int, step: Step, at: Int) {
         val rule = logicRules.getOrNull(index) ?: return
-        val b = rule.branches.getOrNull(branch) ?: return
-        val list = b.actions
+        val alts = when (step.kind) {
+            Step.MAIN -> rule.alts
+            Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.alts.orEmpty()
+            else -> rule.elseAlts
+        }
+        val alt = alts.getOrNull(at) ?: return
         val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        // The dialog exists BEFORE its rows do, because the rows close over it: choosing a 当 or
-        // a 部位 reopens the branch with the new answer, and that means dismissing this one.
         val dialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.logic_branch) + " " + (branch + 2))
+            .setTitle(getString(R.string.logic_alt_title, at + 1))
             .setView(scrolling(box))
             .setNegativeButton(R.string.action_close, null)
             .create()
-        box.addView(
-            label(
-                getString(R.string.logic_branch_row_hint, branch + 2, rule.branches.size + 1),
-                11f, MUTED, bottom = 6,
-            )
-        )
-        // 分支自己的当 + 部位: a branch is a line with its own trigger, and this is where it says
-        // so. Both rows are on top of the actions because that is the order they happen in.
-        val whenRow = label(
-            getString(R.string.logic_branch_when) + "：" +
-                if (b.ownDetector) Labels.event(this, EventType.of(b.on))
-                else getString(R.string.logic_branch_same_when),
-            13f, INK,
-        )
-        whenRow.setPadding(dp(12), dp(11), dp(12), dp(11))
-        whenRow.background = getDrawable(R.drawable.menu_item_idle)
-        whenRow.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = dp(4) }
-        whenRow.setOnClickListener {
-            askBranchEvent(index, branch)
-            dialog.dismiss()
-        }
-        box.addView(whenRow)
-
-        val partRow = label(
-            getString(R.string.logic_pick_part) + "：" +
-                if (b.part.isEmpty()) getString(R.string.logic_pick_any_part) else partText(b.part),
-            13f, INK,
-        )
-        partRow.setPadding(dp(12), dp(11), dp(12), dp(11))
-        partRow.background = getDrawable(R.drawable.menu_item_idle)
-        partRow.layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-        ).apply { bottomMargin = dp(4) }
-        partRow.setOnClickListener {
-            askBranchPart(index, branch)
-            dialog.dismiss()
-        }
-        if (b.ownDetector) box.addView(partRow)
-
-        // 分支自己的如果: one row per clause, then the same "＋" the rule's own 如果 has. They sit
-        // above the actions because that is the order the branch happens in -- 当, 如果, 就 --
-        // and a branch with none says 总是, like a rule with none.
-        box.addView(
-            label(
-                "分支自己的如果：" + if (b.conditions.isEmpty()) "总是"
-                else b.conditions.size.toString() + " 条",
-                11f, MUTED, top = 8, bottom = 6,
-            )
-        )
-        for ((ci, c) in b.conditions.withIndex()) {
-            val view = label("如果：" + conditionText(c), 13f, INK)
-            view.setPadding(dp(12), dp(11), dp(12), dp(11))
-            view.background = getDrawable(R.drawable.menu_item_idle)
-            view.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(4) }
-            view.setOnClickListener {
-                askCondition(index, ci, branch)
+        fun fill() {
+            box.removeAllViews()
+            box.addView(label(getString(R.string.logic_alt_hint), 11f, MUTED, bottom = 6))
+            // 权重：相对值。同一级的每一支都能改，包括主「就」（它在另一个入口 —— 见 askStep）。
+            row(box, getString(R.string.logic_alt_weight, alt.weight)) {
+                askNumber(getString(R.string.logic_alt_weight), alt.weight.toFloat(), 0f, 999f) { v ->
+                    setAltWeight(index, step, at, v.toInt())
+                    dialog.dismiss()
+                    logicRules.getOrNull(index)?.let { askAlt(index, step, at) }
+                }
+            }
+            for ((ai, a) in alt.actions.withIndex()) {
+                row(box, actionText(a)) {
+                    dialog.dismiss()
+                    editingStep = step.alt(at + 1)
+                    askAction(index, ai, step.alt(at + 1))
+                }
+            }
+            row(box, getString(R.string.logic_module_action)) {
+                val actions = alt.actions.toMutableList()
+                actions.add(ActionSpec("say", text = "……"))
+                putActions(index, actions, step.alt(at + 1))
+                dialog.dismiss()
+                askAction(index, actions.size - 1, step.alt(at + 1))
+            }
+            row(box, getString(R.string.logic_alt_remove)) {
+                removeAlt(index, step, at)
                 dialog.dismiss()
             }
-            box.addView(view)
         }
-        val addIf = label(getString(R.string.logic_module_if), 13f, INK)
-        addIf.setPadding(dp(12), dp(11), dp(12), dp(11))
-        addIf.background = getDrawable(R.drawable.menu_item_selected)
-        addIf.setOnClickListener {
-            addModule(index, LogicGraphView.Node.ADD_CONDITION, branch)
-            dialog.dismiss()
-        }
-        box.addView(addIf)
+        fill()
+        dialog.show()
+    }
 
-        for ((ai, a) in list.withIndex()) {
-            val view = label(
-                getString(R.string.logic_module_action) + "：" + actionText(a), 13f, INK,
+    /**
+     * 一步打开来编辑（1.32.0）：「否则如果」的那一级，或者最后那个「否则」。
+     *
+     * 这里能改的是**这一支自己的就**：加动作、改主「就」的权重（有「或者」时才有意义）。
+     * 它的「如果」在图上点那一格改（和主行一模一样的那排盒子）—— 一个东西只有一个入口，
+     * 两个入口就会出现"我在这边改的怎么没了"。
+     */
+    private fun askStep(index: Int, step: Step) {
+        val rule = logicRules.getOrNull(index) ?: return
+        if (step.kind == Step.MAIN) {
+            askRuleSettings(index)
+            return
+        }
+        val title = if (step.kind == Step.ELSE) getString(R.string.logic_else)
+        else getString(R.string.logic_else_if_n, step.index + 1)
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(title)
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+        fun weightOf(): Int = when (step.kind) {
+            Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.weight ?: 1
+            else -> rule.elseWeight
+        }
+        fun fill() {
+            box.removeAllViews()
+            box.addView(
+                label(
+                    if (step.kind == Step.ELSE) getString(R.string.logic_else_hint)
+                    else getString(R.string.logic_else_if_hint, step.index + 1),
+                    11f, MUTED, bottom = 6,
+                )
             )
-            view.setPadding(dp(12), dp(11), dp(12), dp(11))
-            view.background = getDrawable(R.drawable.menu_item_idle)
-            view.layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-            ).apply { bottomMargin = dp(4) }
-            view.setOnClickListener {
-                askAction(index, ai, branch = branch)
+            // 这一支的「或者」有几支、主「就」的权重是多少 —— 有「或者」时权重才有意义。
+            val alts = when (step.kind) {
+                Step.ELSE_IF -> rule.elseIfs.getOrNull(step.index)?.alts.orEmpty()
+                else -> rule.elseAlts
             }
-            box.addView(view)
+            if (alts.isNotEmpty()) {
+                row(box, getString(R.string.logic_alt_weight, weightOf())) {
+                    askNumber(
+                        getString(R.string.logic_alt_weight), weightOf().toFloat(), 0f, 999f,
+                    ) { v ->
+                        setStepWeight(index, step, v.toInt())
+                        dialog.dismiss()
+                        askStep(index, step)
+                    }
+                }
+            }
+            for ((ai, a) in editTarget(rule, step).orEmpty().withIndex()) {
+                row(box, actionText(a)) {
+                    dialog.dismiss()
+                    askAction(index, ai, step)
+                }
+            }
+            row(box, getString(R.string.logic_module_action)) {
+                val actions = editTarget(rule, step).orEmpty().toMutableList()
+                actions.add(ActionSpec("say", text = "……"))
+                putActions(index, actions, step)
+                dialog.dismiss()
+                askAction(index, actions.size - 1, step)
+            }
+            row(box, getString(R.string.logic_module_alt)) {
+                val at = addAlt(index, step, ActionAlt(actions = listOf(ActionSpec("say", text = "……"))))
+                dialog.dismiss()
+                if (at != null) askAlt(index, step, at)
+            }
+            if (step.kind == Step.ELSE_IF) {
+                row(box, getString(R.string.logic_else_if_remove)) {
+                    removeStep(index, step.index)
+                    dialog.dismiss()
+                }
+            }
         }
-        val add = label(getString(R.string.logic_module_action), 13f, INK)
-        add.setPadding(dp(12), dp(11), dp(12), dp(11))
-        add.background = getDrawable(R.drawable.menu_item_selected)
-        add.setOnClickListener {
-            askAction(index, -1, branch = branch)
-        }
-        box.addView(add)
+        fill()
         dialog.show()
     }
 

@@ -281,8 +281,11 @@ def main():
         ("拖尾", "prop_trail_draw"),
         ("粒子图案", "particle_draw"),
         ("绳子图案", "prop_rope_draw"),
-        ("并行分支", "logic_branch"),
-        ("分支自己的当", "logic_branch_when"),
+        # 1.32.0：并行分支删了（用户的原话是"跟新建一条规则没有区别"），换成 if/else-if/else
+        # 和「就」的加权「或者」这三样 —— 每一样都要有一个点得开的入口。
+        ("否则如果", "logic_module_else_if"),
+        ("或者（加权备选）", "logic_module_alt"),
+        ("「否则」那一支", "logic_else_edit"),
         ("沙盒放道具", "sandbox_props"),
         ("加骨骼", "rig_add_bone"),
         ("骨骼列表", "rig_bone_list"),
@@ -792,6 +795,7 @@ def main():
            and "animOffsetX" not in ragdoll_kt and "animScale" not in ragdoll_kt)
     print("== 姿态锚点：小方块、绑规则、播到就响（1.24.0）==")
     logic_kt = next((t for p, t in files.items() if p.endswith("engine/logic/RuleEngine.kt")), "")
+    graph_kt = next((t for p, t in files.items() if p.endswith("LogicGraphView.kt")), "")
     report("锚点就是帧：一帧本来就带一整套姿势，锚点只是它在时间轴上的画法",
            "val rule: Int = -1" in anim_kt and "private fun addStudioAnchor(" in activity)
     report("锚点那一行画的是**时刻**（小方块），图那一行画的是**时长**（块有多宽）",
@@ -1317,17 +1321,80 @@ def main():
            "pet_summon_anim" in activity and "ACTION_ANIM" in overlay
            and "pet?.playAnimation(id)" in overlay)
 
+    print("== 否则如果链 + 就的加权或者：并行分支换成它们（1.32.0）==")
+    # 用户要的三件事：删掉并行分支（"跟新建一条规则没有区别"）、每一个「如果」后面能加一个向下
+    # 的「否则」（多个如果以并且/或者连着时，它就是那些如果的反方向 —— 由整组条件的真值算出来）、
+    # 「就」后面能加按权重挑一支的「或者」。这一节盯的是**接线**，语义在 tools/logic_check.py。
+    def code_of(text):
+        return "\n".join(l.split("//")[0] for l in text.split("\n"))
+
+    report("并行分支删干净了：模型里没有这个类型，读写两半都不认那个键",
+           "BranchSpec" not in open(os.path.join(
+               REPO, "app/src/main/java/dev/atp/pet/engine/logic/LogicSpec.kt"), encoding="utf-8").read()
+           and ".branches" not in code_of(activity)
+           and ".branches" not in code_of(bench)
+           and "logic_branch" not in open(os.path.join(RES, "values/strings.xml"), encoding="utf-8").read())
+    report("向下的行是通用的：图只知道「从哪一行的第几个方块吊下来」，不知道那是否则还是或者",
+           "class Drop(val parent: Int, val box: Int)" in graph_kt
+           and "fun setRules(next: List<List<Node>>, nextDrops: List<Drop> = emptyList())" in graph_kt
+           and "private fun drawDrops(canvas: Canvas)" in graph_kt)
+    report("否则吊在「如果」底下、或者吊在「就」底下（挂在哪一个方块下面是有意思的）",
+           "LogicGraphView.Drop(fromRow, fromIf)" in activity
+           and "LogicGraphView.Drop(rowOf, thenAt)" in activity)
+    report("行 → 步 的映射只有一处（建图的时候一起建）",
+           "private var logicRowSteps: List<List<Step>> = emptyList()" in activity
+           and "logicRowSteps = rowSteps" in activity
+           and "private fun logicStepOf(rule: Int, row: Int): Step" in activity)
+    logic_spec_kt = logic_kt_text(files)
+    report("「否则如果」是一级一行，而且每一级有自己的如果 / 就 / 或者",
+           "data class ElseIfSpec(" in logic_spec_kt
+           and "val elseIfs: List<ElseIfSpec> = emptyList()" in logic_spec_kt
+           and "elseIfs = (0 until (elseIfArr?.length() ?: 0)).map" in logic_spec_kt
+           and "data class ActionAlt(" in logic_spec_kt
+           and "object Weights {" in logic_spec_kt)
+    report("否则如果链在引擎里是「从头问、第一个成立的走」（logic_check 里有逐点断言）",
+           "for ((ei, step) in rule.elseIfs.withIndex())" in open(os.path.join(
+               REPO, "app/src/main/java/dev/atp/pet/engine/logic/RuleEngine.kt"), encoding="utf-8").read())
+    report("「或者」有入口：加一支、改权重、删一支（三个都在）",
+           "private fun addAlt(" in activity and "private fun setAltWeight(" in activity
+           and "private fun removeAlt(" in activity and "private fun askAlt(" in activity)
+    report("加一支「或者」时立刻问它做什么（和加一个动作同一个规矩）",
+           "askAlt(index, step, at)" in activity or "if (at != null) askAlt(index, step, at)" in activity)
+    report("权重能改的还有主「就」那一支（它不在 alts 里，所以另有一条路）",
+           "private fun setStepWeight(" in activity and "copy(thenWeight = w)" in activity
+           and "copy(weight = w)" in activity)
+    # 用户报的那条："分支规则里的方块还不能点"。真因很可能是外层滚动容器把点击抢走了（图和
+    # 滚动条在 DOWN 那一刻长得一样），修法是按下时不让父容器拦截。
+    report("图上按下时不让外层滚动容器抢走这一串触摸（方块才点得动）",
+           "requestDisallowInterceptTouchEvent(true)" in graph_kt
+           and "requestDisallowInterceptTouchEvent(false)" in graph_kt)
+    # 每一种方块都要有人在点击里管它 —— "点不动"的机器版本就是"有一种 role 没人接"。
+    tap = activity[activity.find("logicGraph.onTap = {"):]
+    tap = tap[:tap.find("\n        }")]
+    # 需要**各自**处理的角色列在这里（"就"那种动作盒子走 else 那一条，因为点它们都是同一个
+    # 动作编辑器）。加一个新角色时这里和点击那一段都要加一条 —— 一条注释守不住这件事，所以
+    # 断言守的是"这一批现在都有人管"。
+    must_handle = ["WHEN", "IF", "CONNECTOR", "ADD", "TIMER", "TIMER_ELSE", "OR", "ELSE"]
+    unhandled = [r for r in must_handle if ("Node." + r) not in tap]
+    report("图上每一种方块都有人在点击里管（没有点不开的角色）", not unhandled, ", ".join(unhandled))
+    report("而那条兜底的分支是给动作盒子的（就 / 否则里的执行器）",
+           "else -> askAction(" in tap)
+
     print("== 执行器之间能插计时器：盒子在空档里，插入不是替换 ==")
     # 「在一个逻辑中如果有多个执行器，应能在执行器中间插入计时器，第一个执行器前也可以」。
     # 引擎那一半早就有（一个在中间的 wait 会把剩下的动作记下来、到点接着跑，logic_check 里
     # 几条断言盯着），缺的是编辑器：行尾那个「＋动作」只会追加，所以计时器只能落在最后一个
     # 执行器后面 —— 那里它什么也等不到。这一版加的是**空档里的盒子**。
-    graph_kt = next((t for p, t in files.items() if p.endswith("LogicGraphView.kt")), "")
     report("图里多了一个「空档」角色（＋计时器），否则/分支各一个",
            "const val TIMER = 6" in graph_kt and "const val TIMER_ELSE = 7" in graph_kt)
-    report("就 / 否则 / 每个分支的执行器之间都放了它",
-           activity.count("timerNode(") >= 6 and "branch.actions.size - 1" in activity
-           and "rule.elseActions.size - 1" in activity and "rule.actions.size - 1" in activity)
+    # 1.32.0：能插计时器的地方从"就 / 否则 / 每个分支"变成"每一行执行器之间"（主行、每一级
+    # 否则如果、最后的否则，还有每一支或者）—— 判据是那几行都从同一个地方取"动作表"。
+    report("每一行执行器之间都放了它（主行 / 否则如果 / 否则 / 或者）",
+           activity.count("timerNode(") >= 4
+           and "if (ai < actions.size - 1) row.add(timerNode(ai + 1, rows.size, elseLike))" in activity
+           and "if (k < actions.size - 1) row.add(timerNode(k + 1, rows.size, step.isElse))" in activity
+           and "editTarget(rule, step).orEmpty()" in activity
+           and "editTarget(rule, step.alt(ai + 1)).orEmpty()" in activity)
     report("点它问的是秒数，插的是「等一会儿」",
            "private fun askTimer(" in activity
            and "ActionSpec(ActionKind.WAIT.id, value = seconds)" in activity)
