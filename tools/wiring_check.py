@@ -1439,6 +1439,21 @@ def main():
            and "sandboxView.stopOverlay()" in activity
            and "R.string.anim_overlay_play" in activity
            and "fun playingIds(): List<String>" in bench)
+    # 1.31.1：用户报的是"按了叠加却什么都没叠上"。原因是「＋ 叠」只管"加进播放表"，而
+    # "加在别人身上"是那段动画自己的开关，默认关着 —— 于是"叠"进去的还是整份接管。
+    # 这三条钉的是"按钮真的会叠"以及"看不出来的时候界面会说出来"。
+    report("「＋ 叠」没打开叠加就先打开它（按钮写着叠，就得真的叠）",
+           "if (!anim.additive &&\n                        store.saveAnimation(folder, anim.copy(additive = true))" in activity
+           and "R.string.anim_overlay_turned_on" in activity)
+    report("「正在演」那一行标出哪几段是叠加，并写出脚下踩着谁",
+           "R.string.anim_now_add" in activity and "sandboxView.heldPoseName()" in activity
+           and "R.string.anim_floor" in activity and "sandboxView.poseIsRest()" in activity)
+    # 反查是**比角度**：名字记在旁边的话，动作被改名/改内容之后界面上那句"脚下：坐"就是假话。
+    report("脚下是谁是**比角度**反查出来的，不是记了个名字",
+           "fun heldPoseName(): String?" in bench and "if (angles == held) return name" in bench
+           and "fun poseIsRest(): Boolean" in bench)
+    report("整份替换的动画压着动作时，界面当场说出怎么办（不用用户自己猜）",
+           "R.string.anim_replace_warn" in activity and "specs.firstOrNull { it != null && !it.additive }" in activity)
     report("叠了几段只有一处数（状态行和按钮不会各数各的）",
            "fun overlayCount(): Int = maxOf(0, animSlots.size - 1)" in bench
            and activity.count("sandboxView.overlayCount()") >= 1)

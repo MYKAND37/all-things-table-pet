@@ -407,6 +407,12 @@
     <string name="anim_overlay_play">＋ 叠</string>
     <string name="anim_overlay_stop">停掉叠加</string>
     <string name="anim_overlay_stop_one">撤掉叠加</string>
+    <string name="anim_now_add">%1$s（叠加）</string>
+    <string name="anim_floor">脚下：%1$s</string>
+    <string name="anim_floor_rest">静息（没按动作）</string>
+    <string name="anim_floor_custom">别的姿势（比如一段"播一遍"的动画停下来时冻住的那一帧）</string>
+    <string name="anim_overlay_turned_on">「%1$s」已打开「叠加」：它现在加在你正按着的动作上面，而不是把它顶掉。想改回去：点它那一行 → 「叠加」那个开关。</string>
+    <string name="anim_replace_warn">正在演的「%1$s」是整份替换，它会顶掉你下面按着的动作。想让它加在动作上：按它那一行的「＋ 叠」（会顺手帮它打开「叠加」）。</string>
     <string name="anim_overlay_hint">「＋ 叠」= 把这一段加在正在演的那一段上面。两段各走各的时钟（各自的速度、循环、回家），合起来摆这一只宠物 —— 姿势相加、图一起亮、画面偏移相加、缩放相乘。想让某一段"只加我碰过的骨头"，在动画页里把它设成「叠加」。</string>
     <string name="anim_play">▶ 播放</string>
     <string name="anim_stop">⏹ 停止</string>

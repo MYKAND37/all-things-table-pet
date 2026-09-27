@@ -112,6 +112,12 @@
     <string name="anim_overlay_play">+ stack</string>
     <string name="anim_overlay_stop">Stop the stacked ones</string>
     <string name="anim_overlay_stop_one">Unstack</string>
+    <string name="anim_now_add">%1$s (additive)</string>
+    <string name="anim_floor">Under it: %1$s</string>
+    <string name="anim_floor_rest">rest (no pose picked)</string>
+    <string name="anim_floor_custom">another pose (e.g. the frame a "play once" clip froze on)</string>
+    <string name="anim_overlay_turned_on">"%1$s" now has Add on top turned on: it is added on top of the pose you are holding instead of replacing it. To undo: tap its row then the Add on top switch.</string>
+    <string name="anim_replace_warn">"%1$s" is playing as a full replacement, so it overrides the pose you are holding below. To add it on top instead, press "+ stack" on its row (that also turns Add on top on for it).</string>
     <string name="anim_overlay_hint">"+ stack" adds this clip on top of whatever is playing. Each clip keeps its own clock (its own speed, loop, return home) and together they pose the one pet: angles add, art turns on together, picture offsets add, scale multiplies. To make a clip "only add the bones I touched", turn on Additive on its page in the animation editor.</string>
     <string name="anim_play">▶ Play</string>
     <string name="anim_preview">▶ Preview</string>

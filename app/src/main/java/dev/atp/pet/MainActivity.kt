@@ -1299,13 +1299,25 @@ class MainActivity : AppCompatActivity() {
         val playingIds = sandboxView.playingIds()
         val overlayCount = sandboxView.overlayCount()
         if (playingIds.isNotEmpty()) {
-            val names = playingIds.map { id -> anims.firstOrNull { it.id == id }?.name ?: id }
+            val specs = playingIds.map { id -> anims.firstOrNull { it.id == id } }
+            // 每一段后面标出它是不是「叠加」：不标的话，"我按了「＋ 叠」怎么还是被顶掉"
+            // 只能靠用户自己去翻那个弹窗。
+            val names = specs.map { a ->
+                val n = a?.name ?: "?"
+                if (a?.additive == true) getString(R.string.anim_now_add, n) else n
+            }
             val now = label(
                 getString(R.string.anim_now_playing, names.joinToString(" ＋ ")),
-                11f, INK, bottom = 4,
+                11f, INK, bottom = 2,
             )
             now.setPadding(dp(10), dp(6), dp(10), dp(6))
             box.addView(now)
+            // 脚下踩着谁（1.31.1）：叠加是"加在它上面"，所以它是不是你以为的那一个，必须看得见。
+            // 动作按下去之后被"整份替换"的动画顶掉，就是从这里看出来的。
+            val held = sandboxView.heldPoseName() ?: getString(
+                if (sandboxView.poseIsRest()) R.string.anim_floor_rest else R.string.anim_floor_custom,
+            )
+            box.addView(label(getString(R.string.anim_floor, held), 11f, MUTED, bottom = 4))
             if (overlayCount > 0) {
                 val stop = label(getString(R.string.anim_overlay_stop), 11f, INK)
                 stop.setPadding(dp(10), dp(6), dp(10), dp(6))
@@ -1315,8 +1327,19 @@ class MainActivity : AppCompatActivity() {
                     fillActionList(box, folder)
                 }
                 box.addView(stop)
-                box.addView(label(getString(R.string.anim_overlay_hint), 10f, MUTED, top = 4, bottom = 4))
             }
+            // 正在演的那一段是"整份替换"、而下面又按着一个动作：这就是用户报的那个场面
+            // （"我按了叠加，它却把动作顶掉了"）。与其让他自己猜，不如当场说清楚怎么办。
+            val replacing = specs.firstOrNull { it != null && !it.additive }
+            if (replacing != null && !sandboxView.poseIsRest()) {
+                box.addView(
+                    label(
+                        getString(R.string.anim_replace_warn, replacing.name),
+                        10f, MUTED, top = 2, bottom = 4,
+                    )
+                )
+            }
+            box.addView(label(getString(R.string.anim_overlay_hint), 10f, MUTED, bottom = 4))
         }
         for (anim in anims) {
             val row = LinearLayout(this).apply {
@@ -1395,9 +1418,26 @@ class MainActivity : AppCompatActivity() {
                 if (stacked) R.drawable.menu_item_selected else R.drawable.menu_item_idle
             )
             stack.setOnClickListener {
-                if (stacked) sandboxView.stopOverlay()
-                else if (!sandboxView.playAnimation(anim.id, overlay = true)) {
-                    Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+                if (stacked) {
+                    sandboxView.stopOverlay()
+                } else {
+                    // 「＋ 叠」按下去就该**叠**（1.31.1 修的就是这一条）：这一段原来没打开
+                    // 「叠加」时，它被加进播放表里也还是整份接管 —— 用户看到的是"按了叠加，
+                    // 结果动作被顶掉"。所以这里顺手把那个开关打开（存在动画自己身上，仍然只有
+                    // 这一份真相），并说一句，不然用户不知道自己的动画被改了。
+                    if (!anim.additive &&
+                        store.saveAnimation(folder, anim.copy(additive = true))
+                    ) {
+                        Toast.makeText(
+                            this,
+                            getString(R.string.anim_overlay_turned_on, anim.name),
+                            Toast.LENGTH_LONG,
+                        ).show()
+                        refreshAnimations(folder)
+                    }
+                    if (!sandboxView.playAnimation(anim.id, overlay = true)) {
+                        Toast.makeText(this, R.string.anim_empty_play, Toast.LENGTH_SHORT).show()
+                    }
                 }
                 fillActionList(box, folder)
             }

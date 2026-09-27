@@ -1322,6 +1322,31 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     fun overlayCount(): Int = maxOf(0, animSlots.size - 1)
 
+    /**
+     * 现在**按着的那个动作**叫什么（1.31.1），没按（或者它已经不是任何一个存下来的动作）
+     * 就是 null。
+     *
+     * 反查是**比角度**，不是把一个名字记在旁边：动作可以在别处被改名、被改内容、被删掉，
+     * 记下来的名字到那时就是假话 —— 而界面上那句「脚下：坐」必须是现在真的踩着的那一份
+     * （错的名字会让用户以为"我按的是坐姿"，其实按着的是别的）。两个动作长得一模一样时给
+     * 第一个：它们本来就分不出来。
+     */
+    fun heldPoseName(): String? {
+        val held = ragdoll?.poseBase ?: return null
+        if (held.isEmpty()) return null
+        for ((name, angles) in poseByName) if (angles == held) return name
+        return null
+    }
+
+    /**
+     * 脚下是不是**静息**（什么都没按）。
+     *
+     * 和 [heldPoseName] 一起用才完整：名字查不到有两种情况 —— "什么都没按"（静息）和
+     * "按着一个已经不算任何动作的姿势"（比如一段"播一遍"的动画停下来时冻住的那一帧）。
+     * 两者在界面上是两句话，所以这里分开问，而不是让调用方猜。
+     */
+    fun poseIsRest(): Boolean = ragdoll?.poseBase?.isEmpty() ?: true
+
     /** null clears back to limp. */
     fun applyPose(angles: Map<String, Float>?, home: Boolean = true) {
         val rag = ragdoll ?: return
