@@ -535,6 +535,90 @@ def check_object_imports():
     report("跨包用到的 object 都 import 了", not bad, "; ".join(bad[:4]))
 
 
+def strip_keep_lines(text):
+    """和 [strip_code] 一样去掉注释与字符串，但**换行一个不少**。
+
+    原因很实际：`strip_code` 把整块注释连同里面的换行一起吞掉，于是它上面那些行号全废了 ——
+    一条会报行号的检查必须用这一版（1.31.0 加的那条就是靠行号告诉人改哪儿）。
+    """
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+        elif c == "/" and i + 1 < n and text[i + 1] == "*":
+            j = text.find("*/", i + 2)
+            chunk = text[i:n if j < 0 else j + 2]
+            out.append("\n" * chunk.count("\n"))
+            i = n if j < 0 else j + 2
+        elif c == '"':
+            if text.startswith('"""', i):
+                j = text.find('"""', i + 3)
+                chunk = text[i:n if j < 0 else j + 3]
+                out.append("\n" * chunk.count("\n"))
+                i = n if j < 0 else j + 3
+            else:
+                start = i
+                i += 1
+                while i < n and text[i] != '"':
+                    i += 2 if text[i] == "\\" else 1
+                i += 1
+                chunk = text[start:i]
+                out.append("\n" * chunk.count("\n"))
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
+
+def check_types_imported():
+    """
+    构造一个**别的包里声明的类型**（`Foo(...)`）需要 import —— 只有 `Foo.` 的用法不需要。
+
+    这是 `check_object_imports` 的第四个兄弟，而且它已经让 CI 红过一次（1.31.0）：
+    `TrackSample(...)` 在 `PhysicsSandboxView` 里第一次被**构造**，而在这之前它只是
+    `Timeline.sample(...)` 的返回类型 —— 靠类型推断，一个 import 都不需要。加了一句构造，
+    文件就得 import 它。本地没有编译器，所以这类错只有 CI 看得见。
+
+    判据刻意窄：只看本树里的**顶层**声明（嵌套类必须带前缀写，形如 `Foo.Bar(...)`，那种
+    写法里的 `Bar` 前面有个点，模式直接不匹配）、只看前面不是点也不是字母数字的名字、
+    以及这个文件自己没有声明同名类（私有嵌套类 `AnimSlot` 就是这种情况）。
+    """
+    owners = {}
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        code = strip_keep_lines(text)
+        pkg_m = re.search(r"^package\s+([\w.]+)", code, re.M)
+        pkg = pkg_m.group(1) if pkg_m else ""
+        for name in re.findall(
+                r"^(?:data |sealed |abstract |enum |value |annotation )*"
+                r"(?:class|interface|object)\s+(\w+)", code, re.M):
+            owners[name] = (pkg, os.path.basename(path))
+
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        code = strip_keep_lines(text)
+        pkg_m = re.search(r"^package\s+([\w.]+)", code, re.M)
+        pkg = pkg_m.group(1) if pkg_m else ""
+        imports = re.findall(r"^import\s+([\w.]+)", code, re.M)
+        named = {i.rsplit(".", 1)[-1] for i in imports if not i.endswith(".*")}
+        stars = {i[:-2] for i in imports if i.endswith(".*")}
+        for name, (home, _where) in owners.items():
+            if home == pkg or name in named or home in stars:
+                continue
+            if re.search(r"\b(?:class|interface|object)\s+" + name + r"\b", code):
+                continue  # 这个文件自己有一个同名的（私有的，或者别处的嵌套类）
+            m = re.search(r"(?<![\w.])" + name + r"\s*\(", code)
+            if m:
+                line = code.count("\n", 0, m.start()) + 1
+                bad.append("%s:%d 构造了 %s(...) 但没有 import（它在 %s）"
+                           % (os.path.basename(path), line, name, home or "默认包"))
+    report("跨包构造的类型都 import 了（只有编译器看得见的那种错）",
+           not bad, "; ".join(bad[:6]))
+
+
 def check_chip_lists():
     """
     paintChips takes strings, paintSwatches takes colours, and both take a list.
@@ -948,6 +1032,7 @@ def main():
     check_private_companions()
     check_folder_constants_qualified()
     check_object_imports()
+    check_types_imported()
     check_upper_case_names()
     check_local_function_scope()
     check_enum_when_exhaustive()

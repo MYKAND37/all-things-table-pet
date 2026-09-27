@@ -15,6 +15,7 @@ import dev.atp.pet.data.CharacterFolder
 import dev.atp.pet.engine.anim.Anim
 import dev.atp.pet.engine.anim.Timeline
 import dev.atp.pet.engine.anim.AnimationSpec
+import dev.atp.pet.engine.anim.TrackSample
 import dev.atp.pet.engine.event.EventType
 import dev.atp.pet.engine.event.GameEvent
 import dev.atp.pet.engine.fluid.Fluid
@@ -1947,9 +1948,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // 折的起点：脚下那一份。用户按着的动作就是它；没按动作、也没人在演的时候，
         // 第一段叠加动画拿**它自己的基准**当脚下（见 Anim.floorFor —— 不这样的话，
         // 一段在坐姿上摆的挥手单独播出来会变成"手臂抬 10 度"）。
-        val floor = Anim.floorFor(slots.first().spec, rag.poseBase)
+        val under = Anim.floorFor(slots.first().spec, rag.poseBase)
         var merged = TrackSample(
-            floor, emptyMap(), emptyMap(), emptyMap(), "", 0, 0,
+            under, emptyMap(), emptyMap(), emptyMap(), "", 0, 0,
         )
         var anyFinished = false
         val fired = ArrayList<Int>()
