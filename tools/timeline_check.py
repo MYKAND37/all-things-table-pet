@@ -264,6 +264,34 @@ def shift_keys(keys, frm, delta, max_t):
     return sorted(out, key=lambda k: k["t"])
 
 
+def frame_ends(spec):
+    """镜像 TimelineLayout.frameEnds（1.33.1）：每一帧**走完**的时刻，一共 帧数+1 个。
+
+    做成"一张表"而不是"下一帧的开始（没有就退回 0）"：后者在**最后一帧**上退回了 0，于是
+    "给最后一帧加长"变成了"所有关键帧一起挪" —— 用户的症状（整体前移/后移）就是这个。
+    """
+    out = []
+    acc = 0.0
+    for f in spec.get("frames", []):
+        acc += frame_seconds(f)
+        out.append(acc)
+    return out
+
+
+def grow_frame(spec, index, seconds):
+    """把第 [index] 帧的时长改成 [seconds]（镜像三处调用点的做法）。
+
+    返回 (新的 spec, 边界)：边界 = 这一帧**走完**的时刻，只有它之后的关键帧才跟着挪。
+    """
+    frames = list(spec.get("frames", []))
+    old = frame_seconds(frames[index])
+    frames[index] = dict(frames[index], seconds=seconds)
+    after = dict(spec, frames=frames)
+    ends = frame_ends(spec)          # 旧时间轴上的结束时刻
+    boundary = ends[index] if index < len(ends) else duration(spec)
+    return after, boundary, seconds - old
+
+
 def shifted(tracks, frm, delta, max_t):
     """在 frm 这一刻插了一段 delta 秒：之后的关键帧整体后移（镜像 Timeline.shifted）。"""
     if not tracks or delta == 0:
@@ -702,6 +730,51 @@ def main():
            snap_to_frame(0.5, starts, FRAME_SNAP) == 0.5)
     report("播放头落在哪一帧", frame_at(spec, 0.0) == 0 and frame_at(spec, 1.0) == 1
            and frame_at(spec, 1.9) == 1)
+
+    print("\n改一帧的时长之后，关键帧应该在哪（1.33.1 修的 bug）")
+    # 用户报的："加长（加一帧）或拉长（拉短）**最后一段**时，关键帧的位置会错位 —— 拉长则整体
+    # 关键帧前移，变短则整体后移"。真因：边界算的是"下一帧的开始"，而最后一帧**没有下一帧**，
+    # 于是退回了 0；from=0 意味着每一个关键帧都被挪（连第一帧里的也挪）。
+    three = {"frames": [{"seconds": 1.0}, {"seconds": 1.0}, {"seconds": 1.0}]}
+    report("frameEnds 一共 帧数+1 个，最后一个 = 整段时长",
+           frame_ends(three) == [1.0, 2.0, 3.0] and abs(frame_ends(three)[-1] - duration(three)) < 1e-9)
+    report("frameEnds[i] 就是第 i+1 帧的开始（i < 最后一帧）",
+           all(abs(frame_ends(three)[i] - frame_starts(three)[i + 1]) < 1e-9 for i in range(2)))
+
+    keys = [key(0.0, 0.0), key(1.0, 1.0), key(2.0, 2.0), key(2.5, 3.0)]
+    times = [k["t"] for k in keys]
+    # 最后一帧加长：**没有任何关键帧需要动**（它的开始没变，只有结束变长）。
+    after, boundary, delta = grow_frame(three, 2, 1.5)
+    moved_keys = shift_keys(keys, boundary, delta, duration(after))
+    report("给**最后一帧**加长：一个关键帧都不动",
+           [k["t"] for k in moved_keys] == times, str([k["t"] for k in moved_keys]))
+    report("（边界就是老的总时长，所以它之后本来就没有关键帧）", abs(boundary - 3.0) < 1e-9)
+    # 缩短也一样 —— 但**超出新末尾**的关键帧会被夹到末尾上（不是消失，也不是留在动画外面：
+    # "时间轴比动画还长"的状态没有任何界面说得清，见 Timeline.shifted 的注释）。
+    short_keys = [key(0.0, 0.0), key(1.0, 1.0), key(2.0, 2.0)]
+    after2, boundary2, delta2 = grow_frame(three, 2, 0.4)
+    report("给最后一帧缩短：落在里面的关键帧一个都不动",
+           [k["t"] for k in shift_keys(short_keys, boundary2, delta2, duration(after2))]
+           == [0.0, 1.0, 2.0])
+    report("而超出新末尾的那个被夹到末尾（留着，不是没了）",
+           [k["t"] for k in shift_keys(keys, boundary2, delta2, duration(after2))]
+           == [0.0, 1.0, 2.0, 2.4],
+           str([k["t"] for k in shift_keys(keys, boundary2, delta2, duration(after2))]))
+    # 中间那一帧加长：它**里面**的关键帧留着，它后面的整体后移。
+    after3, boundary3, delta3 = grow_frame(three, 0, 2.0)
+    moved3 = [k["t"] for k in shift_keys(keys, boundary3, delta3, duration(after3))]
+    report("给**中间**那一帧加长：它里面的关键帧留着，后面的整体后移",
+           moved3 == [0.0, 2.0, 3.0, 3.5], str(moved3))
+    # 插一帧（复制这一帧、接在它后面）：同样是"这一帧之后"才动。
+    # 插一帧（复制第 1 帧接在它后面）：第 1 帧**里面**的关键帧留在它身上，从它**结束**
+    # 那一刻起（也就是新帧之后）的才整体后移。正好落在边界上的那个属于后面，所以它跟着走。
+    inserted = [k["t"] for k in shift_keys(keys, frame_ends(three)[0], 1.0, 4.0)]
+    report("插一帧：第 1 帧里面的不动，从它结束那一刻起的整体后移",
+           inserted == [0.0, 2.0, 3.0, 3.5], str(inserted))
+    report("镜像里 frameEnds 的算法和 Kotlin 逐句一致（漂了会红）",
+           "fun frameEnds(spec: AnimationSpec): List<Float>" in open(LAYOUT, encoding="utf-8").read()
+           and "acc += Anim.frameSeconds(f)" in open(LAYOUT, encoding="utf-8").read()
+           and "out.add(acc)" in open(LAYOUT, encoding="utf-8").read())
 
     print("")
     if FAILURES:

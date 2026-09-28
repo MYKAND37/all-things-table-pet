@@ -812,6 +812,7 @@ def main():
            and "animOffsetX" not in ragdoll_kt and "animScale" not in ragdoll_kt)
     print("== 姿态锚点：小方块、绑规则、播到就响（1.24.0）==")
     logic_kt = next((t for p, t in files.items() if p.endswith("engine/logic/RuleEngine.kt")), "")
+    tl_layout_kt = next((t for p, t in files.items() if p.endswith("engine/anim/TimelineLayout.kt")), "")
     graph_kt = next((t for p, t in files.items() if p.endswith("LogicGraphView.kt")), "")
     report("锚点就是帧：一帧本来就带一整套姿势，锚点只是它在时间轴上的画法",
            "val rule: Int = -1" in anim_kt and "private fun addStudioAnchor(" in activity)
@@ -1052,8 +1053,10 @@ def main():
            and "animFrameDragBase = null\n        pushStudioUndo(base)" in activity)
     report("基准是**拖动开始那一刻**的动画（不然越拖越快）",
            "val base = animFrameDragBase ?: live.also { animFrameDragBase = it }" in activity)
+    # 1.33.1 起边界是 frameEnds（"这一帧走完"），所以这里只认"调了 shifted"这件事本身，
+    # 边界那一条在上面的 1.33.1 小节里单独钉（写死参数形状的断言会随改动失明）。
     report("时长变了，后面的关键帧跟着挪（和 −0.1s 那条按钮同一条规矩）",
-           "Timeline.shifted(\n            base.tracks" in activity
+           "Timeline.shifted(" in activity and "base.tracks" in activity
            and "MIN_FRAME_SECONDS, MAX_FRAME_SECONDS" in activity)
     report("拖完仍然能点一下选中那一帧（没过阈值就是点）",
            "} else if (!frameDragMoved) {" in view_kt
@@ -1478,6 +1481,22 @@ def main():
     report("图上每一种方块都有人在点击里管（没有点不开的角色）", not unhandled, ", ".join(unhandled))
     report("而那条兜底的分支是给动作盒子的（就 / 否则里的执行器）",
            "else -> askAction(" in tap)
+
+    print("== 改一帧的时长：边界是「这一帧走完」，不是「下一帧的开始」（1.33.1）==")
+    # 用户报："加长（加一帧）或拉长/拉短**最后一段**时关键帧会错位，拉长则整体前移、变短则整体
+    # 后移"。真因：三处调用点算边界时写的是"下一帧的开始"，而**最后一帧没有下一帧** ——
+    # `getOrElse(index + 1) { 0f }` 于是退回了 0，`from = 0` 意味着**每一个关键帧都被挪**
+    # （连第一帧里的也挪）。正确边界是**这一帧走完**的时刻（TimelineLayout.frameEnds）。
+    report("边界取自 frameEnds（一张 帧数+1 的表，最后一帧取到它自己的结束）",
+           "fun frameEnds(spec: AnimationSpec): List<Float>" in tl_layout_kt
+           and "TimelineLayout.frameEnds(base).getOrElse(index) { Anim.duration(base) }" in activity
+           and "TimelineLayout.frameEnds(anim).getOrElse(animFrameIndex) { Anim.duration(anim) }" in activity
+           and "TimelineLayout.frameEnds(anim).getOrElse(i) { Anim.duration(anim) }" in activity)
+    report("而那个退回 0 的写法一处都不剩（它就是「整体都在动」的来源）",
+           "frameStarts(base).getOrElse(index + 1)" not in activity
+           and "frameStarts(anim).getOrElse(animFrameIndex + 1)" not in activity)
+    report("插一帧的边界也是「这一帧走完」（它里面的关键帧不跟着走）",
+           "TimelineLayout.frameEnds(anim).getOrElse(i) { Anim.duration(anim) }" in activity)
 
     print("== 执行器之间能插计时器：盒子在空档里，插入不是替换 ==")
     # 「在一个逻辑中如果有多个执行器，应能在执行器中间插入计时器，第一个执行器前也可以」。

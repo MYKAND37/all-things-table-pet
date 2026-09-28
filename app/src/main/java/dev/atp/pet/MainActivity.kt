@@ -6774,7 +6774,8 @@ class MainActivity : AppCompatActivity() {
             .coerceIn(MIN_FRAME_SECONDS, MAX_FRAME_SECONDS)
         val next = base.frames.toMutableList().apply { this[index] = frame.copy(seconds = seconds) }
         val shifted = Timeline.shifted(
-            base.tracks, TimelineLayout.frameStarts(base).getOrElse(index + 1) { 0f },
+            // 边界 = 这一帧**走完**的那一刻（不是"下一帧的开始"：最后一帧没有下一帧）。
+            base.tracks, TimelineLayout.frameEnds(base).getOrElse(index) { Anim.duration(base) },
             seconds - Anim.frameSeconds(frame), Anim.duration(base.copy(frames = next)),
         )
         val spec = base.copy(frames = next, tracks = shifted)
@@ -6982,8 +6983,13 @@ class MainActivity : AppCompatActivity() {
             val fresh = AnimFrame(pose, state, Anim.frameSeconds(here))
             insertedAt = i + 1
             next.add(insertedAt, fresh)
+            // 边界 = 被复制的那一帧**走完**的时刻（不是它的开始）：它**里面**的关键帧留在
+            // 它自己身上，从它后面开始（也就是新帧之后）的才整体后移 —— 注释里那句"后面的
+            // 关键帧整体后移"说的就是这个，而代码原来传的是这一帧的开始，于是它里面的
+            // 关键帧也被挪了一整帧的距离（在第一帧上按「＋帧」就成了"整体都动"）。
             tracks = Timeline.shifted(
-                anim.tracks, at, Anim.frameSeconds(fresh),
+                anim.tracks, TimelineLayout.frameEnds(anim).getOrElse(i) { Anim.duration(anim) },
+                Anim.frameSeconds(fresh),
                 Anim.duration(anim.copy(frames = next)),
             )
         } else {
@@ -7164,7 +7170,8 @@ class MainActivity : AppCompatActivity() {
         }
         // 这一帧变长/变短，它**之后**的关键帧跟着挪同样多（和插一帧同一个道理）。
         val shifted = Timeline.shifted(
-            anim.tracks, TimelineLayout.frameStarts(anim).getOrElse(animFrameIndex + 1) { 0f },
+            // 同上：最后一帧加长时，没有任何关键帧需要动（它的开始没变）。
+            anim.tracks, TimelineLayout.frameEnds(anim).getOrElse(animFrameIndex) { Anim.duration(anim) },
             seconds - Anim.frameSeconds(frame), Anim.duration(anim.copy(frames = next)),
         )
         if (!writeStudioAnimation(folder, anim.copy(frames = next, tracks = shifted))) return

@@ -177,6 +177,32 @@ object TimelineLayout {
         return out
     }
 
+    /**
+     * 每一帧**走完**的那一刻（旧时间轴上），一共 `帧数 + 1` 个：`[i]` 是第 i 帧的结束，
+     * 也就是第 i+1 帧的开始；最后一个 = 整段的时长。
+     *
+     * 为什么需要它（1.33.1 修的 bug）：改一帧的时长时，"这一帧之后的关键帧要跟着挪多少"的
+     * 边界就是**这一帧的结束**。三处调用原来写的是"下一帧的开始"，而**最后一帧没有下一帧**
+     * —— `getOrElse(index + 1) { 0f }` 于是退回了 **0**，`from = 0` 意味着**每一个关键帧都
+     * 被挪**（连第一帧里的也挪）。症状正是用户报的：给最后一帧加长，整条时间轴上的关键帧一起
+     * 移（相对各自的帧就错位了）；缩短则一起往回移。
+     *
+     * 而正确行为是：最后一帧的**开始**没变、只有它的**结束**变长 —— 所以**没有任何关键帧
+     * 需要动**。[i] 取到的是它自己的结束（= 老的总时长），落在它之后的关键帧本来就不存在。
+     *
+     * 做成"一张表"而不是"一个带默认值的查询"：默认值那一次就是 bug 的来源（少了下一帧时该退回
+     * 什么，唯独最后一帧上答案不是 0）。表长 n+1，**没有越界这一回事**，也就没有第二次机会错。
+     */
+    fun frameEnds(spec: AnimationSpec): List<Float> {
+        val out = ArrayList<Float>(spec.frames.size + 1)
+        var acc = 0f
+        for (f in spec.frames) {
+            acc += Anim.frameSeconds(f)
+            out.add(acc)
+        }
+        return out
+    }
+
     /** 播放头离哪一帧最近（0 起）——"现在演到第几帧"用帧序号说，比秒数好懂。 */
     fun frameAt(spec: AnimationSpec, t: Float): Int {
         val starts = frameStarts(spec)
