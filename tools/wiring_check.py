@@ -1343,11 +1343,13 @@ def main():
     # 骨头转），骨骼页拖它。这一节盯**接线**（数学在 tools/rig_prop_check.py 逐点钉过）。
     spec_kt = logic_kt_text(files)
     skel_kt = next((t for p, t in files.items() if p.endswith("engine/skeleton/Skeleton.kt")), "")
-    report("骨骼页有「摆道具」这个模式：进得去、出得来、松手就存",
-           "fun beginPropPlacement(node: String, art: Bitmap?)" in graph_kt.replace("graph", "")
-           or "fun beginPropPlacement(node: String, art: Bitmap?)" in next(
-               (t for p, t in files.items() if p.endswith("ui/SkeletonView.kt")), ""))
+    # 这一段原来先拿 LogicGraphView 的正文去 replace("graph","") 再找 —— 那是一次手滑
+    # （大概是想写 skel_view），靠 or 兜住才不会误报。断言里这种"看着在查、其实查的是别的东西"
+    # 的写法比没有断言更危险，所以这里直接问对的那份正文。
     skel_view = next((t for p, t in files.items() if p.endswith("ui/SkeletonView.kt")), "")
+    report("骨骼页有「摆道具」这个模式：进得去、出得来、松手就存",
+           "fun beginPropPlacement(node: String, art: Bitmap?)" in skel_view
+           and "fun endPropPlacement()" in skel_view and "onPropMoved?.invoke()" in skel_view)
     report("而且拖的时候画的就是那张道具图（要对的是它看起来在哪儿）",
            "private var propArt: Bitmap? = null" in skel_view
            and "canvas.drawBitmap(" in skel_view and "fun nodePropPointOf(node: NodeSpec): Vec2" in skel_view)
