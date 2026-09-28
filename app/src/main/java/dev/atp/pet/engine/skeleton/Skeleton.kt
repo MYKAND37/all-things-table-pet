@@ -1,5 +1,8 @@
 package dev.atp.pet.engine.skeleton
 
+import kotlin.math.sin
+import kotlin.math.cos
+import kotlin.math.abs
 import dev.atp.pet.engine.math.Transform
 import dev.atp.pet.engine.math.Vec2
 import kotlin.math.hypot
@@ -141,6 +144,68 @@ class Skeleton(val root: Bone) {
      * today the order cannot matter -- it is written down because "which one wins" is not
      * something a reader should have to guess from a map lookup.
      */
+    /**
+     * 一条射线打到哪一根骨头（1.34.0，狙击镜用）：最近的那一节，或者 null（没打中）。
+     *
+     * 一枪是**立刻**结算的（hitscan）：从枪口沿瞄准方向打一条射线，命中第一根离得够近的
+     * 骨头（骨头是一段线段，判据是"射线到这段线段的距离"），所以"打中了"和"看到准星压在
+     * 它身上"是同一件事 —— 没有飞行中的子弹要在半路上再算一遍碰撞。
+     *
+     * 纯几何、没有 Android，所以能整段镜像到 tools/scope_check.py 里逐点测。返回**骨头名 +
+     * 命中点**：名字给规则（"打到手了"），命中点是给以后的弹孔贴在身上的位置。
+     *
+     * [reach] 之外不算命中（准星压着画面边上但宠物在很远的地方，不该算打中）；[slack] 是
+     * "擦过去也算"的宽容度，取这一节骨头的粗细（骨头是线段，但它画出来是有宽度的）。
+     */
+    fun rayHit(from: Vec2, dir: Vec2, reach: Float, slack: Float): Pair<String, Vec2>? {
+        val len = hypot(dir.x, dir.y)
+        if (len < 1e-4f || reach <= 0f) return null
+        val ux = dir.x / len
+        val uy = dir.y / len
+        var best: String? = null
+        var bestAt = 0f
+        var bestDist = Float.MAX_VALUE
+        for (b in bones) {
+            // 骨头在世界里的位置：这一版的骨架已经算好 worldPosition，两段端点沿骨头方向。
+            val ax = b.worldPosition.x
+            val ay = b.worldPosition.y
+            // 骨头的方向 = 它的世界变换里的旋转（骨头自己的 x 轴就是它指的方向）。
+            val ang = b.worldTransform.rotation
+            val bx = ax + cos(ang) * b.length
+            val by = ay + sin(ang) * b.length
+            // 射线与这一段线段的最近距离，取射线上的参数 t 与线段上的参数 s。
+            val ex = bx - ax
+            val ey = by - ay
+            val denom = ux * ey - uy * ex
+            val s: Float
+            val t: Float
+            if (abs(denom) < 1e-6f) {
+                // 平行：取骨头一端的投影
+                s = 0f
+                t = (ax - from.x) * ux + (ay - from.y) * uy
+            } else {
+                val px = ax - from.x
+                val py = ay - from.y
+                t = (px * ey - py * ex) / denom
+                s = (px * uy - py * ux) / -denom
+            }
+            if (t < 0f || t > reach) continue
+            if (s < 0f || s > 1f) continue
+            val hx = from.x + ux * t
+            val hy = from.y + uy * t
+            val cx = ax + ex * s
+            val cy = ay + ey * s
+            val d = hypot(hx - cx, hy - cy)
+            if (d <= slack && t < bestDist) {
+                bestDist = t
+                best = b.name
+                bestAt = t
+            }
+        }
+        val name = best ?: return null
+        return name to Vec2(from.x + ux * bestAt, from.y + uy * bestAt)
+    }
+
     fun place(name: String): Vec2? {
         if (name.isEmpty()) return null
         byName[name]?.let { return it.worldPosition }
