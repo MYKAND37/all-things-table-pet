@@ -4015,23 +4015,6 @@ class MainActivity : AppCompatActivity() {
         box.addView(propChip)
         box.addView(label(getString(R.string.rig_node_prop_hint), 10f, MUTED, top = 4))
 
-        // 道具挂在这个点上的**位置**（1.33.0）：在骨骼页直接拖着它放，偏移跟着骨头转。
-        // 只在"已经存在的节点 + 已经选了道具"时出现 —— 新节点还没存，没有地方放那个偏移。
-        if (existing != null && prop.isNotEmpty()) {
-            dialogRow(box, getString(R.string.rig_prop_place)) {
-                val n = existing
-                val art = BitmapFactory.decodeFile(store.propArtFile(n.prop).absolutePath)
-                dialog.dismiss()
-                skeletonView.beginPropPlacement(n.name, art)
-                statusLine.text = getString(R.string.rig_prop_place_hint)
-            }
-            dialogRow(box, getString(R.string.rig_prop_place_reset)) {
-                skeletonView.setNodePropOffset(existing.name, 0f, 0f)
-                persistRig()
-                dialog.dismiss()
-            }
-        }
-
         // 能不能拖（1.26.0）：关掉之后这个点照样挂道具、照样系绳子、照样有碰撞，
         // 只是手指按上去不再把这一节拽走。给"一整条手臂挂在肩上时，指尖那个点会抢走手指"用。
         val dragChip = label(getString(R.string.rig_node_drag_on), 12f, INK)
@@ -4069,6 +4052,26 @@ class MainActivity : AppCompatActivity() {
             }
             .setNegativeButton(R.string.depth_cancel, null)
             .create()
+        // 道具挂在这个点上的**位置**（1.33.0）：在骨骼页直接拖着它放，偏移跟着骨头转。
+        // 只在"已经存在的节点 + 已经选了道具"时出现 —— 新节点还没存，没有地方放那个偏移。
+        //
+        // **必须建在 `val dialog` 之后**：这两行的闭包要 `dialog.dismiss()`，而 Kotlin 里
+        // 闭包只能捕获**在它前面声明**的局部变量 —— 放在前面就是 `Unresolved reference: dialog`
+        // （CI 报过一次；这一行注释是那次之后补的）。
+        if (existing != null && prop.isNotEmpty()) {
+            dialogRow(box, getString(R.string.rig_prop_place)) {
+                val n = existing
+                val art = BitmapFactory.decodeFile(store.propArtFile(n.prop).absolutePath)
+                dialog.dismiss()
+                skeletonView.beginPropPlacement(n.name, art)
+                statusLine.text = getString(R.string.rig_prop_place_hint)
+            }
+            dialogRow(box, getString(R.string.rig_prop_place_reset)) {
+                skeletonView.setNodePropOffset(existing.name, 0f, 0f)
+                persistRig()
+                dialog.dismiss()
+            }
+        }
         dialog.show()
         paintChips(placeViews, listOf("joint", "mid", "tip"), { place })
         paintDrag()
