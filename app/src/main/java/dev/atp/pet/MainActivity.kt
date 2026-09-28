@@ -526,11 +526,18 @@ class MainActivity : AppCompatActivity() {
         logicGraph = findViewById(R.id.logicGraph)
         logicFolderBar = findViewById(R.id.logicFolderBar)
         logicBar = findViewById(R.id.logicBar)
-        logicGraph.onTap = { rule, node ->
+        logicGraph.onTap = { row, node ->
             // 图上每一个方块都点得开它自己那件事（1.32.0 的判据就是这一条：**没有点不开的
-            // 方块**）。行 → 步 的映射由 buildLogicPane 建图时一起建（[logicRowSteps]），
-            // 因为"哪一行是哪一步"是**建的人**知道的，图只管画和报坐标。
-            val step = logicStepOf(rule, node.row)
+            // 方块**）。
+            //
+            // **图报的是"第几行"，不是"第几条规则"**（1.32.1 修的 bug）：旧版一条规则正好
+            // 占一行，两者恰好相等，于是"行号当规则号用"一直没出错；这一版一条规则可以有好几行
+            // （否则如果一级一行、或者一支一行），两者就不再相等 —— 症状是"给第 1 条加就，
+            // 加到了第 2 条上"，行数一多还会算出越界的规则号，于是**点了什么都不发生**。
+            // 现在行 → (规则, 步) 由建图那一段**同一个函数**记下来（见 [logicRows]）。
+            val where = logicRows.getOrNull(row) ?: return@onTap
+            val rule = where.first
+            val step = where.second
             when (node.role) {
                 LogicGraphView.Node.WHEN -> askRuleSettings(rule)
                 LogicGraphView.Node.IF -> askCondition(rule, node.index, step)
@@ -540,9 +547,9 @@ class MainActivity : AppCompatActivity() {
                     askTimer(rule, node.index, step)
                 // 一支「或者」：点它改它的权重和动作。
                 LogicGraphView.Node.OR -> askAlt(rule, step, node.index)
-                // 「否则」那一格：主行上它是「＋否则」（还没加），向下的行上它是那一步的标题。
+                // 「否则」那一格：它是这一行**自己的**否则（加一级 / 打开那一级）。
                 LogicGraphView.Node.ELSE ->
-                    if (node.row == 0) toggleElse(rule) else askStep(rule, step)
+                    if (step.kind == Step.MAIN) toggleElse(rule) else askStep(rule, step)
                 else -> askAction(rule, node.index, step)
             }
         }
@@ -5211,60 +5218,68 @@ class MainActivity : AppCompatActivity() {
     private fun buildLogicPane() {
         val graph = mutableListOf<List<LogicGraphView.Node>>()
         val drops = mutableListOf<LogicGraphView.Drop>()
-        val rowSteps = mutableListOf<MutableList<Step>>()
+        // 行 → (规则, 步)，和 graph 一一对应。**只有 [logicPushRow] 往里加**，所以两份名单
+        // 不可能不同步（上一版分开记，结果是把行号当规则号用了）。
+        val rowMap = mutableListOf<Pair<Int, Step>>()
+
+        fun logicPushRow(row: List<LogicGraphView.Node>, drop: LogicGraphView.Drop, ri: Int, step: Step) {
+            graph.add(row)
+            drops.add(drop)
+            rowMap.add(ri to step)
+        }
+
         for ((ri, rule) in logicRules.withIndex()) {
-            val rows = mutableListOf<List<LogicGraphView.Node>>()
-            val steps = mutableListOf<Step>()
-            val mine = mutableListOf<LogicGraphView.Drop>()
-            // 每一行**第一个「就」方块**在行内的下标：「或者」那一行就挂在这个方块底下
-            // （挂在哪一个方块下面是有意思的，不是排版细节）。
+            // 这一条规则的行：主行在最前，后面跟着向下的行（否则如果一级一行、最后否则一行、
+            // 每一支或者一行）。
+            val steps = mutableListOf<Pair<Step, Int>>()   // 步 + 它那一行的图行号
             val thenAtOf = mutableListOf<Int>()
 
             /**
-             * 造一行：这一步的骨架（如果 / 就 / ＋）。
+             * 造一行：这一步的骨架（当 / 如果 / ＋否则 / 就 / ＋）。
              *
-             * [drop] 是它从哪儿吊下来（[LogicGraphView.Drop.NONE] = 顶行）。
-             * [head] 是行首那一格的字（顶行是「当 …」，向下的行是「否则如果 2」「否则」）。
-             * 返回 (最后那个如果方块的下标, 第一个就方块的下标) —— 后面挂「否则」和「或者」
-             * 要用它们：否则吊在**如果**下面，或者吊在**就**下面。
+             * [head] 是行首那一格的字（顶行是「当 …」，向下的行是「否则」/「否则如果 N」）。
+             * 返回 (最后那个如果方块的下标, 第一个就方块的下标)：否则从**如果**底下吊下来、
+             * 或者从**就**底下吊下来，挂在哪一个方块下面是有意思的。
              */
             fun addRow(
                 step: Step,
                 drop: LogicGraphView.Drop,
                 head: List<String>?,
+                elseBox: Pair<String, Int>?,
             ): Pair<Int, Int> {
                 val row = mutableListOf<LogicGraphView.Node>()
+                val rowIndex = graph.size
                 if (head != null) {
-                    row.add(LogicGraphView.Node(LogicGraphView.Node.WHEN, head, -1, rows.size))
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.WHEN, head, -1, rowIndex))
                 } else {
                     row.add(
                         LogicGraphView.Node(
                             LogicGraphView.Node.ELSE,
                             listOf(if (step.kind == Step.ELSE) "否则" else "否则如果 ${step.index + 1}"),
                             -1,
-                            rows.size,
+                            rowIndex,
                         )
                     )
                 }
                 var ifAt = 0
                 val conditions = editConditions(rule, step).orEmpty()
                 if (conditions.isEmpty()) {
-                    // 一个「如果」都没有 = 总是（和以前一样：一条链上有个洞读起来像失误）。
-                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, rows.size))
+                    // 一个「如果」都没有 = 总是（一条链上有个洞读起来像失误）。
+                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, rowIndex))
                     ifAt = row.size - 1
                 } else {
                     for ((ci, c) in conditions.withIndex()) {
                         if (ci > 0) {
                             row.add(
                                 LogicGraphView.Node(
-                                    LogicGraphView.Node.CONNECTOR, listOf(Labels.join(this, c.join)),
-                                    ci, rows.size,
+                                    LogicGraphView.Node.CONNECTOR,
+                                    listOf(Labels.join(this, c.join)), ci, rowIndex,
                                 )
                             )
                         }
                         row.add(
                             LogicGraphView.Node(
-                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, rows.size,
+                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, rowIndex,
                             )
                         )
                         ifAt = row.size - 1
@@ -5273,34 +5288,46 @@ class MainActivity : AppCompatActivity() {
                 row.add(
                     LogicGraphView.Node(
                         LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
-                        LogicGraphView.Node.ADD_CONDITION, rows.size,
+                        LogicGraphView.Node.ADD_CONDITION, rowIndex,
                     )
                 )
+                // 「否则」**就跟在如果后面**（1.32.1 按用户说的挪过来的：它属于这一组如果，
+                // 不属于整条规则的末尾）。同一个盒子干两件事，由"它是不是最后一级"决定：
+                //   · 最后一级 → 「＋否则」= 那一条兜底的路（[toggleElse] → 向下多一行）；
+                //   · 中间某一级 → 「＋否则如果」= 在**这一级后面**插一级（[addModule] 里按
+                //     被点的那一步算位置，而不是永远加到末尾）。
+                if (elseBox != null) {
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ADD, listOf(elseBox.first), elseBox.second,
+                            rowIndex,
+                        )
+                    )
+                }
                 // 执行器之间（和第一个之前）各留一个「＋计时器」：一条规则是一串顺序执行。
                 val actions = editTarget(rule, step).orEmpty()
                 val elseLike = step.isElse
                 var thenAt = -1
                 for ((ai, a) in actions.withIndex()) {
-                    if (ai == 0) row.add(timerNode(0, rows.size, elseLike))
+                    if (ai == 0) row.add(timerNode(0, rowIndex, elseLike))
                     row.add(
                         LogicGraphView.Node(
                             if (elseLike) LogicGraphView.Node.ELSE else LogicGraphView.Node.THEN,
-                            listOf(actionText(a)), ai, rows.size,
+                            listOf(actionText(a)), ai, rowIndex,
                         )
                     )
                     if (thenAt < 0) thenAt = row.size - 1
-                    if (ai < actions.size - 1) row.add(timerNode(ai + 1, rows.size, elseLike))
+                    if (ai < actions.size - 1) row.add(timerNode(ai + 1, rowIndex, elseLike))
                 }
                 row.add(
                     LogicGraphView.Node(
                         LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                        LogicGraphView.Node.ADD_ACTION, rows.size,
+                        LogicGraphView.Node.ADD_ACTION, rowIndex,
                     )
                 )
                 if (thenAt < 0) thenAt = row.size - 1
-                rows.add(row)
-                steps.add(step)
-                mine.add(drop)
+                logicPushRow(row, drop, ri, step)
+                steps.add(step to rowIndex)
                 thenAtOf.add(thenAt)
                 return ifAt to thenAt
             }
@@ -5311,21 +5338,42 @@ class MainActivity : AppCompatActivity() {
                 Step.MAIN_STEP,
                 LogicGraphView.Drop.NONE,
                 listOf(Labels.event(this, EventType.of(rule.on)) + who + where),
+                // 一个字配一件事：没有级的时候它是"加兜底"，有级的时候它是"在这一级后面插一级"。
+                if (rule.elseIfs.isEmpty() && rule.elseActions.isEmpty()) {
+                    getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
+                } else {
+                    getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
+                },
             )
 
-            // 向下的行（1.32.0）：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行
-            // 的如果**底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
+            // 向下的行：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行的如果**
+            // 底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
             var fromRow = 0
             var fromIf = mainIf
             for ((si, _) in rule.elseIfs.withIndex()) {
+                // 最后一级：这一格是**兜底**（＋否则）；不是最后一级：它是**插一级**（＋否则如果）。
+                val last = si == rule.elseIfs.size - 1 && rule.elseActions.isEmpty()
                 val (ifAt, _) = addRow(
-                    Step.elseIf(si), LogicGraphView.Drop(fromRow, fromIf), null,
+                    Step.elseIf(si),
+                    LogicGraphView.Drop(fromRow, fromIf),
+                    null,
+                    if (last) {
+                        getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
+                    } else {
+                        getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
+                    },
                 )
-                fromRow = rows.size - 1
+                fromRow = graph.size - 1
                 fromIf = ifAt
             }
             if (rule.elseActions.isNotEmpty() || rule.elseIfs.isNotEmpty()) {
-                addRow(Step.ELSE_STEP, LogicGraphView.Drop(fromRow, fromIf), null)
+                // 最后那一行是兜底的「否则」，它后面没有"再否则"可加（所以那一格是 null）。
+                addRow(
+                    Step.ELSE_STEP,
+                    LogicGraphView.Drop(fromRow, fromIf),
+                    null,
+                    null,
+                )
             }
 
             // 每一支「或者」一行，吊在**它自己那一步的就**底下。
@@ -5337,73 +5385,54 @@ class MainActivity : AppCompatActivity() {
                 }
                 for ((ai, _) in alts.withIndex()) {
                     val row = mutableListOf<LogicGraphView.Node>()
+                    val rowIndex = graph.size
                     row.add(
                         LogicGraphView.Node(
-                            LogicGraphView.Node.OR, listOf("或者 " + (ai + 1)), ai, rows.size,
+                            LogicGraphView.Node.OR, listOf("或者 " + (ai + 1)), ai, rowIndex,
                         )
                     )
                     val actions = editTarget(rule, step.alt(ai + 1)).orEmpty()
                     for ((k, a) in actions.withIndex()) {
-                        if (k == 0) row.add(timerNode(0, rows.size, step.isElse))
+                        if (k == 0) row.add(timerNode(0, rowIndex, step.isElse))
                         row.add(
                             LogicGraphView.Node(
-                                if (step.isElse) LogicGraphView.Node.ELSE else LogicGraphView.Node.THEN,
-                                listOf(actionText(a)), k, rows.size,
+                                if (step.isElse) LogicGraphView.Node.ELSE
+                                else LogicGraphView.Node.THEN,
+                                listOf(actionText(a)), k, rowIndex,
                             )
                         )
-                        if (k < actions.size - 1) row.add(timerNode(k + 1, rows.size, step.isElse))
+                        if (k < actions.size - 1) row.add(timerNode(k + 1, rowIndex, step.isElse))
                     }
                     row.add(
                         LogicGraphView.Node(
                             LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_action)),
-                            LogicGraphView.Node.ADD_ACTION, rows.size,
+                            LogicGraphView.Node.ADD_ACTION, rowIndex,
                         )
                     )
-                    rows.add(row)
-                    steps.add(step.alt(ai + 1))
-                    mine.add(LogicGraphView.Drop(rowOf, thenAt))
+                    logicPushRow(row, LogicGraphView.Drop(rowOf, thenAt), ri, step.alt(ai + 1))
                 }
             }
-            // 每一步的「就」下面挂它自己的「或者」。
-            for ((i, step) in steps.toList().withIndex()) {
+            for ((i, pair) in steps.toList().withIndex()) {
+                val (step, rowIndex) = pair
                 if (step.alt != 0 || i >= thenAtOf.size) continue
-                altRows(step, i, thenAtOf[i])
+                altRows(step, rowIndex, thenAtOf[i])
             }
 
-            // 每一行末尾那两种「＋」：这一步能不能再加一支「或者」，能不能再挂一级「否则如果」。
-            for ((i, step) in steps.toList().withIndex()) {
-                if (step.alt != 0) continue
-                val row = rows[i].toMutableList()
+            // 每一行末尾那一个「＋或者」：给这一行的「就」再加一支备选。
+            for ((i, pair) in steps.toList().withIndex()) {
+                val (step, rowIndex) = pair
+                if (step.alt != 0 || rowIndex >= graph.size) continue
+                val row = graph[rowIndex].toMutableList()
                 row.add(
                     LogicGraphView.Node(
                         LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_alt)),
-                        LogicGraphView.Node.ADD_ALT, i,
+                        LogicGraphView.Node.ADD_ALT, rowIndex,
                     )
                 )
-                if (i == steps.size - 1) {
-                    row.add(
-                        LogicGraphView.Node(
-                            LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else_if)),
-                            LogicGraphView.Node.ADD_ELSE_IF, i,
-                        )
-                    )
-                    if (rule.elseActions.isEmpty()) {
-                        row.add(
-                            LogicGraphView.Node(
-                                LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_else)),
-                                LogicGraphView.Node.ADD_ELSE, i,
-                            )
-                        )
-                    }
-                }
-                rows[i] = row
+                graph[rowIndex] = row
             }
-
-            for (r in rows) graph.add(r)
-            for (d in mine) drops.add(d)
-            rowSteps.add(steps)
         }
-        logicRowSteps = rowSteps
+        logicRows = rowMap
         logicGraph.setRules(graph, drops)
 
         buildLiquidBar()
@@ -8947,17 +8976,23 @@ class MainActivity : AppCompatActivity() {
                 askCondition(index, conditions.size - 1, step)
             }
 
+            // 「＋否则」= 这一组如果的兜底那一条路（加完就成向下的「否则」那一行）。
+            LogicGraphView.Node.ADD_ELSE -> toggleElse(index)
+
             LogicGraphView.Node.ADD_ELSE_IF -> {
-                // 新的一级「否则如果」：条件先给一个默认的（用户马上就会改），动作给一句占位。
+                // 新的一级「否则如果」：**插在这一级后面**（用户要的是"否则跟在每个如果后面"，
+                // 不是"永远加在整条规则的末尾"）—— 所以位置由被点的那一步决定。
+                val at = if (step.kind == Step.MAIN) 0 else step.index + 1
                 val steps = rule.elseIfs.toMutableList()
                 steps.add(
+                    at.coerceIn(0, steps.size),
                     ElseIfSpec(
                         conditions = listOf(newCondition()),
                         actions = listOf(ActionSpec("say", text = "……")),
-                    )
+                    ),
                 )
                 putRule(index, rule.copy(elseIfs = steps))
-                askStep(index, Step.elseIf(steps.size - 1))
+                askStep(index, Step.elseIf(at.coerceIn(0, steps.size - 1)))
             }
 
             LogicGraphView.Node.ADD_ALT -> {
@@ -9121,16 +9156,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 图上每一行是规则的哪一步（1.32.0），和 [buildLogicPane] 建的图**同生同死**。
+     * 图上**每一行**是"第几条规则的哪一步"，下标就是图的行号。
      *
-     * 图只报"哪一行的哪个方块被点了"，语义在界面这一层 —— 所以"行 → 步"的映射必须有人记着，
-     * 而记它的地方只能是**建那张图的那一段**（分开写就是两份会漂的东西）。
+     * 和 [buildLogicPane] 建的图**同生同死**：它由那一段里唯一的 [logicPushRow] 一起追加，
+     * 所以两边不可能不同步（上一版就是分开记的，结果是"行号当规则号用"，见点击那一段的注释）。
      */
-    private var logicRowSteps: List<List<Step>> = emptyList()
-
-    /** 第 [rule] 条第 [row] 行是哪一步。越界时退回主行（一条点不动图的规则比崩好）。 */
-    private fun logicStepOf(rule: Int, row: Int): Step =
-        logicRowSteps.getOrNull(rule)?.getOrNull(row) ?: Step.MAIN_STEP
+    private var logicRows: List<Pair<Int, Step>> = emptyList()
 
     private fun putRule(index: Int, rule: RuleSpec) {
         if (index !in logicRules.indices) return

@@ -1321,6 +1321,33 @@ def main():
            "pet_summon_anim" in activity and "ACTION_ANIM" in overlay
            and "pet?.playAnimation(id)" in overlay)
 
+    print("== 行号 ≠ 规则号：图上点一个方块要落到**那一条规则**上（1.32.1）==")
+    # 用户报的是"给第 1 条规则加『就』，结果加到第 2 条上；给最后一条加否则如果，结果加到第
+    # 一条上；加完一条规则之后所有方块都没反应"。根因是**行号被当成了规则号**：旧版一条规则
+    # 正好一行，两者恰好相等，这一版一条规则可以有好几行（否则如果一级一行、或者一支一行），
+    # 于是错位；行数一多还会算出越界的规则号，而 `getOrNull(...) ?: return` 让"点了什么都不
+    # 发生"看起来像"方块坏了"。
+    report("行 → (规则, 步) 的名单只有一处往里加（和 graph 一起长，不可能不同步）",
+           "fun logicPushRow(row: List<LogicGraphView.Node>, drop: LogicGraphView.Drop, ri: Int, step: Step)" in activity
+           and activity.count("logicPushRow(") >= 3
+           and "logicRows = rowMap" in activity)
+    report("点击先查那张名单再动手（不许拿图报的行号当规则号）",
+           "val where = logicRows.getOrNull(row) ?: return@onTap" in activity
+           and "val rule = where.first" in activity and "val step = where.second" in activity)
+    report("而那张名单只读不写（图重建一次就整个换掉）",
+           "private var logicRows: List<Pair<Int, Step>> = emptyList()" in activity)
+    report("「＋否则」的字和它加的东西是同一件（不让按钮说谎）",
+           "getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE" in activity
+           and "getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF" in activity)
+    report("「＋否则」跟在**如果**后面（不是整条规则的末尾）",
+           "// 「否则」**就跟在如果后面**" in activity
+           and activity.find("logic_module_if")) > 0 if False else (
+           activity.find("getString(R.string.logic_module_if)") > 0
+           and activity.find("elseBox") > activity.find("getString(R.string.logic_module_if)"))
+    report("而「否则如果」是**插在这一级后面**（不是永远加在末尾）",
+           "val at = if (step.kind == Step.MAIN) 0 else step.index + 1" in activity
+           and "steps.add(\n                    at.coerceIn(0, steps.size)," in activity)
+
     print("== 否则如果链 + 就的加权或者：并行分支换成它们（1.32.0）==")
     # 用户要的三件事：删掉并行分支（"跟新建一条规则没有区别"）、每一个「如果」后面能加一个向下
     # 的「否则」（多个如果以并且/或者连着时，它就是那些如果的反方向 —— 由整组条件的真值算出来）、
@@ -1342,9 +1369,9 @@ def main():
            "LogicGraphView.Drop(fromRow, fromIf)" in activity
            and "LogicGraphView.Drop(rowOf, thenAt)" in activity)
     report("行 → 步 的映射只有一处（建图的时候一起建）",
-           "private var logicRowSteps: List<List<Step>> = emptyList()" in activity
-           and "logicRowSteps = rowSteps" in activity
-           and "private fun logicStepOf(rule: Int, row: Int): Step" in activity)
+           "private var logicRows: List<Pair<Int, Step>> = emptyList()" in activity
+           and "logicRows = rowMap" in activity
+           and "fun logicPushRow(row: List<LogicGraphView.Node>, drop: LogicGraphView.Drop, ri: Int, step: Step)" in activity)
     logic_spec_kt = logic_kt_text(files)
     report("「否则如果」是一级一行，而且每一级有自己的如果 / 就 / 或者",
            "data class ElseIfSpec(" in logic_spec_kt
@@ -1391,8 +1418,8 @@ def main():
     # 否则如果、最后的否则，还有每一支或者）—— 判据是那几行都从同一个地方取"动作表"。
     report("每一行执行器之间都放了它（主行 / 否则如果 / 否则 / 或者）",
            activity.count("timerNode(") >= 4
-           and "if (ai < actions.size - 1) row.add(timerNode(ai + 1, rows.size, elseLike))" in activity
-           and "if (k < actions.size - 1) row.add(timerNode(k + 1, rows.size, step.isElse))" in activity
+           and "if (ai < actions.size - 1) row.add(timerNode(ai + 1, rowIndex, elseLike))" in activity
+           and "if (k < actions.size - 1) row.add(timerNode(k + 1, rowIndex, step.isElse))" in activity
            and "editTarget(rule, step).orEmpty()" in activity
            and "editTarget(rule, step.alt(ai + 1)).orEmpty()" in activity)
     report("点它问的是秒数，插的是「等一会儿」",
