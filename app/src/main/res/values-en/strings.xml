@@ -482,6 +482,12 @@
     <string name="rig_node_edit">Edit node</string>
     <string name="rig_node_joint">Joint</string>
     <string name="rig_node_list">Nodes</string>
+    <string name="rig_prop_placing">Drag the prop into place; letting go saves it (the offset turns with this bone)</string>
+    <string name="rig_prop_place">Place the prop</string>
+    <string name="rig_prop_place_hint">Drag the prop where you want it; letting go saves it. The offset turns WITH THIS BONE, so when the limb turns, the prop turns with it. To put it back on the node: drag it onto the dot, or press Reset.</string>
+    <string name="rig_prop_place_reset">Reset (pin to the node)</string>
+    <string name="rig_prop_placed">Prop position saved (press Place the prop again to move it)</string>
+    <string name="rig_prop_place_none">This node carries no prop (pick one under Attributes first)</string>
     <string name="rig_node_mid">Middle</string>
     <string name="rig_node_name">Node name</string>
     <string name="rig_node_new">New node</string>

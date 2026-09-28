@@ -34,6 +34,23 @@ CONTROL_TAGS = {
 FAILURES = []
 
 
+def body_of(text, declaration):
+    """取一个成员函数的正文：从 [declaration] 之后到下一个"四空格缩进的 fun/字段"为止。
+
+    为什么要一个助手：这一版我在三个地方各写了一遍"从这里切到那里"，三次都切错（从声明**自身**
+    开始找下一个 `private fun `，切出空串；或者切到注释里的 `/**`）。切错不会报错，只会让断言
+    **看不见代码**，于是它悄悄变成一条永远为真的断言 —— 比没有断言更糟。
+    """
+    at = text.find(declaration)
+    if at < 0:
+        return ""
+    start = text.find("\n", at) + 1
+    rest = text[start:]
+    nxt = re.search(r"\n    (?:@\w+\n    )?(?:private |internal |override |open )*(?:fun|val|var|class|object) ",
+                    rest)
+    return rest[:nxt.start()] if nxt else rest
+
+
 def report(label, ok, detail=""):
     print(("  ok   " if ok else "  FAIL ") + label + ("   " + detail if detail else ""))
     if not ok:
@@ -1320,6 +1337,55 @@ def main():
     report("桌面上也能播（长按菜单 + ACTION_ANIM + 服务处理）",
            "pet_summon_anim" in activity and "ACTION_ANIM" in overlay
            and "pet?.playAnimation(id)" in overlay)
+
+    print("== 道具挂在节点上，位置由用户拖（1.33.0）==")
+    # 「希望道具绑在节点上能由用户自己调节位置」。做法：节点上多一个偏移（本地坐标，所以跟着
+    # 骨头转），骨骼页拖它。这一节盯**接线**（数学在 tools/rig_prop_check.py 逐点钉过）。
+    spec_kt = logic_kt_text(files)
+    skel_kt = next((t for p, t in files.items() if p.endswith("engine/skeleton/Skeleton.kt")), "")
+    report("骨骼页有「摆道具」这个模式：进得去、出得来、松手就存",
+           "fun beginPropPlacement(node: String, art: Bitmap?)" in graph_kt.replace("graph", "")
+           or "fun beginPropPlacement(node: String, art: Bitmap?)" in next(
+               (t for p, t in files.items() if p.endswith("ui/SkeletonView.kt")), ""))
+    skel_view = next((t for p, t in files.items() if p.endswith("ui/SkeletonView.kt")), "")
+    report("而且拖的时候画的就是那张道具图（要对的是它看起来在哪儿）",
+           "private var propArt: Bitmap? = null" in skel_view
+           and "canvas.drawBitmap(" in skel_view and "fun nodePropPointOf(node: NodeSpec): Vec2" in skel_view)
+    report("拖完退出这个模式（不然下一次想拖骨头会发现自己动的是剑）",
+           "onPropMoved?.invoke()" in skel_view and "propNode = null" in skel_view)
+    report("入口在节点那一行的属性弹窗里（调位置 / 回中间）",
+           "R.string.rig_prop_place" in activity and "R.string.rig_prop_place_reset" in activity
+           and "skeletonView.beginPropPlacement(n.name, art)" in activity)
+    report("松手存盘：骨骼页的回调接到 persistRig 上",
+           "skeletonView.onPropMoved = { persistRig() }" in activity)
+    report("换一个道具就把偏移清回 0（不然新道具会莫名偏在一边）",
+           "if (prop != existing.prop) {" in skel_view
+           and "existing.propX = 0f" in skel_view)
+    report("偏移是本地坐标（跟着骨头转），不是屏幕坐标",
+           "fun nodePropPoint(node: NodeSpec): Vec2" in skel_kt
+           and "fun propOffsetOf(node: NodeSpec, world: Vec2): Vec2" in skel_kt
+           and "private fun axisCos(node: NodeSpec): Float" in skel_kt)
+    report("穿在身上的道具走带偏移的那个点（诊断最安静的一种：调了不生效）",
+           "val spot = sk.nodePropPoint(node)" in bench and "prop.position = spot" in bench)
+
+    print("== 画出来的方块必须都点得开（1.32.1 自查：两个静默方块）==")
+    # "点了一下什么都不发生"和"这个按钮坏了"在用户那儿是同一件事。用户报过一次"方块无法点击
+    # 互动"，我在自查里又找到两个：最后那个「否则」那一行原来画了「如果（总是）」和「＋如果」，
+    # 而「否则」按定义没有条件 —— 编辑器拿到它只会 `?: return`，于是两个方块静静地什么都不做。
+    builder = body_of(activity, "private fun buildLogicPane(")
+    add_module = body_of(activity, "private fun addModule(")
+    report("「否则」那一行不画如果 / ＋如果（画了就是两个点不动的方块）",
+           "if (step.kind != Step.ELSE) {" in builder
+           and "editConditions(rule, step).orEmpty()" in builder)
+    # ADD_ACTION 是那个兜底分支（它加的就是一个动作），另外四种必须点名。
+    report("每一个「＋」方块加什么，addModule 都要管（四种点名 + 动作那种兜底）",
+           all(("Node." + k) in add_module for k in
+               ["ADD_CONDITION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT"])
+           and re.search(r"else -> \{\s*\n\s*val actions = \(editTarget\(rule, step\)",
+                         add_module) is not None)
+    report("而画出来的「＋」也就这五种（多画一种就会没人管）",
+           set(re.findall(r"LogicGraphView\.Node\.(ADD_[A-Z_]+)", builder))
+           <= {"ADD_CONDITION", "ADD_ACTION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT"})
 
     print("== 行号 ≠ 规则号：图上点一个方块要落到**那一条规则**上（1.32.1）==")
     # 用户报的是"给第 1 条规则加『就』，结果加到第 2 条上；给最后一条加否则如果，结果加到第

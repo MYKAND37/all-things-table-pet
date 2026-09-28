@@ -87,6 +87,16 @@ data class NodeSpec(
      * 肩上时，指尖那个点会抢走手指），而不是"把这个点删掉"。
      */
     var draggable: Boolean = true,
+    /**
+     * 挂在这个点上的道具**相对这个点**偏多少（1.33.0），单位是画布像素。
+     *
+     * 存的是**这一节骨头自己的坐标系**里的偏移（不是屏幕坐标）：所以手一转，剑跟着转 ——
+     * "握在手里的东西"就是这个意思。0/0 = 正好钉在节点上，也就是 1.33.0 之前的行为。
+     *
+     * 只有 [prop] 非空时才有意义；调整的入口在骨骼页那一行的「调道具位置」（拖）。
+     */
+    var propX: Float = 0f,
+    var propY: Float = 0f,
 )
 
 /** A limb the user can drag by its end, solved as a two-segment chain. */
@@ -433,6 +443,9 @@ class CharacterSpec(
                     prop = n.optString("prop", ""),
                     // 缺键 = 能拖 = 老行为。
                     draggable = n.optBoolean("draggable", true),
+                    // 缺键 = 0 = 钉在节点上（1.33.0 之前只有这一种）。
+                    propX = n.optDouble("propX", 0.0).toFloat(),
+                    propY = n.optDouble("propY", 0.0).toFloat(),
                 )
             }.toMutableList()
 

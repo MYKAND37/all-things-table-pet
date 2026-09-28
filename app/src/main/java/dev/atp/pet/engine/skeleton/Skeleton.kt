@@ -71,6 +71,50 @@ class Skeleton(val root: Bone) {
      * with it instead of leaving it hanging where the old tip used to be -- which is why the
      * clamp is here and not in the editor.
      */
+    /**
+     * 节点上挂的道具**应该在哪儿**（1.33.0）：节点那个点，加上按这一节骨头的方向旋转过的
+     * [NodeSpec.propX]/[NodeSpec.propY]。
+     *
+     * 旋转用的是**骨头当前指的方向**（头 → 尾），而不是另存一个角度：这样"手一转，剑跟着转"
+     * 是白送的，而且和画面上看到的骨头方向永远是同一个（另存一个角度就会有一天对不上）。
+     */
+    fun nodePropPoint(node: NodeSpec): Vec2 {
+        val at = nodePoint(node)
+        if (node.propX == 0f && node.propY == 0f) return at
+        return Vec2(
+            at.x + node.propX * axisCos(node) - node.propY * axisSin(node),
+            at.y + node.propX * axisSin(node) + node.propY * axisCos(node),
+        )
+    }
+
+    /** 反过来：世界坐标里的一点，换成这一节骨头坐标系里的偏移（拖的时候用）。 */
+    fun propOffsetOf(node: NodeSpec, world: Vec2): Vec2 {
+        val at = nodePoint(node)
+        val c = axisCos(node)
+        val s = axisSin(node)
+        val dx = world.x - at.x
+        val dy = world.y - at.y
+        // 反向旋转（转置）。
+        return Vec2(dx * c + dy * s, -dx * s + dy * c)
+    }
+
+    /** 这一节骨头现在指的方向（单位向量）。骨头不存在或者长度为 0 时给 (1, 0)。 */
+    private fun axisCos(node: NodeSpec): Float {
+        val b = byName[node.bone] ?: return 1f
+        val head = b.worldPosition
+        val tip = b.tipPosition()
+        val len = hypot(tip.x - head.x, tip.y - head.y)
+        return if (len < 1e-3f) 1f else (tip.x - head.x) / len
+    }
+
+    private fun axisSin(node: NodeSpec): Float {
+        val b = byName[node.bone] ?: return 0f
+        val head = b.worldPosition
+        val tip = b.tipPosition()
+        val len = hypot(tip.x - head.x, tip.y - head.y)
+        return if (len < 1e-3f) 0f else (tip.y - head.y) / len
+    }
+
     fun nodePoint(node: NodeSpec): Vec2 {
         val b = byName[node.bone] ?: return Vec2.ZERO
         val head = b.worldPosition

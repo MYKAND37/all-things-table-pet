@@ -119,6 +119,84 @@ class SkeletonView @JvmOverloads constructor(
      */
     var onPoseEdited: (() -> Unit)? = null
 
+    /**
+     * 正在摆这一节上挂的道具（1.33.0）：节点名 + 那张道具图。
+     *
+     * 摆的时候画布上画的就是**道具本人**（不是一个小方块），因为要对的是"它看起来在哪儿"。
+     */
+    private var propNode: String? = null
+    private var propArt: Bitmap? = null
+
+    /** 松手时叫一次：调用方把这一份 rig 存下去（和拖关节同一个规矩）。 */
+    var onPropMoved: (() -> Unit)? = null
+
+    /** 开始摆某个节点上挂的道具。同一时刻只有一个。 */
+    fun beginPropPlacement(node: String, art: Bitmap?) {
+        propNode = node
+        propArt = art
+        active = null
+        heldJoint = null
+        invalidate()
+    }
+
+    fun endPropPlacement() {
+        propNode = null
+        propArt = null
+        invalidate()
+    }
+
+    fun placingProp(): Boolean = propNode != null
+
+    /** 现在摆的是哪个节点（给界面上那句话用）。 */
+    fun propNodeName(): String? = propNode
+
+    /**
+     * 道具挂点的位置（1.33.0）：节点那个点，加上按这一节骨头方向旋转过的偏移。
+     *
+     * 和引擎里 [Skeleton.nodePropPoint] 是同一个算法（镜像在 tools/rig_prop_check.py）：
+     * 编辑器里看到的必须就是测试场里挂的那个地方。
+     */
+    fun nodePropPointOf(node: NodeSpec): Vec2 {
+        val at = nodePointOf(node)
+        if (node.propX == 0f && node.propY == 0f) return at
+        val bone = spec?.bones?.firstOrNull { it.name == node.bone } ?: return at
+        val dx = bone.tail.x - bone.head.x
+        val dy = bone.tail.y - bone.head.y
+        val len = hypot(dx, dy)
+        val c = if (len < 1e-3f) 1f else dx / len
+        val s = if (len < 1e-3f) 0f else dy / len
+        return Vec2(
+            at.x + node.propX * c - node.propY * s,
+            at.y + node.propX * s + node.propY * c,
+        )
+    }
+
+    /** 把某个节点上道具的偏移改成 [x]/[y]（本地坐标，见 [NodeSpec.propX]）。 */
+    fun setNodePropOffset(name: String, x: Float, y: Float): Boolean {
+        val s = spec ?: return false
+        val node = s.nodes.firstOrNull { it.name == name } ?: return false
+        node.propX = x
+        node.propY = y
+        invalidate()
+        return true
+    }
+
+    /** 画布坐标 → 这个节点坐标系里的偏移（拖的时候用；反向旋转）。 */
+    private fun propOffsetAt(node: NodeSpec, at2: Vec2): Vec2 {
+        val x = at2.x
+        val y = at2.y
+        val at = nodePointOf(node)
+        val bone = spec?.bones?.firstOrNull { it.name == node.bone }
+        val dx = if (bone == null) 1f else bone.tail.x - bone.head.x
+        val dy = if (bone == null) 0f else bone.tail.y - bone.head.y
+        val len = hypot(dx, dy)
+        val c = if (len < 1e-3f) 1f else dx / len
+        val s = if (len < 1e-3f) 0f else dy / len
+        val ox = x - at.x
+        val oy = y - at.y
+        return Vec2(ox * c + oy * s, -ox * s + oy * c)
+    }
+
     /** The bone the side panel last picked, drawn with a ring so it can be found. */
     var selected: String? = null
         private set
@@ -464,13 +542,21 @@ class SkeletonView @JvmOverloads constructor(
             return false
         }
         val existing = original?.let { old -> parsed.nodes.firstOrNull { it.name == old } }
-        if (existing == null) parsed.nodes.add(mine) else {
+        if (existing == null) {
+            parsed.nodes.add(mine)
+        } else {
             existing.name = name
             existing.bone = bone
             existing.at = at
             existing.radius = radius
             existing.prop = prop
             existing.draggable = draggable
+            // 换了一个道具就把它摆回节点上：上一个道具的偏移留在那儿，新道具会莫名其妙地
+            // 偏在一边（"我怎么什么都没拖它就歪了"）。同一个道具则原样留着。
+            if (prop != existing.prop) {
+                existing.propX = 0f
+                existing.propY = 0f
+            }
         }
         onInfo?.invoke(if (existing == null) "加了节点 " + name else "改好了 " + name)
         onRigChanged?.invoke()
@@ -1090,6 +1176,31 @@ class SkeletonView @JvmOverloads constructor(
                 canvas.drawCircle(px, py, n.radius * scale, nodeRingPaint)
                 nodePaint.color = if (n.prop.isEmpty()) 0xCC6E6A62.toInt() else 0xCC2B7A8A.toInt()
                 canvas.drawCircle(px, py, 5f * density, nodePaint)
+                // 挂在这一点上的道具画在**挂点上**（带偏移）：调位置的时候，用户要对的是
+                // "它看起来在哪儿"，所以画的必须是那张图本身，而不是一个小圆点。
+                if (n.prop.isEmpty()) continue
+                val spot = nodePropPointOf(n)
+                val sx = vx(spot)
+                val sy = vy(spot)
+                val art = if (n.name == propNode) propArt else null
+                if (art != null) {
+                    val half = max(art.width, art.height) * 0.5f * density
+                    canvas.drawBitmap(
+                        art, null,
+                        RectF(sx - half, sy - half, sx + half, sy + half),
+                        nodePaint,
+                    )
+                } else if (n.propX != 0f || n.propY != 0f) {
+                    // 没在摆的时候也留一个小记号（虚线圆）：偏移是**存的**，看不见就成了谜。
+                    nodePaint.color = 0xCC7A5CB0.toInt()
+                    canvas.drawCircle(sx, sy, 4f * density, nodePaint)
+                }
+                if (n.name == propNode) {
+                    // 摆的时候：从节点到挂点一根引导线 + 挂点上一个大圈。
+                    nodePaint.color = 0xCC7A5CB0.toInt()
+                    canvas.drawLine(px, py, sx, sy, nodePaint)
+                    canvas.drawCircle(sx, sy, 14f * density, nodeRingPaint)
+                }
             }
 
             drawColliders(canvas, sk)
@@ -1209,6 +1320,17 @@ class SkeletonView @JvmOverloads constructor(
         val sk = skeleton ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 摆道具 owns the finger while it is on (1.33.0): 拖它改偏移，别的都不做 ——
+                // 一边摆道具一边还能拖骨头，就会出现"我明明在挪剑，手却动了"。
+                propNode?.let { name ->
+                    val node = spec?.nodes?.firstOrNull { it.name == name }
+                    if (node != null) {
+                        val off = propOffsetAt(node, toCanvas(event.x, event.y))
+                        setNodePropOffset(name, off.x, off.y)
+                        onInfo?.invoke(context.getString(R.string.rig_prop_placing))
+                    }
+                    return true
+                }
                 // 加节点 owns the next tap, the same way 加骨骼 owns two.
                 if (placingNode) {
                     placeNodeAt(event.x, event.y)
@@ -1256,6 +1378,14 @@ class SkeletonView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_MOVE -> {
+                propNode?.let { name ->
+                    val node = spec?.nodes?.firstOrNull { it.name == name }
+                    if (node != null) {
+                        val off = propOffsetAt(node, toCanvas(event.x, event.y))
+                        setNodePropOffset(name, off.x, off.y)
+                    }
+                    return true
+                }
                 if (event.pointerCount >= 2) {
                     val s = span(event)
                     val focusX = midX(event)
@@ -1295,6 +1425,16 @@ class SkeletonView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                propNode?.let {
+                    // 松手就存（onPropMoved），并且**退出**摆道具模式：留在里面的话，
+                    // 用户下一次想拖骨头会发现自己动的是剑（"怎么点哪儿都在挪它"）。
+                    propNode = null
+                    propArt = null
+                    onPropMoved?.invoke()
+                    onInfo?.invoke(context.getString(R.string.rig_prop_placed))
+                    invalidate()
+                    return true
+                }
                 active = null
                 heldJoint = null
                 panning = false

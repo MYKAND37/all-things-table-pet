@@ -611,6 +611,8 @@ class MainActivity : AppCompatActivity() {
         findViewById<View>(R.id.alignConfirm).setOnClickListener { confirmImport() }
 
         skeletonView.onInfo = { statusLine.text = it }
+        // 摆完道具松手就存（1.33.0）：和拖关节一样，"松手即生效"，没有第二个保存按钮。
+        skeletonView.onPropMoved = { persistRig() }
         sandboxView.onInfo = { statusLine.text = it }
         // The bench records the drag frames itself; getting the file off the phone is this
         // activity's job, because a share sheet is started from an Activity and not from a
@@ -4013,6 +4015,23 @@ class MainActivity : AppCompatActivity() {
         box.addView(propChip)
         box.addView(label(getString(R.string.rig_node_prop_hint), 10f, MUTED, top = 4))
 
+        // 道具挂在这个点上的**位置**（1.33.0）：在骨骼页直接拖着它放，偏移跟着骨头转。
+        // 只在"已经存在的节点 + 已经选了道具"时出现 —— 新节点还没存，没有地方放那个偏移。
+        if (existing != null && prop.isNotEmpty()) {
+            dialogRow(box, getString(R.string.rig_prop_place)) {
+                val n = existing
+                val art = BitmapFactory.decodeFile(store.propArtFile(n.prop).absolutePath)
+                dialog.dismiss()
+                skeletonView.beginPropPlacement(n.name, art)
+                statusLine.text = getString(R.string.rig_prop_place_hint)
+            }
+            dialogRow(box, getString(R.string.rig_prop_place_reset)) {
+                skeletonView.setNodePropOffset(existing.name, 0f, 0f)
+                persistRig()
+                dialog.dismiss()
+            }
+        }
+
         // 能不能拖（1.26.0）：关掉之后这个点照样挂道具、照样系绳子、照样有碰撞，
         // 只是手指按上去不再把这一节拽走。给"一整条手臂挂在肩上时，指尖那个点会抢走手指"用。
         val dragChip = label(getString(R.string.rig_node_drag_on), 12f, INK)
@@ -4031,7 +4050,9 @@ class MainActivity : AppCompatActivity() {
         box.addView(dragChip)
         box.addView(label(getString(R.string.rig_node_drag_hint), 10f, MUTED, top = 4))
 
-        AlertDialog.Builder(this)
+        // 先建后 show：下面那两行「调位置 / 回中间」要能把它关掉（点开画布上那个模式之前，
+        // 盖在画布上的弹窗得先让开）。
+        val dialog = AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.rig_node_new else R.string.rig_node_edit)
             .setView(scrolling(box))
             .setPositiveButton(R.string.depth_save) { _, _ ->
@@ -4047,7 +4068,8 @@ class MainActivity : AppCompatActivity() {
                 refreshBoneList()
             }
             .setNegativeButton(R.string.depth_cancel, null)
-            .show()
+            .create()
+        dialog.show()
         paintChips(placeViews, listOf("joint", "mid", "tip"), { place })
         paintDrag()
     }
@@ -5264,35 +5286,46 @@ class MainActivity : AppCompatActivity() {
                     )
                 }
                 var ifAt = 0
-                val conditions = editConditions(rule, step).orEmpty()
-                if (conditions.isEmpty()) {
-                    // 一个「如果」都没有 = 总是（一条链上有个洞读起来像失误）。
-                    row.add(LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, rowIndex))
-                    ifAt = row.size - 1
-                } else {
-                    for ((ci, c) in conditions.withIndex()) {
-                        if (ci > 0) {
-                            row.add(
-                                LogicGraphView.Node(
-                                    LogicGraphView.Node.CONNECTOR,
-                                    listOf(Labels.join(this, c.join)), ci, rowIndex,
-                                )
-                            )
-                        }
+                // **最后那个「否则」没有如果**（它按定义就是"上面那些都不成立"），所以那一行
+                // 既不画「如果」也不画「＋如果」：画了就会点不动 —— `editConditions` 对它是
+                // null，编辑器一看就 `?: return`，而"点了一下什么都不发生"和"这个按钮坏了"在
+                // 用户那儿是同一件事（1.32.1 自查时发现的两个静默方块之一）。
+                if (step.kind != Step.ELSE) {
+                    val conditions = editConditions(rule, step).orEmpty()
+                    if (conditions.isEmpty()) {
+                        // 一个「如果」都没有 = 总是（一条链上有个洞读起来像失误）。
                         row.add(
-                            LogicGraphView.Node(
-                                LogicGraphView.Node.IF, listOf(conditionText(c)), ci, rowIndex,
-                            )
+                            LogicGraphView.Node(LogicGraphView.Node.IF, listOf("总是"), -1, rowIndex)
                         )
                         ifAt = row.size - 1
+                    } else {
+                        for ((ci, c) in conditions.withIndex()) {
+                            if (ci > 0) {
+                                row.add(
+                                    LogicGraphView.Node(
+                                        LogicGraphView.Node.CONNECTOR,
+                                        listOf(Labels.join(this, c.join)), ci, rowIndex,
+                                    )
+                                )
+                            }
+                            row.add(
+                                LogicGraphView.Node(
+                                    LogicGraphView.Node.IF, listOf(conditionText(c)), ci, rowIndex,
+                                )
+                            )
+                            ifAt = row.size - 1
+                        }
                     }
-                }
-                row.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
-                        LogicGraphView.Node.ADD_CONDITION, rowIndex,
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_if)),
+                            LogicGraphView.Node.ADD_CONDITION, rowIndex,
+                        )
                     )
-                )
+                } else {
+                    // 它照样要从上一行的**如果**底下吊下来，所以"挂点"仍然是上一行那个如果。
+                    ifAt = 0
+                }
                 // 「否则」**就跟在如果后面**（1.32.1 按用户说的挪过来的：它属于这一组如果，
                 // 不属于整条规则的末尾）。同一个盒子干两件事，由"它是不是最后一级"决定：
                 //   · 最后一级 → 「＋否则」= 那一条兜底的路（[toggleElse] → 向下多一行）；

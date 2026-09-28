@@ -2797,11 +2797,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
             // Straight into the world rather than through [spawn]: a prop that is WORN is not
             // being placed by a finger, so a nail somebody hangs on a shoulder must not turn up
             // in the waiting list asking to be driven.
+            // 挂点带偏移（1.33.0）：偏离节点多少由用户在骨骼页拖出来，跟着骨头一起转。
+            val spot = sk.nodePropPoint(node)
             val prop = existing ?: propSpecs.firstOrNull { it.id == node.prop }
-                ?.let { w.spawn(it, sk.nodePoint(node), Vec2.ZERO) }
+                ?.let { w.spawn(it, spot, Vec2.ZERO) }
                 ?: continue
             prop.planted = true
-            prop.position = sk.nodePoint(node)
+            prop.position = spot
             worn[node.name] = prop
         }
     }

@@ -377,6 +377,26 @@ def radius_of(name):
     return 40.0
 
 
+def axis(head, tail):
+    """骨头当前指的方向（单位向量）；长度 0 时给 (1, 0) —— 和 Kotlin 的 axisCos/axisSin 一致。"""
+    dx, dy = tail[0] - head[0], tail[1] - head[1]
+    n = math.hypot(dx, dy)
+    return (1.0, 0.0) if n < 1e-3 else (dx / n, dy / n)
+
+
+def node_prop_point(at, head, tail, ox, oy):
+    """镜像 Skeleton.nodePropPoint（1.33.0）：节点 + 按骨头方向旋转过的偏移。"""
+    c, s = axis(head, tail)
+    return (at[0] + ox * c - oy * s, at[1] + ox * s + oy * c)
+
+
+def prop_offset_of(at, head, tail, world):
+    """镜像 Skeleton.propOffsetOf：世界坐标里的一点换回本地偏移（反向旋转）。"""
+    c, s = axis(head, tail)
+    dx, dy = world[0] - at[0], world[1] - at[1]
+    return (dx * c + dy * s, -dx * s + dy * c)
+
+
 def main():
     print("closest point on a bone")
     report("above the middle", closest_on_segment((560, 700), (500, 500), (500, 900)) == (500.0, 700.0))
@@ -793,6 +813,49 @@ def main():
     w.step(1 / 60, 0.0, [], radius_of, noop)
     report("a prop shoved at a wall is put back inside it",
            a.x >= 60.0 - 1e-6, "x=%.4f" % a.x)
+
+    print("\n道具挂在节点上的偏移：跟着骨头转（1.33.0）")
+    # 用户要的是"道具绑在节点上能自己调位置"，并且选了"偏移跟着那一节骨头转"。
+    # 两个纯函数（正转 / 反解）就是这一件事的全部数学，所以逐点钉。
+    head, tail = (0.0, 0.0), (10.0, 0.0)          # 骨头朝右
+    report("骨头朝右：偏移就是普通平移", node_prop_point((100.0, 50.0), head, tail, 20.0, -5.0)
+           == (120.0, 45.0))
+    report("偏移 0 时正好钉在节点上（老文件的行为）",
+           node_prop_point((100.0, 50.0), head, tail, 0.0, 0.0) == (100.0, 50.0))
+    # 骨头朝下（转了 90°）：本地 (20, 0) 应该变成世界 (0, 20) —— "手一转，剑跟着转"。
+    down = ((0.0, 0.0), (0.0, 10.0))
+    got = node_prop_point((100.0, 50.0), down[0], down[1], 20.0, 0.0)
+    report("骨头朝下：本地往前的偏移跟着转到世界往下",
+           abs(got[0] - 100.0) < 1e-4 and abs(got[1] - 70.0) < 1e-4, str(got))
+    # 反解：把世界坐标转回本地，再正转回去必须回到原地（拖的时候用的就是这一对）。
+    for at, h, tl in (((100.0, 50.0), head, tail), ((100.0, 50.0), down[0], down[1]),
+                      ((3.0, -7.0), (1.0, 2.0), (-4.0, 9.0))):
+        for world in ((130.0, 20.0), (-5.0, 60.0)):
+            off = prop_offset_of(at, h, tl, world)
+            back = node_prop_point(at, h, tl, off[0], off[1])
+            report("反解再正转回到原地 %s" % (world,),
+                   abs(back[0] - world[0]) < 1e-3 and abs(back[1] - world[1]) < 1e-3, str(back))
+    report("长度为 0 的骨头不除零（退回水平）",
+           node_prop_point((5.0, 5.0), (1.0, 1.0), (1.0, 1.0), 3.0, 4.0) == (8.0, 9.0))
+    # Kotlin 那两半：公式和镜像逐句一致（漂了会红），读写两个键都在。
+    skel = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/skeleton/Skeleton.kt"),
+                encoding="utf-8").read()
+    spec = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/skeleton/CharacterSpec.kt"),
+                encoding="utf-8").read()
+    store = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/data/CharacterStore.kt"),
+                 encoding="utf-8").read()
+    report("Kotlin 里那两个公式和这份镜像逐句一致（漂了会红）",
+           "at.x + node.propX * axisCos(node) - node.propY * axisSin(node)" in skel
+           and "at.y + node.propX * axisSin(node) + node.propY * axisCos(node)" in skel
+           and "Vec2(dx * c + dy * s, -dx * s + dy * c)" in skel)
+    report("偏移存得住（两个键的读写都在）",
+           'var propX: Float = 0f' in spec and 'var propY: Float = 0f' in spec
+           and '.put("propX", n.propX.toDouble())' in store and '.put("propY", n.propY.toDouble())' in store
+           and 'propX = n.optDouble("propX", 0.0).toFloat()' in spec)
+    report("穿在身上的道具用的是**带偏移**的那个点（不然调了也白调）",
+           "sk.nodePropPoint(node)" in open(
+               os.path.join(REPO, "app/src/main/java/dev/atp/pet/ui/PhysicsSandboxView.kt"),
+               encoding="utf-8").read())
 
     print("")
     if FAILURES:

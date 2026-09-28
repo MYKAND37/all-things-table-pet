@@ -325,6 +325,12 @@
 
     <string name="rig_node_list">节点</string>
     <string name="rig_bone_list_empty">还没有骨骼，先加一根</string>
+    <string name="rig_prop_placing">拖着道具放到位置，松手就存（偏移跟着这一节骨头转）</string>
+    <string name="rig_prop_place">调道具位置</string>
+    <string name="rig_prop_place_hint">拖动那个道具，放到你要的位置；松手就存。偏移是**跟着这一节骨头转**的，所以手一转，它就跟着转。想回到节点上：把它拖回那个圆点，或者按「回中间」。</string>
+    <string name="rig_prop_place_reset">回中间（钉在节点上）</string>
+    <string name="rig_prop_placed">道具位置存好了（再按一次「调道具位置」可以再拖）</string>
+    <string name="rig_prop_place_none">这个节点上没有挂道具（先在「属性」里选一个）</string>
     <string name="rig_node_hint">节点是骨头上一个点，不占长度。规则可以拿它当部位（被碰到 / 被点一下），绳子可以系在它上面，也能被隐藏/显示。被隐藏的节点不会被碰到。</string>
     <string name="rig_add_node">＋ 加节点</string>
     <string name="rig_node_place_on_canvas">在画布上点一下放节点（像加骨骼那样）</string>

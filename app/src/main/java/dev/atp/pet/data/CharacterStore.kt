@@ -803,6 +803,9 @@ class CharacterStore(private val context: Context) {
                         .put("at", n.at.toDouble())
                         .put("radius", n.radius.toDouble())
                         .put("prop", n.prop)
+                        // 道具挂在节点上的偏移（1.33.0）：缺键 = 0 = 正好钉在节点上。
+                        .put("propX", n.propX.toDouble())
+                        .put("propY", n.propY.toDouble())
                         // 缺了这个键，手改过的节点会在"保存骨骼"之后全部变回可拖。
                         .put("draggable", n.draggable)
                 )
