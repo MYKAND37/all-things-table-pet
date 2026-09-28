@@ -526,7 +526,9 @@ class MainActivity : AppCompatActivity() {
         logicGraph = findViewById(R.id.logicGraph)
         logicFolderBar = findViewById(R.id.logicFolderBar)
         logicBar = findViewById(R.id.logicBar)
-        logicGraph.onTap = { row, node ->
+        // 显式标签：lambda 是**赋值给属性**的，这种位置**没有隐式标签**（只有作为参数传进函数
+        // 的 lambda 才有函数名那个标签），所以 `return@onTap` 不成立 —— CI 报过一次。
+        logicGraph.onTap = tapped@ { row, node ->
             // 图上每一个方块都点得开它自己那件事（1.32.0 的判据就是这一条：**没有点不开的
             // 方块**）。
             //
@@ -535,7 +537,7 @@ class MainActivity : AppCompatActivity() {
             // （否则如果一级一行、或者一支一行），两者就不再相等 —— 症状是"给第 1 条加就，
             // 加到了第 2 条上"，行数一多还会算出越界的规则号，于是**点了什么都不发生**。
             // 现在行 → (规则, 步) 由建图那一段**同一个函数**记下来（见 [logicRows]）。
-            val where = logicRows.getOrNull(row) ?: return@onTap
+            val where = logicRows.getOrNull(row) ?: return@tapped
             val rule = where.first
             val step = where.second
             when (node.role) {

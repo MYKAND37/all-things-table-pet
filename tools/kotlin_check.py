@@ -631,6 +631,50 @@ def check_types_imported():
            not bad, "; ".join(bad[:6]))
 
 
+def check_lambda_labels():
+    """
+    `return@name` 里的 name 必须是**真的存在**的标签。
+
+    Kotlin 里只有"作为参数传进函数"的 lambda 才有隐式标签（就是那个函数名）。**赋值给属性**的
+    lambda 没有：`view.onTap = { … return@onTap }` 不成立，编译器的说法是
+    `Unresolved reference: @onTap`（1.32.1 就是这么红的）。本地没有编译器，所以这条按形状查：
+
+      * 找 `X.prop = {` 这种赋值（没有显式标签的那种）；
+      * 在它的花括号块里找 `return@name`；
+      * 而 `name` 恰好就是**被赋值的那个属性名**时，报出来（`= onTap@ { … return@onTap }`
+        里的标签名等于属性名从来没有意义 —— 1.32.1 就是这么红的，两处都叫 onTap）。
+
+    判据刻意窄到只认"标签名 == 属性名"这一种，因为它是**唯一不可能对**的一类（lambda 是给属性
+    赋的值，属性名不构成标签）。更宽的那一版（"标签名不是文件里任何标签也不是任何函数名"）当场
+    误报了一次：`view.setOnClickListener { … return@setOnClickListener }` 是**合法**的，而我那版
+    的花括号跟踪从前面某个 `= {` 一路走进了它。误报比漏报更糟 —— 它会让人去改对的代码。
+    """
+    bad = []
+    for path in kotlin_files():
+        text = open(path, encoding="utf-8").read()
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            code = line.split("//")[0]
+            m = re.search(r"^\s*[\w.]+\.(\w+)\s*=\s*(\w+@)?\s*\{", code)
+            if not m or m.group(2):
+                continue          # 已经有显式标签了
+            prop = m.group(1)
+            # 往下扫到这一层结束（花括号归零）为止
+            depth = code.count("{") - code.count("}")
+            for j in range(i + 1, min(len(lines), i + 400)):
+                body = lines[j].split("//")[0]
+                for name in re.findall(r"return@(\w+)", body):
+                    if name == prop:
+                        bad.append("%s:%d `return@%s` —— 赋值给属性的 lambda 没有隐式标签，"
+                                   "要写显式标签（`= name@ {`）"
+                                   % (os.path.basename(path), j + 1, name))
+                depth += body.count("{") - body.count("}")
+                if depth <= 0:
+                    break
+    report("赋值给属性的 lambda 没有隐式标签（return@属性名 永远不成立）",
+           not bad, "; ".join(bad[:4]))
+
+
 def check_chip_lists():
     """
     paintChips takes strings, paintSwatches takes colours, and both take a list.
@@ -1045,6 +1089,7 @@ def main():
     check_folder_constants_qualified()
     check_object_imports()
     check_types_imported()
+    check_lambda_labels()
     check_upper_case_names()
     check_local_function_scope()
     check_enum_when_exhaustive()

@@ -1332,7 +1332,8 @@ def main():
            and activity.count("logicPushRow(") >= 3
            and "logicRows = rowMap" in activity)
     report("点击先查那张名单再动手（不许拿图报的行号当规则号）",
-           "val where = logicRows.getOrNull(row) ?: return@onTap" in activity
+           # 只认"先查名单"这件事本身，不写死返回标签的名字（它叫 tapped 还是 onTap 是细节）。
+           "val where = logicRows.getOrNull(row) ?: return@" in activity
            and "val rule = where.first" in activity and "val step = where.second" in activity)
     report("而那张名单只读不写（图重建一次就整个换掉）",
            "private var logicRows: List<Pair<Int, Step>> = emptyList()" in activity)
@@ -1396,7 +1397,10 @@ def main():
            "requestDisallowInterceptTouchEvent(true)" in graph_kt
            and "requestDisallowInterceptTouchEvent(false)" in graph_kt)
     # 每一种方块都要有人在点击里管它 —— "点不动"的机器版本就是"有一种 role 没人接"。
-    tap = activity[activity.find("logicGraph.onTap = {"):]
+    # 按 `logicGraph.onTap` 定位，不写死后面的 `= {`：1.32.1 给它加了显式标签
+    # （`= tapped@ {`），写死形状的断言当场失明（三条一起红，而代码是对的）。
+    at = activity.find("logicGraph.onTap")
+    tap = activity[at:] if at >= 0 else ""
     tap = tap[:tap.find("\n        }")]
     # 需要**各自**处理的角色列在这里（"就"那种动作盒子走 else 那一条，因为点它们都是同一个
     # 动作编辑器）。加一个新角色时这里和点击那一段都要加一条 —— 一条注释守不住这件事，所以
