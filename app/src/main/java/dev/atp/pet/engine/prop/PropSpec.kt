@@ -19,7 +19,7 @@ enum class PropKind(val id: String, val label: String, val hint: String) {
     HOLD("hold", "持续使用", "拖到角色身上按住，会一直触发"),
     DEVICE("device", "装置", "放在桌上不动，角色碰到才触发"),
     THROW("throw", "投掷", "拖起来甩出去，砸到哪算哪"),
-    SHOT("shot", "射击", "拖出方向松手打出一发，道具留在原地"),
+    SHOT("shot", "射击", "点一下打开狙击镜：镜筒里点一下开火，立刻结算（没有飞出去的子弹）"),
     PIN("pin", "钉子", "点一下钉住：点空白处钉在桌上，点部位就把部位钉在那儿；再点一下拔掉"),
     ROPE("rope", "绳子", "先画一段绳子的样子，再点两个点：点空白处=锚在桌上，点部位=系在那根骨头上。绳子会垂、会摆，拉直了拽得动身体；点绳子取下");
 
@@ -78,18 +78,16 @@ data class PropSpec(
      * 大于 1 是蹦极绳（一点点拉伸就很凶）。它乘在拉力上，不是乘在长度上。
      */
     val elastic: Float = 1f,
+    /**
+     * 打中的印子留多久，秒。**0 = 一直留着**（1.34.0）。
+     *
+     * 只有射击道具用得上：一枪命中的地方会贴上这个道具自己的 `hole.png`（用户自己导入的
+     * 弹孔图，见 [PropSpecs.HOLE_FILE]），这是它留多久。没有那张图就什么都不贴 —— "留多久"
+     * 对一个不存在的东西没有意义。
+     */
+    val holeLife: Float = 0f,
 ) {
     fun kindOf(): PropKind = PropKind.of(kind)
-
-    /** The projectile a 射击 prop fires, derived so the editor never has to define one. */
-    fun bullet(): PropSpec = copy(
-        id = id,
-        kind = PropKind.THROW.id,
-        radius = (radius * 0.4f).coerceAtLeast(6f),
-        force = force * 1.8f,
-        gravityScale = 0.35f,
-        transient = true,
-    )
 }
 
 object PropSpecs {
@@ -110,6 +108,15 @@ object PropSpecs {
      */
     const val ROPE_FILE = "rope.png"
 
+    /**
+     * 弹孔：一枪打中之后贴上去的那张图，在这个道具自己的文件夹里（1.34.0）。
+     *
+     * 和拖尾、绳子同一个位置、同一个理由 —— 它是**这个道具**打出来的印子，换一只宠物、
+     * 换一个场上也还是它。用户自己导入（手机相册里那张图就是弹孔的样子），所以应用这边
+     * 对形状不发表意见：画多大、什么样，全在那张图里。
+     */
+    const val HOLE_FILE = "hole.png"
+
     fun parse(text: String): List<PropSpec> {
         val arr = JSONArray(text)
         return (0 until arr.length()).map { i ->
@@ -125,6 +132,7 @@ object PropSpecs {
                 transient = o.optBoolean("transient", false),
                 ropeLength = o.optDouble("rope", 0.0).toFloat(),
                 elastic = o.optDouble("elastic", 1.0).toFloat(),
+                holeLife = o.optDouble("hole", 0.0).toFloat(),
             )
         }
     }
@@ -143,6 +151,7 @@ object PropSpecs {
                     .put("transient", s.transient)
                     .put("rope", s.ropeLength.toDouble())
                     .put("elastic", s.elastic.toDouble())
+                    .put("hole", s.holeLife.toDouble())
             )
         }
         return arr.toString(2)

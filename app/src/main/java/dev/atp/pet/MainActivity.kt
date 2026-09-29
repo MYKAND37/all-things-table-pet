@@ -380,6 +380,12 @@ class MainActivity : AppCompatActivity() {
     private var props: MutableList<PropSpec> = mutableListOf()
     private var awaitingProp: String? = null
 
+    /**
+     * 正在等一张**弹孔图**的那一个道具（1.34.0）。和 [awaitingProp] 分开：同一个选择器
+     * 回来时要走两条不同的路（道具图直接就是道具本人，弹孔图进的是这个道具的另一个文件）。
+     */
+    private var awaitingHole: String? = null
+
     /** The summoned character's rules, as edited. Rebuilt on every change; saved on every change. */
     private var logicStats: MutableList<StatSpec> = mutableListOf()
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
@@ -2871,6 +2877,12 @@ class MainActivity : AppCompatActivity() {
             onPropPicked(uri)
             return
         }
+        // 弹孔图（1.34.0）：不进对位那一页 —— 它不挂在骨头上，是打在身上的一个印子，
+        // 所以和道具图一样，选完就存。
+        if (awaitingHole != null) {
+            onHolePicked(uri)
+            return
+        }
         val bone = awaitingBone
         val folder = opened
         awaitingBone = null
@@ -4756,6 +4768,25 @@ class MainActivity : AppCompatActivity() {
         }
         card.addView(trail)
 
+        // 弹孔图, for a 射击 prop (1.34.0): the mark a hit leaves on the pet. A file in this
+        // prop's own folder, like the trail and the rope -- so it is a button on the row,
+        // next to theirs, and not something three screens away.
+        if (spec.kindOf() == PropKind.SHOT) {
+            val hole = label(
+                getString(
+                    if (store.propHole(spec.id).isFile) R.string.prop_hole_change
+                    else R.string.prop_hole_import
+                ),
+                11f, MUTED,
+            )
+            hole.setPadding(dp(8), dp(6), dp(8), dp(6))
+            hole.setOnClickListener {
+                awaitingHole = spec.id
+                pickImage.launch(arrayOf("image/*"))
+            }
+            card.addView(hole)
+        }
+
         // 画绳子, for a rope: the drawing the app lays along the simulated chain. Same board,
         // same place on the row, because it is the same kind of thing as a trail -- a picture
         // this prop wears, in this prop's folder.
@@ -4842,6 +4873,30 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 弹孔图 + 印子留多久（1.34.0）：射击道具的两件事，都只在射击上出现 ——
+        // 别的道具没有"打中"这回事，给它们看两个用不上的控件是把表单变长。
+        val (holeRow, holeOf) = stepperRow(
+            getString(R.string.prop_hole_life), existing?.holeLife ?: 0f, 0.5f, 0f, 60f,
+        ) { if (it <= 0f) getString(R.string.prop_hole_life_forever) else "%.1fs".format(it) }
+        val holeLabel = label(
+            if (existing?.let { store.propHole(it.id).isFile } == true) {
+                getString(R.string.prop_hole_change)
+            } else {
+                getString(R.string.prop_hole_import)
+            },
+            12f, INK, top = 10,
+        )
+        holeLabel.setPadding(dp(2), dp(8), dp(2), dp(8))
+        holeLabel.setOnClickListener {
+            val id = existing?.id
+            if (id == null) {
+                Toast.makeText(this, R.string.prop_hole_first, Toast.LENGTH_SHORT).show()
+            } else {
+                awaitingHole = id
+                pickImage.launch(arrayOf("image/*"))
+            }
+        }
+
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(6), dp(6), dp(6), dp(6))
@@ -4889,6 +4944,9 @@ class MainActivity : AppCompatActivity() {
         // screen, and a New prop has no id yet -- the row in 道具管理 is the one that always works.
         box.addView(trailLabel)
         box.addView(label(getString(R.string.prop_trail_hint), 10f, MUTED, bottom = 4))
+        box.addView(holeLabel)
+        box.addView(label(getString(R.string.prop_hole_hint), 10f, MUTED, bottom = 4))
+        box.addView(holeRow)
 
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) R.string.prop_new else R.string.prop_name)
@@ -4910,6 +4968,7 @@ class MainActivity : AppCompatActivity() {
                         transient = existing?.transient ?: false,
                         ropeLength = ropeOf(),
                         elastic = elasticOf(),
+                        holeLife = holeOf(),
                     )
                 )
                 store.saveProps(props)
@@ -4921,6 +4980,9 @@ class MainActivity : AppCompatActivity() {
         val ropeKind = kind == PropKind.ROPE.id
         ropeRow.visibility = if (ropeKind) View.VISIBLE else View.GONE
         elasticRow.visibility = if (ropeKind) View.VISIBLE else View.GONE
+        val shotKind = kind == PropKind.SHOT.id
+        holeLabel.visibility = if (shotKind) View.VISIBLE else View.GONE
+        holeRow.visibility = if (shotKind) View.VISIBLE else View.GONE
     }
 
     /**
@@ -5128,6 +5190,33 @@ class MainActivity : AppCompatActivity() {
             getString(if (ok) R.string.prop_saved else R.string.rig_save_failed),
             Toast.LENGTH_SHORT,
         ).show()
+        buildPropList()
+    }
+
+    /**
+     * 弹孔图选好了（1.34.0）：存进这个道具自己的文件夹，然后让测试场重新读一遍。
+     *
+     * 和道具图走同一条路（同一个解码、同一个"存到哪儿"的规矩），只是不去对位那一页 ——
+     * 它不挂在骨头上。
+     */
+    private fun onHolePicked(uri: Uri?) {
+        val id = awaitingHole ?: return
+        awaitingHole = null
+        if (uri == null) return
+        val bitmap = decodeForAlign(uri)
+        if (bitmap == null) {
+            Toast.makeText(this, getString(R.string.prop_import_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        val ok = store.savePropHole(id, bitmap)
+        bitmap.recycle()
+        Toast.makeText(
+            this,
+            getString(if (ok) R.string.prop_hole_saved else R.string.rig_save_failed),
+            Toast.LENGTH_SHORT,
+        ).show()
+        // 场上那一只正在用这个道具的话，它得马上看到新图（不然"导入了却没变"）。
+        sandboxView.refreshHoles()
         buildPropList()
     }
 

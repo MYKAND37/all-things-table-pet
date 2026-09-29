@@ -685,4 +685,18 @@ The full text (licence status, how to report, applicable law) is in the reposito
     <string name="part_variant_prio">Prio %1$d</string>
     <string name="part_variant_prio_title">Where %1$s\'s drawing ranks</string>
     <string name="part_variant_switched">Changed</string>
+    <string name="sandbox_scope_open">Scope · %1$s</string>
+    <string name="sandbox_scope_closed">Scope closed</string>
+    <string name="sandbox_scope_hit">Hit · %1$s</string>
+    <string name="sandbox_scope_miss">Missed</string>
+    <string name="sandbox_scope_wiped">Marks wiped</string>
+    <string name="sandbox_scope_exit">Exit</string>
+    <string name="sandbox_scope_wipe">Wipe marks</string>
+    <string name="sandbox_scope_hint">Tap to fire · drag to look around · pinch to zoom</string>
+    <string name="prop_hole_import">Import bullet holes</string>
+    <string name="prop_hole_change">Change bullet holes</string>
+    <string name="prop_hole_saved">Bullet holes saved</string>
+    <string name="prop_hole_first">Save this prop first, then import its bullet holes</string>
+    <string name="prop_hole_life">Mark lifetime</string>
+    <string name="prop_hole_life_forever">Forever</string>
 </resources>

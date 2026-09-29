@@ -537,6 +537,43 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** The patterns, by prop id, loaded once per character. See [loadTrails]. */
     private var trailArt: Map<String, Bitmap> = emptyMap()
 
+    /** 弹孔图，按道具 id（1.34.0）。和拖尾、绳子同一个读法，见 [loadHoleArt]。 */
+    private var holeArt: Map<String, Bitmap> = emptyMap()
+
+    /**
+     * 正在开镜的那一个射击道具，null = 没开镜（1.34.0）。见 [openScope]。
+     *
+     * 镜筒里宠物照常动（物理一步都没停），只是镜头缩到 3.2 倍、手指只做三件事：瞄准
+     * （拖动/双指缩放）、开火（点一下）、退出。
+     */
+    private var scope: Prop? = null
+
+    /** 开镜之前那个窗口，退出时原样还回去：开镜是借你的镜头，不是把你的镜头换掉。 */
+    private var scopeReturn: Viewport? = null
+
+    private class Viewport(val scale: Float, val panX: Float, val panY: Float)
+
+    /**
+     * 打中的印子：**存在那一节骨头自己的坐标系里**。
+     *
+     * 命中点是一个世界坐标，而宠物一直在动 —— 存世界坐标的话，抬手之间那个弹孔就飘到
+     * 旁边去了。存骨头里的坐标，手一转它跟着转，那才是"打在身上"。
+     */
+    private class Hole(
+        /** 哪个道具打出来的 —— 图从那个道具的文件夹里取，见 [holeArt]。 */
+        val prop: String,
+        val bone: String,
+        /** 骨头坐标系里的位置。 */
+        val at: Vec2,
+        /** 画多大（世界像素）：那张图最长边缩到这么多。 */
+        val size: Float,
+        /** 留多久，秒。0 = 一直留着（留下时那一条规矩说了算）。 */
+        val life: Float,
+        var age: Float,
+    )
+
+    private val holes = mutableListOf<Hole>()
+
     /** Where those patterns live. Kept because 画拖尾 saves one and the bench has to re-read. */
     private var propsFolder: File? = null
 
@@ -654,6 +691,26 @@ class PhysicsSandboxView @JvmOverloads constructor(
         style = Paint.Style.FILL
         color = 0xD9171528.toInt()
     }
+
+    /** 镜筒：外面那层黑、镜壁的圈、准星的线（1.34.0）。 */
+    private val scopeMaskPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+        color = 0xE6000000.toInt()
+    }
+    private val scopeRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2f * density
+        color = 0xFF0B0B12.toInt()
+    }
+    private val scopeLinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = SCOPE_CROSS_DP * density
+        color = 0xCCF4F2FB.toInt()
+    }
+
+    /** 印子：贴到骨头坐标系里去画，所以和拖尾一样要一个自己的矩阵。 */
+    private val holeMatrix = android.graphics.Matrix()
+
     private val tuneText = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         textSize = 10f * density
         color = 0x99FFFFFF.toInt()
@@ -769,6 +826,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         propsFolder = propsDir
         loadTrails()
         loadRopeArt()
+        loadHoleArt()
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -986,6 +1044,10 @@ class PhysicsSandboxView @JvmOverloads constructor(
         worn.clear()
         trail.clear()
         lastMark.clear()
+        // 印子和镜筒都是"这一次会话"的：换一只宠物、重开一局，它们跟着走。
+        holes.clear()
+        scope = null
+        scopeReturn = null
         broken.clear()
         signals.clear()
         particles.clear()
@@ -1159,6 +1221,31 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /** Re-read the rope drawings. What the board calls after 画绳子. */
     fun refreshRopes() {
         loadRopeArt()
+        invalidate()
+    }
+
+    /**
+     * 弹孔图（1.34.0）：还是同一个读法 —— 一个道具一个文件夹，里面有 `hole.png` 就有弹孔。
+     *
+     * 按**文件夹**读而不是按场上那些道具读，理由和拖尾一样：刚导入的那一个还没进列表，
+     * 而"哪个道具有弹孔图"这件事，文件夹本身就是答案。
+     */
+    private fun loadHoleArt() {
+        val out = HashMap<String, Bitmap>()
+        for (folder in propsFolder?.listFiles().orEmpty()) {
+            if (!folder.isDirectory) continue
+            val file = File(folder, PropSpecs.HOLE_FILE)
+            if (!file.isFile) continue
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+            out[folder.name] = bmp
+        }
+        for (old in holeArt.values) old.recycle()
+        holeArt = out
+    }
+
+    /** Re-read the bullet-hole pictures. What the board calls after 导入弹孔图. */
+    fun refreshHoles() {
+        loadHoleArt()
         invalidate()
     }
 
@@ -1422,6 +1509,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         worn.clear()
         trail.clear()
         lastMark.clear()
+        holes.clear()
+        scope = null
+        scopeReturn = null
         particles.clear()
         fluid?.clear()
         broken.clear()
@@ -2236,6 +2326,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         stepRopes(dt)
         wearProps()
         stepTrails(dt)
+        stepHoles(dt)
     }
 
     /**
@@ -3070,7 +3161,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val dt = if (lastFrameNs == 0L) 0f else (now - lastFrameNs) / 1_000_000_000f
         lastFrameNs = now
         simulate(if (dt > 0.05f) 0.05f else dt)
-        if (!panning && heldProp == null) {
+        // 镜筒开着的时候镜头**不动**（1.34.0）：那几个"跟着宠物"的动作会把宠物慢慢挪到屏幕
+        // 正中，而准星就在正中 —— 于是每一枪都不用瞄。开镜是你在瞄，不是镜头在替你瞄。
+        if (!panning && heldProp == null && scope == null) {
             if (heldTargets.isEmpty()) {
                 if (settings.followPet) {
                     follow()
@@ -3134,6 +3227,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         drawTrails(canvas)
         drawRopes2(canvas)
         drawCharacter(canvas, sk)
+        // 打在身上的印子：在角色之后（盖住皮肤）、道具之前（手里的东西该盖住它）。
+        drawHoles(canvas, sk)
         drawNodes(canvas, sk)
         drawDebris(canvas)
         drawProps(canvas)
@@ -3155,6 +3250,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // it is the thing being read, and it is drawn on top of the pet for the same reason
         // it takes the finger first. See tuneDown.
         if (!desktop) drawTune(canvas)
+        // 镜筒在最上面：开着的时候它就是你正看着的东西，连调参面板都在它下面。桌面上也能开
+        // （那边一样有道具），所以这里不看 desktop。
+        drawScope(canvas)
         postInvalidateOnAnimation()
     }
 
@@ -4346,6 +4444,34 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val rag = ragdoll ?: return false
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
+                // 镜筒开着：手指只做三件事 —— 退出、擦掉印子、开火（抬起时判定）。宠物、
+                // 道具、断肢都不碰：镜筒里的手指是在**瞄**，不是在抓。它也因此不参与
+                // 双击重置（那是把整局推倒，而镜筒里两次点 = 两枪）。
+                if (scope != null) {
+                    lastFrameNs = System.nanoTime()
+                    tapLive = true
+                    tapX = event.x
+                    tapY = event.y
+                    tapAt = System.currentTimeMillis()
+                    when {
+                        scopeExit().contains(event.x, event.y) -> {
+                            tapLive = false
+                            closeScope()
+                        }
+                        scopeWipe().contains(event.x, event.y) -> {
+                            tapLive = false
+                            wipeHoles()
+                        }
+                        else -> {
+                            // 拖动 = 看别处，双指 = 缩放（两个都是现成的镜头动作）。
+                            panning = true
+                            lastPanX = event.x
+                            lastPanY = event.y
+                        }
+                    }
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 // Before the double tap, the grab and the pan: the panel is a control drawn
                 // on top of the bench, and a finger that lands on it is not doing any of the
                 // three. It does not count towards the double-tap reset either.
@@ -4411,6 +4537,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 tapLive = false
                 val index = event.actionIndex
                 val id = event.getPointerId(index)
+                // 镜筒里第二根手指只有一个意思：缩放（上面那句 tapLive = false 已经保证
+                // 它不会被当成开火）。它不该抓宠物 —— 镜筒是瞄，不是抓。
+                if (scope != null) {
+                    panning = false
+                    pinchSpan = span(event)
+                    lastFrameNs = System.nanoTime()
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 val piece = heldDebris
                 if (piece != null && id != debrisPointer) {
                     // A second finger on a piece that is being carried turns it. It is the
@@ -4534,10 +4669,32 @@ class PhysicsSandboxView @JvmOverloads constructor(
             }
 
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                // 镜筒里抬起手指：没挪动、没按久 = **开火**。判据和测试场上"被点一下"用的
+                // 是同两个数（TAP_MS / TAP_SLOP），所以"点一下"在这个应用里只有一个意思。
+                if (scope != null) {
+                    val held = System.currentTimeMillis() - tapAt
+                    val moved = hypot(event.x - tapX, event.y - tapY)
+                    val fired = tapLive && event.actionMasked == MotionEvent.ACTION_UP &&
+                        held < TAP_MS && moved < TAP_SLOP_DP * density
+                    tapLive = false
+                    panning = false
+                    pinchSpan = 0f
+                    lastFrameNs = System.nanoTime()
+                    if (fired) {
+                        val sk = skeleton
+                        val rag = ragdoll
+                        if (sk != null && rag != null) fireScope(rag, sk)
+                    }
+                    postInvalidateOnAnimation()
+                    return true
+                }
                 // Not an early return: a second finger may have been holding a bone or a prop,
                 // and this is the last finger up. The panel's own finger has nothing to drop.
                 tuneUp(event.getPointerId(event.actionIndex))
-                heldProp?.let { releaseProp(it) }
+                // 谁被放开了：射击道具**点一下**是开镜（见下面那段 tap 判定），所以要先记住
+                // 放的是哪一个 —— 松手之后 heldProp 就没了。
+                val released = heldProp
+                released?.let { releaseProp(it) }
                 heldProp = null
                 propPointer = -1
                 // Letting go of a piece hands it whatever speed the finger had, which
@@ -4582,7 +4739,13 @@ class PhysicsSandboxView @JvmOverloads constructor(
                 val moved = hypot(event.x - tapX, event.y - tapY)
                 val isTap = tapLive && held < TAP_MS && moved < TAP_SLOP_DP * density
                 tapLive = false
-                if (isTap && toolTap(toWorld(event.x, event.y))) {
+                if (isTap && released != null && released.spec.kindOf() == PropKind.SHOT) {
+                    // 点一下射击道具 = 开镜（1.34.0）。它是"点"，不是"拖"：拖走它和拖别的
+                    // 道具一样（那门枪是桌上的一个东西），所以开镜只认没挪动的那一下。
+                    // 和工具一样清掉 lastTapAt：这一下不能被当成双击的半个。
+                    lastTapAt = 0L
+                    openScope(released)
+                } else if (isTap && toolTap(toWorld(event.x, event.y))) {
                     // Spent on a tool: not a poke, and not half of a double tap either -- the
                     // tap after a rope's first point must not find a 300ms-old partner.
                     lastTapAt = 0L
@@ -4686,25 +4849,15 @@ class PhysicsSandboxView @JvmOverloads constructor(
     /**
      * Let a prop go.
      *
-     * A 射击 prop does not fly: it fires. The drag was the aim, the prop stays where it was
-     * put, and a bullet leaves along the direction the finger went — which is why the two
-     * kinds are worth having even though a bullet is just a small fast throw.
+     * A 射击 prop is not special here any more (1.34.0): it used to fire a bullet along the
+     * direction the finger went, and a bullet was a small fast throw. It does not fire now —
+     * **点它开镜，开火在镜筒里**（hitscan：一枪立刻结算，没有飞出去的东西）。所以拖它、甩它
+     * 和拖甩别的道具是同一件事。
      */
     private fun releaseProp(prop: Prop) {
-        val w = world ?: return
         val travelled = prop.velocity.length()
-        val dir = if (travelled < 1f) Vec2.ZERO else prop.velocity.normalized()
         prop.endDrag()
 
-        if (prop.spec.kindOf() == PropKind.SHOT && travelled > 200f) {
-            w.spawn(
-                prop.spec.bullet(),
-                prop.position - dir * (prop.spec.radius + 10f),
-                dir * SHOT_SPEED,
-            )
-            fire(GameEvent(EventType.RELEASE, part = "", value = 0f))
-            return
-        }
         val kind = prop.spec.kindOf()
         if (kind == PropKind.DEVICE) {
             // A device is placed, not thrown: whatever the finger was doing, it drops where
@@ -4716,6 +4869,214 @@ class PhysicsSandboxView @JvmOverloads constructor(
         } else {
             fire(GameEvent(EventType.RELEASE))
         }
+    }
+
+    // ── 狙击镜（1.34.0） ────────────────────────────────────────────────────
+
+    /**
+     * 开镜：点一下那个射击道具。
+     *
+     * 用户要的是「第一人称视角的射击道具：点击道具就像打开一个狙击镜」：整块屏幕变成镜筒
+     * （圆形遮罩 + 十字准星），放大 3.2 倍，**宠物照常动** —— 所以这里不动物理、不暂停，
+     * 只动镜头和手指的意思。开火是 hitscan：点一下立刻结算，没有飞出去的子弹，也没有弹道线
+     * （用户明确说过不要），留下的是一个「被打到」事件和一枚印子。
+     *
+     * 借的是**现成的窗口**（viewScale / pan），不是另做一套投影：世界还是那个世界，只是窗口
+     * 变小了、对准了宠物。退出时那三个数原样还回去 —— 开镜是借你的镜头，不是把它换掉。
+     */
+    private fun openScope(prop: Prop) {
+        if (scope != null) return
+        scope = prop
+        scopeReturn = Viewport(viewScale, panX, panY)
+        // 调参面板和镜筒抢同一块屏幕，而且它**先**拿到手指（tuneDown 在最前面）：两个都开着
+        // 的时候，镜筒里点一下会被面板吃掉。所以开镜先把面板收起来。
+        tuning = false
+        viewScale = (defaultScale * SCOPE_ZOOM).coerceIn(defaultScale * 0.25f, defaultScale * 6f)
+        // 开镜先对着宠物：镜筒里第一眼应该看得到它，剩下的靠手指。
+        framePet()
+        // 开镜那一刻手上可能还有别的指头（一只手按着宠物、另一只手点枪）。它们抬起时不能
+        // 被当成"点了一下开火" —— 开镜这一下不是那一枪。
+        tapLive = false
+        onInfo?.invoke(context.getString(R.string.sandbox_scope_open, prop.spec.name))
+        invalidate()
+    }
+
+    /** 退出镜筒：镜头还给原来的位置。宠物、印子、道具一个都不动。 */
+    private fun closeScope() {
+        val back = scopeReturn
+        scope = null
+        scopeReturn = null
+        if (back != null) {
+            viewScale = back.scale
+            panX = back.panX
+            panY = back.panY
+        }
+        onInfo?.invoke(context.getString(R.string.sandbox_scope_closed))
+        invalidate()
+    }
+
+    /**
+     * 一枪。**立刻结算**：从枪口朝准星（屏幕正中）打一条射线，命中最近的一根挡在路上的骨头。
+     *
+     * 宽容度按骨头问求解器要（`rag.colliderRadius`）：手指和躯干不是一样粗，而"打得中"和
+     * "撞得上"必须是同一个宽度。
+     *
+     * 打空也要说话：这是唯一一处"扣了扳机、什么都没发生"的地方，不留事件、不留印子、不留
+     * 弹道线 —— 不说一句就成了"这个功能坏了"。
+     */
+    private fun fireScope(rag: Ragdoll, sk: Skeleton) {
+        val prop = scope ?: return
+        val muzzle = prop.position
+        val aim = toWorld(width / 2f, height / 2f)
+        val hit = sk.rayHit(muzzle, aim - muzzle, SCOPE_REACH) { b -> rag.colliderRadius(b) }
+        if (hit == null) {
+            onInfo?.invoke(context.getString(R.string.sandbox_scope_miss))
+            invalidate()
+            return
+        }
+        val (bone, at) = hit
+        // 「被打到」本来就是这个意思（力度 + 哪个道具），所以不另造事件类型：规则那边
+        // 「当 被打到 · 手，如果是 枪打来的」现在写得出来。
+        fire(GameEvent(EventType.IMPACT, part = bone, prop = prop.spec.id, value = prop.spec.force))
+        val art = holeArt[prop.spec.id]
+        val longest = if (art == null) 0f else max(art.width, art.height).toFloat()
+        if (art != null && longest > 0f) {
+            holes.add(
+                Hole(
+                    prop = prop.spec.id,
+                    bone = bone,
+                    // 命中点从世界坐标系搬进这一节骨头自己的坐标系：宠物动，印子跟着动。
+                    at = sk.boneFor(bone)?.worldTransform?.inverse()?.apply(at) ?: Vec2.ZERO,
+                    size = min(longest, HOLE_MAX),
+                    life = prop.spec.holeLife,
+                    age = 0f,
+                )
+            )
+        }
+        onInfo?.invoke(context.getString(R.string.sandbox_scope_hit, bone))
+        invalidate()
+    }
+
+    /** 擦掉印子。它们只活在一次会话里，所以这是"重来一遍"，不是毁掉用户画的东西。 */
+    private fun wipeHoles() {
+        holes.clear()
+        onInfo?.invoke(context.getString(R.string.sandbox_scope_wiped))
+        invalidate()
+    }
+
+    /** 印子淡出。0 = 一直留着 —— 那些永远不会被收走（这是用户填的那个数）。 */
+    private fun stepHoles(dt: Float) {
+        var i = 0
+        while (i < holes.size) {
+            val h = holes[i]
+            if (h.life <= 0f) {
+                i++
+                continue
+            }
+            h.age += dt
+            if (h.age >= h.life) holes.removeAt(i) else i++
+        }
+    }
+
+    /**
+     * 印子。画在角色**之后**（它是打在身上的，会盖住皮肤），但在道具之前 ——
+     * 拿在手里的东西该盖住它。和拖尾正好相反：那是桌上的痕迹，画在最底下。
+     */
+    private fun drawHoles(canvas: Canvas, sk: Skeleton) {
+        if (holes.isEmpty()) return
+        for (h in holes) {
+            val art = holeArt[h.prop] ?: continue
+            val bone = sk.boneFor(h.bone) ?: continue
+            val longest = max(art.width, art.height).toFloat()
+            if (longest <= 0f) continue
+            val k = h.size / longest
+            val at = bone.worldTransform.apply(h.at)
+            worldPaint.alpha = if (h.life <= 0f) {
+                255
+            } else {
+                ((1f - h.age / h.life).coerceIn(0f, 1f) * 255f).toInt()
+            }
+            holeMatrix.reset()
+            // 图自己转正 → 缩到该有的大小 → 跟着那一节骨头转 → 落到命中点上。
+            holeMatrix.postTranslate(-art.width / 2f, -art.height / 2f)
+            holeMatrix.postScale(k, k)
+            holeMatrix.postRotate(Math.toDegrees(bone.worldRotation.toDouble()).toFloat())
+            holeMatrix.postTranslate(at.x, at.y)
+            canvas.drawBitmap(art, holeMatrix, worldPaint)
+        }
+        worldPaint.alpha = 255
+    }
+
+    /** 退出按钮。画和点用的是同一个矩形 —— 两份坐标就是两个会漂的东西。 */
+    private fun scopeExit(): RectF = RectF(
+        width - 64f * density - 12f * density, 12f * density,
+        width - 12f * density, 12f * density + 30f * density,
+    )
+
+    /** 擦掉印子，和退出并排。 */
+    private fun scopeWipe(): RectF {
+        val exit = scopeExit()
+        return RectF(
+            exit.left - 92f * density - 8f * density, exit.top,
+            exit.left - 8f * density, exit.bottom,
+        )
+    }
+
+    /**
+     * 镜筒。画在**最上面**（连调参面板都在它下面），因为开着的时候它就是你正看着的东西。
+     *
+     * 黑的那一圈用的是 EVEN_ODD 填充的 Path（外框 + 一个圆洞），不是 saveLayer + CLEAR：
+     * 一个 Path 就说完的事，不需要再借一层离屏缓冲。
+     */
+    private fun drawScope(canvas: Canvas) {
+        val prop = scope ?: return
+        val cx = width / 2f
+        val cy = height / 2f
+        val r = min(cx, cy) - SCOPE_RIM_DP * density
+        val mask = Path().apply {
+            fillType = Path.FillType.EVEN_ODD
+            addRect(0f, 0f, width.toFloat(), height.toFloat(), Path.Direction.CW)
+            addCircle(cx, cy, r, Path.Direction.CW)
+        }
+        canvas.drawPath(mask, scopeMaskPaint)
+        canvas.drawCircle(cx, cy, r, scopeRingPaint)
+
+        // 十字准星：中间留一个口子，不然准星正好把你要打的那一点盖住。
+        val gap = 9f * density
+        val arm = r * 0.86f
+        canvas.drawLine(cx - arm, cy, cx - gap, cy, scopeLinePaint)
+        canvas.drawLine(cx + gap, cy, cx + arm, cy, scopeLinePaint)
+        canvas.drawLine(cx, cy - arm, cx, cy - gap, scopeLinePaint)
+        canvas.drawLine(cx, cy + gap, cx, cy + arm, scopeLinePaint)
+        canvas.drawCircle(cx, cy, 2.5f * density, scopeLinePaint)
+
+        // 两个按钮 + 名字：这一枪是谁打的、能点什么，都写在镜筒自己身上。
+        for ((rect, text) in listOf(
+            scopeExit() to context.getString(R.string.sandbox_scope_exit),
+            scopeWipe() to context.getString(R.string.sandbox_scope_wipe),
+        )) {
+            tunePaint.color = 0xE6171528.toInt()
+            canvas.drawRoundRect(rect, rect.height() / 2f, rect.height() / 2f, tunePaint)
+            tuneText.color = 0xFFF4F2FB.toInt()
+            tuneText.textAlign = Paint.Align.CENTER
+            canvas.drawText(text, rect.centerX(), rect.centerY() + 4f * density, tuneText)
+            tuneText.textAlign = Paint.Align.LEFT
+        }
+        // 那三句话写在镜筒里面（圆里），而圆里是**世界本身** —— 白字压在浅色画布上读不出来，
+        // 所以先铺一条深色的底（和按钮同一个颜色，看起来是同一套东西）。
+        val hint = context.getString(R.string.sandbox_scope_hint)
+        val hy = cy + r - 16f * density
+        val half = tuneText.measureText(hint) / 2f + 10f * density
+        tunePaint.color = 0xC6171528.toInt()
+        canvas.drawRoundRect(
+            RectF(cx - half, hy - 13f * density, cx + half, hy + 6f * density),
+            10f * density, 10f * density, tunePaint,
+        )
+        tuneText.color = 0xFFF4F2FB.toInt()
+        tuneText.textAlign = Paint.Align.CENTER
+        canvas.drawText(hint, cx, hy, tuneText)
+        canvas.drawText(prop.spec.name, cx, cy - r + 24f * density, tuneText)
+        tuneText.textAlign = Paint.Align.LEFT
     }
 
     private fun span(e: MotionEvent): Float {
@@ -4785,7 +5146,27 @@ class PhysicsSandboxView @JvmOverloads constructor(
         private const val TRAIL_SIZE = 1.6f
         private const val PIECE_PUSH = 10f
         private const val PIECE_PUSH_MAX = 90f
-        private const val SHOT_SPEED = 2600f
+
+        /**
+         * 镜筒：放大多少倍、开火最远算到哪、准星多宽。
+         *
+         * 放大是**视图的缩放**（复用现成的 viewScale / pan），不是另做一套投影 —— 世界是
+         * 同一个世界，镜筒只是把窗口缩小了。见 [openScope]。
+         */
+        private const val SCOPE_ZOOM = 3.2f
+
+        /**
+         * 一枪打多远。**接近整间屋子**，这是有意的：这是个 2D 侧视世界，准星是一条**射线**
+         * 而不是一个点，落在射线上的一切都在准星底下 —— reach 短了会变成"看得见、打不着"。
+         */
+        private const val SCOPE_REACH = 9000f
+
+        /** 准星的线宽（dp），以及镜筒那个圆离屏幕边留多少。 */
+        private const val SCOPE_CROSS_DP = 1f
+        private const val SCOPE_RIM_DP = 6f
+
+        /** 镜筒里那张弹孔图最大画多大（世界像素）：导入一张 4000px 的照片不该盖住整只宠物。 */
+        private const val HOLE_MAX = 160f
 
         /**
          * How long a press may last, counted from finger DOWN, and still be "被点一下".

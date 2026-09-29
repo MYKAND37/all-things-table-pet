@@ -717,6 +717,17 @@ class CharacterStore(private val context: Context) {
     fun propRope(id: String): File =
         File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.ROPE_FILE)
 
+    /**
+     * 弹孔图：射击道具打中之后贴上去的那张（1.34.0）。还是这个道具自己的文件夹 ——
+     * 和拖尾、绳子同一个位置、同一个理由：它是**这个道具**打出来的印子。
+     */
+    fun propHole(id: String): File =
+        File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.HOLE_FILE)
+
+    /** Save a prop's bullet-hole picture. Same shape as [savePropArt], different file. */
+    fun savePropHole(id: String, bitmap: android.graphics.Bitmap): Boolean =
+        writePng(propHole(id), bitmap)
+
     fun saveRig(
         folder: CharacterFolder,
         bones: List<BoneSpec>,
@@ -1656,11 +1667,19 @@ class CharacterStore(private val context: Context) {
         }
     }
 
-    fun savePropArt(id: String, bitmap: android.graphics.Bitmap): Boolean {
-        propsDir.mkdirs()
-        val target = propArtFile(id)
+    fun savePropArt(id: String, bitmap: android.graphics.Bitmap): Boolean =
+        writePng(propArtFile(id), bitmap)
+
+    /**
+     * 一张图写进一个文件：先写 `.part` 再改名（1.34.0 收成一处）。
+     *
+     * 三个调用点（道具的图、弹孔图、还有别的）原来各写一遍同样的十行 —— 而"先写临时文件
+     * 再改名"这件事的意义是**中途出错不会留下半个文件**，抄三遍就是三处会各自漏掉它。
+     */
+    private fun writePng(target: File, bitmap: android.graphics.Bitmap): Boolean {
+        target.parentFile?.mkdirs()
         return try {
-            val temp = File(propsDir, id + ".png.part")
+            val temp = File(target.parentFile, target.name + ".part")
             FileOutputStream(temp).use { out ->
                 bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
             }

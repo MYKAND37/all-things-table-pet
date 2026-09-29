@@ -154,10 +154,17 @@ class Skeleton(val root: Bone) {
      * 纯几何、没有 Android，所以能整段镜像到 tools/scope_check.py 里逐点测。返回**骨头名 +
      * 命中点**：名字给规则（"打到手了"），命中点是给以后的弹孔贴在身上的位置。
      *
-     * [reach] 之外不算命中（准星压着画面边上但宠物在很远的地方，不该算打中）；[slack] 是
-     * "擦过去也算"的宽容度，取这一节骨头的粗细（骨头是线段，但它画出来是有宽度的）。
+     * [reach] 之外不算命中（准星压着画面边上但宠物在很远的地方，不该算打中）；[slackOf] 是
+     * "擦过去也算"的宽容度，**按骨头问**：骨头是线段，但它画出来是有宽度的，而手指和躯干不是
+     * 一样粗。调用方给的就是求解器用的那个碰撞半径（`Ragdoll.colliderRadius`），所以"打得中"
+     * 和"撞得上"是同一个宽度 —— 一个数是不会说两套话的。
      */
-    fun rayHit(from: Vec2, dir: Vec2, reach: Float, slack: Float): Pair<String, Vec2>? {
+    fun rayHit(
+        from: Vec2,
+        dir: Vec2,
+        reach: Float,
+        slackOf: (Bone) -> Float = { 0f },
+    ): Pair<String, Vec2>? {
         val len = hypot(dir.x, dir.y)
         if (len < 1e-4f || reach <= 0f) return null
         val ux = dir.x / len
@@ -196,7 +203,7 @@ class Skeleton(val root: Bone) {
             val cx = ax + ex * s
             val cy = ay + ey * s
             val d = hypot(hx - cx, hy - cy)
-            if (d <= slack && t < bestDist) {
+            if (d <= slackOf(b) && t < bestDist) {
                 bestDist = t
                 best = b.name
                 bestAt = t

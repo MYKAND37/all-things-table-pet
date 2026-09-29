@@ -42,10 +42,6 @@ class Spec:
         self.id, self.kind, self.radius = id, kind, radius
         self.force, self.gravity, self.transient = force, gravity, transient
 
-    def bullet(self):
-        return Spec(self.id, "throw", max(self.radius * 0.4, 6.0), self.force * 1.8, 0.35, True)
-
-
 class Prop:
     def __init__(self, serial, spec, x, y, vx=0.0, vy=0.0):
         self.serial, self.spec = serial, spec
@@ -525,11 +521,14 @@ def main():
     report("a prop cannot leave through the left wall", p.x >= 60.0 - 1e-6, "x=%.2f" % p.x)
 
     print("\ntransient props clean themselves up")
+    # 1.34.0：`bullet()` 没有了（狙击镜是 hitscan：世界里不再有飞出去的东西）。这一条钉的是
+    # PropWorld 自己的规矩 —— "会自己收走的道具"，所以直接造一个 transient 的出来，
+    # 不再借子弹的名义。
     w = World(2000.0, 3000.0)
-    b = w.spawn(Spec("gun").bullet(), (1500.0, 1990.0), (0.0, 0.0))
+    b = w.spawn(Spec("spark", radius=6.0, transient=True), (1500.0, 1990.0), (0.0, 0.0))
     for _ in range(200):
         w.step(1 / 60, 2400.0, [], radius_of, lambda *a: None)
-    report("a spent bullet is collected", w.live == [])
+    report("a transient prop is collected once it has stopped", w.live == [])
     w = World(2000.0, 3000.0)
     k = w.spawn(Spec("hammer", transient=False), (1500.0, 1990.0))
     for _ in range(600):

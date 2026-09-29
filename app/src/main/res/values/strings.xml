@@ -553,6 +553,21 @@
     <string name="prop_saved">已保存</string>
     <string name="sandbox_props">道具</string>
     <string name="sandbox_props_empty">还没有道具。去「道具管理」做一个。</string>
+    <string name="sandbox_scope_open">开镜 · %1$s</string>
+    <string name="sandbox_scope_closed">退出镜筒</string>
+    <string name="sandbox_scope_hit">打中了 · %1$s</string>
+    <string name="sandbox_scope_miss">打空了</string>
+    <string name="sandbox_scope_wiped">印子擦掉了</string>
+    <string name="sandbox_scope_exit">退出</string>
+    <string name="sandbox_scope_wipe">擦掉印子</string>
+    <string name="sandbox_scope_hint">点一下开火 · 拖动看别处 · 双指缩放</string>
+    <string name="prop_hole_import">导入弹孔图</string>
+    <string name="prop_hole_change">换弹孔图</string>
+    <string name="prop_hole_saved">弹孔图存好了</string>
+    <string name="prop_hole_first">先保存这个道具，再给它导入弹孔图</string>
+    <string name="prop_hole_life">印子留多久</string>
+    <string name="prop_hole_life_forever">一直留着</string>
+    <string name="prop_hole_hint">射击道具打中时贴上去的那张图：你自己画（或从相册选）一张弹孔，导入到这里。不导入就没有印子；印子留在身上，宠物动它跟着动。</string>
 
     <!-- 测试场：拖动抖动调参面板。数字要照着念，所以单位跟在数值后面一起读。 -->
     <string name="sandbox_tune_tab">调参</string>
