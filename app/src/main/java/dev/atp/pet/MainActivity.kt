@@ -48,6 +48,7 @@ import dev.atp.pet.engine.logic.Shapes
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropKind
 import dev.atp.pet.engine.prop.PropSpec
+import dev.atp.pet.render.PartFiles
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
@@ -385,6 +386,9 @@ class MainActivity : AppCompatActivity() {
      * 回来时要走两条不同的路（道具图直接就是道具本人，弹孔图进的是这个道具的另一个文件）。
      */
     private var awaitingHole: String? = null
+
+    /** 正在等一张「发图片」用的图的那一只宠物（1.37.0）。 */
+    private var awaitingImage: String? = null
 
     /** The summoned character's rules, as edited. Rebuilt on every change; saved on every change. */
     private var logicStats: MutableList<StatSpec> = mutableListOf()
@@ -1938,6 +1942,11 @@ class MainActivity : AppCompatActivity() {
             send.setOnClickListener { askExportPet(folder) }
             header.addView(send)
 
+            val pictures = label(getString(R.string.pet_images), 11f, MUTED)
+            pictures.setPadding(dp(10), dp(6), dp(10), dp(6))
+            pictures.setOnClickListener { askImages(folder) }
+            header.addView(pictures)
+
             val remove = label(getString(R.string.action_delete), 11f, MUTED)
             remove.setPadding(dp(10), dp(6), dp(10), dp(6))
             remove.setOnClickListener { confirmDeletePet(folder, bones.size) }
@@ -2884,6 +2893,12 @@ class MainActivity : AppCompatActivity() {
         // 所以和道具图一样，选完就存。
         if (awaitingHole != null) {
             onHolePicked(uri)
+            return
+        }
+        // 规则「发图片」用的图（1.37.0）：先问一个名字 —— 规则里写的就是这个名字，
+        // 而 "IMG_20260930_001.jpg" 不是一个能写进规则的名字。
+        if (awaitingImage != null) {
+            onImagePickedForRules(uri)
             return
         }
         val bone = awaitingBone
@@ -5221,6 +5236,77 @@ class MainActivity : AppCompatActivity() {
         // 场上那一只正在用这个道具的话，它得马上看到新图（不然"导入了却没变"）。
         sandboxView.refreshHoles()
         buildPropList()
+    }
+
+    /**
+     * 规则「发图片」用的那些图（1.37.0）：一只宠物一个文件夹，名字就是规则里写的那个。
+     *
+     * 入口在**桌宠管理**里那一张卡上（和「复制」「导出」并排）：图属于这一只宠物，不属于
+     * 骨骼套 —— 换一身身体不该让她发给你的表情包全部消失。
+     */
+    private fun askImages(folder: CharacterFolder) {
+        val box = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val dialog = AlertDialog.Builder(this)
+            .setTitle(getString(R.string.pet_images_title, folder.id))
+            .setView(scrolling(box))
+            .setNegativeButton(R.string.action_close, null)
+            .create()
+        fun fill() {
+            box.removeAllViews()
+            box.addView(label(getString(R.string.pet_images_hint), 11f, MUTED, bottom = 8))
+            val files = store.imageFiles(folder)
+            if (files.isEmpty()) {
+                box.addView(label(getString(R.string.pet_images_none), 12f, MUTED, bottom = 8))
+            }
+            for (file in files) {
+                val name = PartFiles.stem(file)
+                dialogRow(box, name) {
+                    AlertDialog.Builder(this)
+                        .setTitle(name)
+                        .setItems(arrayOf(getString(R.string.pet_images_delete))) { _, _ ->
+                            store.deleteImage(folder, name)
+                            sandboxView.refreshImages()
+                            fill()
+                        }
+                        .setNegativeButton(R.string.depth_cancel, null)
+                        .show()
+                }
+            }
+            dialogRow(box, getString(R.string.pet_images_add)) {
+                awaitingImage = folder.id
+                pickImage.launch(arrayOf("image/*"))
+                dialog.dismiss()
+            }
+        }
+        fill()
+        dialog.show()
+    }
+
+    /** 一张「发图片」用的图选好了：解码 → 问名字 → 存进这一只的 images/。 */
+    private fun onImagePickedForRules(uri: Uri?) {
+        val id = awaitingImage ?: return
+        awaitingImage = null
+        if (uri == null) return
+        val folder = store.folder(id) ?: return
+        val bitmap = decodeForAlign(uri)
+        if (bitmap == null) {
+            Toast.makeText(this, getString(R.string.prop_import_failed), Toast.LENGTH_SHORT).show()
+            return
+        }
+        askText(getString(R.string.pet_images_name), "") { typed ->
+            val name = typed.trim().ifEmpty { "图" }
+            val ok = store.saveImage(folder, name, bitmap)
+            bitmap.recycle()
+            if (ok) {
+                sandboxView.refreshImages()
+                Toast.makeText(
+                    this, getString(R.string.pet_images_saved, name), Toast.LENGTH_SHORT,
+                ).show()
+                askImages(folder)
+            } else {
+                Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
+            }
+        }
     }
 
     /** Put one on the table. Props are used in the bench and defined here. */
@@ -9042,6 +9128,7 @@ class MainActivity : AppCompatActivity() {
         "morph" -> "变身 " + a.text
         "clearPose" -> "松开动作"
         "spawn" -> "生成道具 " + propName(a.prop)
+        "showImage" -> "发图片 " + a.text
         "burst" -> "喷" + ParticleKinds.of(a.text, logicParticles).name
         "pour" -> "流" + liquidName(a.text) +
             (if (Shapes.of(a.shape) == Shapes.SCATTER) "（乱撒）" else "（柱状）") +
@@ -9892,6 +9979,27 @@ class MainActivity : AppCompatActivity() {
                 ) { propId ->
                     putAction(index, actionIndex, ActionSpec(kind.id, prop = propId))
                     true
+                }
+                // 发一张图（1.37.0）：从**这一只宠物**的 images/ 里挑一个名字。
+                // 图是宿主那边的文件，引擎只拿到一个名字 —— 和道具、粒子、液体同一种身份。
+                "showImage" -> {
+                    val images = editingFolder()?.let { store.imageFiles(it) }.orEmpty()
+                    if (images.isEmpty()) {
+                        Toast.makeText(this, R.string.logic_image_none, Toast.LENGTH_SHORT).show()
+                    } else {
+                        pickList(
+                            getString(R.string.logic_pick_image),
+                            images.map {
+                                dev.atp.pet.render.PartFiles.stem(it) to
+                                    dev.atp.pet.render.PartFiles.stem(it)
+                            },
+                            getString(R.string.logic_image_hint),
+                            existing?.text,
+                        ) { picked ->
+                            putAction(index, actionIndex, ActionSpec(kind.id, text = picked))
+                            true
+                        }
+                    }
                 }
                 "burst" -> pickList(
                     getString(R.string.logic_pick_burst),

@@ -42,6 +42,7 @@ object Labels {
 
     private val ACTIONS = mapOf(
         "say" to R.string.vocab_action_say,
+        "showImage" to R.string.vocab_action_showImage,
         "random" to R.string.vocab_action_random,
         "add" to R.string.vocab_action_add,
         "set" to R.string.vocab_action_set,

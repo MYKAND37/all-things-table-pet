@@ -61,6 +61,12 @@ class CharacterFolder(val dir: File, val rig: String = "") {
      */
     val rigDir: File get() = if (rig.isEmpty()) dir else File(File(dir, RIGS_DIR), rig)
 
+    /**
+     * 规则「发图片」用的图（1.37.0）。属于**这一只宠物**，不属于骨骼套 —— 换一身身体
+     * 不该让她发给你的表情包全部消失。
+     */
+    val imagesDir: File get() = File(dir, IMAGES_DIR)
+
     val specFile: File get() = File(rigDir, SPEC_FILE)
     val partsDir: File get() = File(rigDir, PARTS_DIR)
 
@@ -109,6 +115,9 @@ class CharacterFolder(val dir: File, val rig: String = "") {
      */
     companion object {
         val SPEC_FILE = "character.json"
+
+        /** 规则「发图片」用的图，一只宠物一个文件夹（1.37.0）。 */
+        const val IMAGES_DIR = "images"
 
         /** Where the drawings are: beside the spec, so a rig is one folder with two things in it. */
         val PARTS_DIR = "parts"
@@ -724,6 +733,27 @@ class CharacterStore(private val context: Context) {
      */
     fun propHole(id: String): File =
         File(File(propsDir, id), dev.atp.pet.engine.prop.PropSpecs.HOLE_FILE)
+
+    /**
+     * 规则「发图片」用的那些图（1.37.0）：`characters/<这一只>/images/<名字>.png`。
+     *
+     * 名字就是文件的名字（去掉后缀）—— 规则里写的就是这个名字，和道具、粒子、液体是同一
+     * 种身份。后缀认两种（`PartFiles.EXTENSIONS`）：GIF 在这里显示第一帧。
+     */
+    fun imageFiles(folder: CharacterFolder): List<File> =
+        (folder.imagesDir.listFiles() ?: emptyArray())
+            .filter { PartFiles.isPartFile(it) }
+            .sortedBy { it.name }
+
+    fun imageFile(folder: CharacterFolder, name: String): File =
+        File(folder.imagesDir, name + ".png")
+
+    /** 存一张图；名字重了就直接换掉那张（用户按的是「用这张」）。 */
+    fun saveImage(folder: CharacterFolder, name: String, bitmap: android.graphics.Bitmap): Boolean =
+        writePng(imageFile(folder, name), bitmap)
+
+    fun deleteImage(folder: CharacterFolder, name: String): Boolean =
+        imageFiles(folder).filter { PartFiles.stem(it) == name }.all { it.delete() }
 
     /** Save a prop's bullet-hole picture. Same shape as [savePropArt], different file. */
     fun savePropHole(id: String, bitmap: android.graphics.Bitmap): Boolean =

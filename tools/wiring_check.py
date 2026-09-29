@@ -1415,6 +1415,40 @@ def main():
            set(re.findall(r"LogicGraphView\.Node\.(ADD_[A-Z_]+)", builder))
            <= {"ADD_CONDITION", "ADD_ACTION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT", "ADD_OR_ON"})
 
+    print("== 「发一张图」：从枚举到气泡，每一处都要有人管（1.37.0）==")
+    spec_kt = next((t2 for p2, t2 in files.items() if p2.endswith("engine/logic/LogicSpec.kt")), "")
+    labels_kt = next((t2 for p2, t2 in files.items() if p2.endswith("ui/Labels.kt")), "")
+    bubble_kt = next((t2 for p2, t2 in files.items() if p2.endswith("render/Bubble.kt")), "")
+    # 枚举里有它（引擎认识）→ 词汇表里有它（界面有名字）→ 选择器里有它（能挑图）→
+    # 摘要里有它（图上写着什么）→ 气泡真画得出来（Bubble + bubbleArt）。
+    report("枚举里有它：`SHOW_IMAGE(\"showImage\", …)`",
+           'SHOW_IMAGE("showImage"' in spec_kt)
+    report("词汇表里有它（没有名字的动作在界面上是一串 id）",
+           '"showImage" to R.string.vocab_action_showImage' in labels_kt)
+    report("选择器里有它（从这一只的 images/ 里挑，而且空的时候说一声）",
+           '"showImage" -> {' in activity and "store.imageFiles(" in activity
+           and "logic_image_none" in activity)
+    report("图上的字有它（「发图片 生气」）", '"showImage" -> "发图片 "' in activity)
+    report("气泡那条路真的画得出来（说话和发图同一件事的两半）",
+           "bubbleArt" in bench and "IMAGE_BUBBLE_SECONDS" in bench
+           and "imageArt[a.text]" in bench and "Bubble.imageSize(" in bench)
+    report("宠物卡片上有入口：导入 / 删掉 / 说清楚名字是干什么用的",
+           "askImages(folder)" in activity and "awaitingImage" in activity
+           and "store.saveImage(" in activity and "store.deleteImage(" in activity
+           and "sandboxView.refreshImages()" in activity)
+    report("图存在这一只宠物自己的文件夹里（不是骨骼套，也不是全局）",
+           "IMAGES_DIR = \"images\"" in store_text and "fun imageFiles(" in store_text)
+    # 「每一种角色都要有人管」这条老规矩，对**动作种类**也成立：枚举里的每一个 id 都要在
+    # 词汇表里有一行 —— 少一个，界面上就会出现一个没有名字的动作。
+    enum_block = spec_kt[spec_kt.index("enum class ActionKind"):]
+    enum_block = enum_block[:enum_block.index("companion object")]
+    kind_ids = set(re.findall(r'[A-Z_]+\("([a-zA-Z]+)", "', enum_block))
+    vocab_ids = set(re.findall(r'"([a-zA-Z]+)" to R\.string\.vocab_action_', labels_kt))
+    report("每一个动作种类在词汇表里都有名字（%d 个）" % len(kind_ids),
+           kind_ids <= vocab_ids, "缺：" + str(sorted(kind_ids - vocab_ids))[:80])
+    report("气泡的排版是纯函数（没有 Android，所以本地能逐条镜像）",
+           "object Bubble {" in bubble_kt and "import android" not in bubble_kt)
+
     print("== 一条规则好几个「当」，之间是「或者」（1.35.0）==")
     # 用户的原话是「一条规则可以加多个『当』之间用或者链接」。图上每一个额外的当占**自己的
     # 一行**（和「或者」那一支同一个画法：向下的一行），因为"是第几个当"这件事一行里的盒子

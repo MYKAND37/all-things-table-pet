@@ -432,6 +432,15 @@ enum class ActionKind(val id: String, val label: String, val needs: String) {
     SAY("say", "说一句话", "text"),
 
     /**
+     * 发一张图（1.37.0）：像说话一样，只是气泡里是一张图。
+     *
+     * 图放在**这一只宠物自己的文件夹**里（`images/<名字>.png`），规则按**名字**发
+     * （[ActionSpec.text]）。和"说一句话"同一个形状，所以引擎不需要知道图是什么：
+     * 它只是把这个动作还给宿主，气泡怎么画是测试场和桌面那一层的事。
+     */
+    SHOW_IMAGE("showImage", "发一张图", "image"),
+
+    /**
      * A number from a range, drawn fresh every time the rule runs.
      *
      * The generator the logic system did not have: with this and the 概率 condition, "one

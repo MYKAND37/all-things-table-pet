@@ -270,6 +270,14 @@
     <string name="logic_pick_character">Become which character</string>
     <string name="logic_pick_direction">Which way to push</string>
     <string name="logic_pick_event">What happens</string>
+    <string name="vocab_action_showImage">Send a picture</string>
+    <string name="logic_pick_image">Which picture</string>
+    <string name="pet_images_title">Pictures · %1$s</string>
+    <string name="pet_images_add">+ Import picture</string>
+    <string name="pet_images">Pictures</string>
+    <string name="pet_images_delete">Delete this picture</string>
+    <string name="pet_images_name">Name this picture (rules use this name)</string>
+    <string name="pet_images_saved">Saved: %1$s</string>
     <string name="logic_pick_from">Low end</string>
     <string name="logic_pick_liquid">Which liquid</string>
     <string name="logic_pick_op">Compared how</string>

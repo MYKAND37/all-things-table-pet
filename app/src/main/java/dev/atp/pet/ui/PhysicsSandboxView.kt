@@ -44,6 +44,8 @@ import dev.atp.pet.engine.skeleton.CharacterSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.Skeleton
 import dev.atp.pet.render.PartLibrary
+import dev.atp.pet.render.PartFiles
+import dev.atp.pet.render.Bubble
 import dev.atp.pet.render.PartRenderer
 import dev.atp.pet.render.Particles
 import kotlin.math.abs
@@ -357,6 +359,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     private var clock = 0f
     private var bubble: String? = null
+
+    /**
+     * 气泡里那张图（1.37.0，规则「发图片」）。和 [bubble] 是同一件事的两半：说话时这里是
+     * null、文字是那句话；发图时文字是 null、这里是那张图。同一时刻只有一个气泡。
+     */
+    private var bubbleArt: Bitmap? = null
     private var bubbleLeft = 0f
 
     /** Last time the figure was on the ground, and how fast it was falling before that. */
@@ -539,6 +547,9 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** 弹孔图，按道具 id（1.34.0）。和拖尾、绳子同一个读法，见 [loadHoleArt]。 */
     private var holeArt: Map<String, Bitmap> = emptyMap()
+
+    /** 规则「发图片」用的那些图，按名字（1.37.0）。读法和拖尾/弹孔一样：目录就是真相。 */
+    private var imageArt: Map<String, Bitmap> = emptyMap()
 
     /**
      * 正在开镜的那一个射击道具，null = 没开镜（1.34.0）。见 [openScope]。
@@ -827,6 +838,8 @@ class PhysicsSandboxView @JvmOverloads constructor(
         loadTrails()
         loadRopeArt()
         loadHoleArt()
+        imagesFrom = folder
+        loadImages(folder)
         val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name }, callback = this)
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
@@ -849,6 +862,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         renderer?.hidden = broken
         particles.clear()
         bubble = null
+        bubbleArt = null
         bubbleAt = null
 
         // Seeded from the clock, so that two summons of the same character do not roll the
@@ -1052,6 +1066,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         signals.clear()
         particles.clear()
         bubble = null
+        bubbleArt = null
         bubbleAt = null
         framed = false
         invalidate()
@@ -1242,6 +1257,34 @@ class PhysicsSandboxView @JvmOverloads constructor(
         for (old in holeArt.values) old.recycle()
         holeArt = out
     }
+
+    /**
+     * 规则「发图片」用的那些图（1.37.0）：`characters/<这一只>/images/<名字>.png`。
+     *
+     * GIF 在这里取**第一帧**（`BitmapFactory` 本来就会解出第一帧）：会动的部位图是另一件事
+     * （1.36.0 做的那个），一张发出去的图动起来要先把它接进 drawable 那一套，而"发图"要的
+     * 是"你看这个"。
+     */
+    private fun loadImages(folder: CharacterFolder) {
+        val out = HashMap<String, Bitmap>()
+        for (file in folder.imagesDir.listFiles().orEmpty()) {
+            if (!PartFiles.isPartFile(file)) continue
+            val bmp = BitmapFactory.decodeFile(file.absolutePath) ?: continue
+            out[PartFiles.stem(file)] = bmp
+        }
+        for (old in imageArt.values) old.recycle()
+        imageArt = out
+    }
+
+    /** Re-read the pictures a rule can send. What the host calls after 导入图片. */
+    fun refreshImages() {
+        val folder = imagesFrom
+        if (folder != null) loadImages(folder)
+        invalidate()
+    }
+
+    /** 从哪一只读的图（[refreshImages] 要重读同一个地方）。 */
+    private var imagesFrom: CharacterFolder? = null
 
     /** Re-read the bullet-hole pictures. What the board calls after 导入弹孔图. */
     fun refreshHoles() {
@@ -1596,8 +1639,22 @@ class PhysicsSandboxView @JvmOverloads constructor(
             when (a.kind) {
                 "say" -> {
                     bubble = a.text
+                    bubbleArt = null
                     bubbleLeft = BUBBLE_SECONDS
                     bubbleAt = subjectPoint(acting)
+                }
+                // 发一张图（1.37.0）：和"说一句话"同一个气泡，只是里面是图。找不到那张图
+                // 就什么都不发，而且**说一声** —— 一个错名字的规则看起来像"这个功能坏了"。
+                "showImage" -> {
+                    val art = imageArt[a.text]
+                    if (art == null) {
+                        engine?.note("没有「" + a.text + "」这张图")
+                    } else {
+                        bubble = null
+                        bubbleArt = art
+                        bubbleLeft = IMAGE_BUBBLE_SECONDS
+                        bubbleAt = subjectPoint(acting)
+                    }
                 }
                 // 按名字摆动作：名字不在这一套身体的动作表里就什么都不做，而且说一句 ——
                 // 以前这里是 applyPose(poseByName[名字])，查不到就是 null，而 null 是"回到
@@ -3468,29 +3525,60 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     private fun drawBubble(canvas: Canvas, sk: Skeleton) {
         val text = bubble
+        val art = bubbleArt
         val s = spec ?: return
-        if (text == null || bubbleLeft <= 0f) return
+        if ((text == null && art == null) || bubbleLeft <= 0f) return
         // A prop or a liquid can say something too, and then it says it about itself: a
         // candle that announces it is burning down has to do it over the candle.
         val at = bubbleAt
         val head = sk.find("head") ?: sk.root
         val x = at?.x ?: head.worldPosition.x
         val y = (at?.y ?: head.worldPosition.y) - s.headHeight * 0.45f
-        val box = RectF(x - 200f, y - 82f, x + 200f, y - 4f)
+
+        // 框的大小是**算出来的**（1.37.0，用户报的"说话的内容框能自动适配大小"）：以前是写死的
+        // 400×78 加一行不折的文字 —— 长句子从框里溢出来，短句子留一大块空白。折行、封顶、
+        // 图片按比例缩放都在 [Bubble] 里（纯函数，本地有一份镜像逐条钉：tools/bubble_check.py）。
+        textPaint.textSize = BUBBLE_TEXT
+        val measure = { line: String -> textPaint.measureText(line) }
+        val lines: List<String>
+        val size: Pair<Float, Float>
+        if (art != null) {
+            lines = emptyList()
+            size = Bubble.imageSize(art.width, art.height)
+        } else {
+            lines = Bubble.fit(text.orEmpty(), measure)
+            size = Bubble.textSize(lines, measure)
+        }
+        val box = Bubble.box(x, y, size, s.canvasWidth)
+        val rect = RectF(box[0], box[1], box[2], box[3])
         worldPaint.style = Paint.Style.FILL
         worldPaint.color = 0xF2FFFFFF.toInt()
-        canvas.drawRoundRect(box, 26f, 26f, worldPaint)
+        canvas.drawRoundRect(rect, 26f, 26f, worldPaint)
         worldPaint.style = Paint.Style.STROKE
         worldPaint.strokeWidth = 4f
         worldPaint.color = 0x44222233
-        canvas.drawRoundRect(box, 26f, 26f, worldPaint)
+        canvas.drawRoundRect(rect, 26f, 26f, worldPaint)
         worldPaint.style = Paint.Style.FILL
         worldPaint.strokeWidth = 0f
-        textPaint.textAlign = Paint.Align.CENTER
-        textPaint.textSize = 44f
-        textPaint.color = 0xFF222233.toInt()
-        canvas.drawText(text, x, y - 22f, textPaint)
-        textPaint.textAlign = Paint.Align.LEFT
+
+        if (art != null) {
+            // 里面那一块是**按比例**算好的（imageSize），所以这里直接铺满它 —— 图不会被拉扁。
+            val inner = RectF(
+                rect.left + Bubble.PAD_X, rect.top + Bubble.PAD_Y,
+                rect.right - Bubble.PAD_X, rect.bottom - Bubble.PAD_Y,
+            )
+            canvas.drawBitmap(art, null, inner, worldPaint)
+            worldPaint.color = 0xFFFFFFFF.toInt()
+        } else {
+            textPaint.color = 0xFF222233.toInt()
+            textPaint.textAlign = Paint.Align.CENTER
+            var baseline = rect.top + Bubble.PAD_Y + Bubble.LINE_H * 0.72f
+            for (line in lines) {
+                canvas.drawText(line, rect.centerX(), baseline, textPaint)
+                baseline += Bubble.LINE_H
+            }
+            textPaint.textAlign = Paint.Align.LEFT
+        }
         textPaint.textSize = 11f * density
     }
 
@@ -5102,6 +5190,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     companion object {
         private const val BUBBLE_SECONDS = 2.6f
+
+        /** 气泡里的字号（世界像素）。行高和留白在 [Bubble] 里按它配套。 */
+        private const val BUBBLE_TEXT = 44f
+
+        /** 一张图看久一点：一句话两秒半够读，一张图两秒半不够看。 */
+        private const val IMAGE_BUBBLE_SECONDS = 4.0f
 
         /** How many signals one event may set off before the rest are dropped. See drainSignals. */
         private const val MAX_SIGNALS_PER_FRAME = 32
