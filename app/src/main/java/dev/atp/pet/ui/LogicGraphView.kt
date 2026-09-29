@@ -124,6 +124,24 @@ class LogicGraphView @JvmOverloads constructor(
 
     /** Laid out boxes, grouped by rule and in order, so onDraw allocates nothing. */
     private val rows = mutableListOf<MutableList<Placed>>()
+
+    /**
+     * 每一行缩进几格（一条规则的主行是 0，吊在它下面的行是 1、再下面 2……）。
+     *
+     * 用户的原话是「他的分支不会与其他规则并列在开头，而是直接向下后向右拐弯」—— "并列在
+     * 开头"就是所有行都从 x=0 开始，于是一条规则的三支和三条规则长得一模一样。缩进把
+     * "它属于上面那一条"画出来的一半，另一半是下面那个括号。
+     */
+    private val depths = mutableListOf<Int>()
+
+    /**
+     * 一条规则在图上占的**块**：主行的下标 .. 它最后一个后代的下标。
+     *
+     * 判据是那些挂点（[Drop]）：每一行都指回"我挂在哪一行上"，所以"哪些行是同一条规则的"
+     * 不用另外传进来 —— 顺着挂点往上走，走到根（`parent < 0`）就是同一条。三个画法（否则
+     * 如果一级、或者一支、额外的当一行）用的都是这个结构，所以这里不需要知道它们是哪一种。
+     */
+    private val blocks = mutableListOf<IntRange>()
     private val placed = mutableListOf<Placed>()
 
     /** Called with the rule index and the node that was tapped. */
@@ -153,6 +171,23 @@ class LogicGraphView @JvmOverloads constructor(
     private var drops: List<Drop> = emptyList()
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+
+    /**
+     * 吊在别人下面的行，往右挪这么宽（一格）。嵌套（「或者」里再挂「或者」）就一格一格往里。
+     * 34dp 是"看得出来是一层、又不至于把一条长链挤出屏幕"的那个数。
+     */
+    private val INDENT_DP = 34f
+
+    /**
+     * 块的括号：左边一根竖线，上下各一个小横钩，把"这几行是同一条规则的几支"括起来
+     * （用户说的「就像打开括号一样」、"多个分支带着一块"）。
+     */
+    private val bracket = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 2.5f * density
+        color = 0x556C4CE0.toInt()
+    }
+
     /** The fork that says one detector has several executors. */
     private val fork = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -255,9 +290,40 @@ class LogicGraphView @JvmOverloads constructor(
     private fun layout() {
         placed.clear()
         rows.clear()
+        depths.clear()
+        blocks.clear()
+        // 缩进几格：顺着挂点往上走。走不通（坏数据、自己指自己）就当 0 格 —— 一个画不出来
+        // 的图比一个缩进不对的图糟得多。
+        for (i in rules.indices) {
+            var depth = 0
+            var at = drops.getOrNull(i)?.parent ?: -1
+            while (at in rules.indices && at < i && depth <= rules.size) {
+                depth++
+                at = drops.getOrNull(at)?.parent ?: -1
+            }
+            depths.add(depth)
+        }
+        // 块：每个有后代的行的下标 .. 它最后一个后代的下标（行的顺序就是建图那一边给的顺序：
+        // 父在前、它在下面吊着的那几行紧跟在后）。
+        for (parent in rules.indices) {
+            var last = -1
+            for (i in parent + 1 until rules.size) {
+                var at = drops.getOrNull(i)?.parent ?: -1
+                var hops = 0
+                while (at in rules.indices && hops <= rules.size) {
+                    if (at == parent) {
+                        last = i
+                        break
+                    }
+                    at = drops.getOrNull(at)?.parent ?: -1
+                    hops++
+                }
+            }
+            if (last > parent) blocks.add(parent..last)
+        }
         var y = 0f
         for ((ruleIndex, rule) in rules.withIndex()) {
-            var x = 0f
+            var x = depths.getOrElse(ruleIndex) { 0 } * INDENT_DP * density
             var tallest = 0f
             val row = mutableListOf<Placed>()
             for (node in rule) {
@@ -348,12 +414,40 @@ class LogicGraphView @JvmOverloads constructor(
             }
         }
 
+        drawBlocks(canvas)
         for (p in placed) {
             drawNode(canvas, p)
         }
         // The forks last, on top: a line the boxes hide under is a line nobody sees.
         drawDrops(canvas)
         canvas.restore()
+    }
+
+    /**
+     * 每一块的括号：竖线立在**挂点行的左边缘**往里 6dp 那一列，上下带钩。
+     *
+     * 只括"吊在下面的那几行"，不含它所属的那条主行 —— 括号的意思是"下面这些是一组"，
+     * 而主行本来就是它们上面的那一行。
+     *
+     * 它和 [drawDrops] 是两件事：那个画的是"谁挂在谁身上"（一笔一笔的连接线），这个画的是
+     * "这几行是一块的"（一个框）。前者回答怎么走，后者回答这是不是一件事。
+     */
+    private fun drawBlocks(canvas: Canvas) {
+        for (range in blocks) {
+            val first = rows.getOrNull(range.first + 1)?.firstOrNull() ?: continue
+            val last = rows.getOrNull(range.last)?.firstOrNull() ?: continue
+            // 括号贴着**挂点行的左边缘**往里一点点（不是"离分支半格"）：1.38.0 给挂线也
+            // 找了一条竖道（[drawDrops] 里那一条，在每一支左边 10dp），两条竖线挨太近就看成
+            // 一根了 —— 一个说"这是谁的分支"，一个说"从哪儿下来"，得看得出来是两件事。
+            val depth = depths.getOrElse(range.first) { 0 }
+            val x = depth * INDENT_DP * density + 6f * density
+            val top = first.rect.top - 4f * density
+            val bottom = last.rect.bottom + 4f * density
+            canvas.drawLine(x, top, x, bottom, bracket)
+            val hook = 9f * density
+            canvas.drawLine(x, top, x + hook, top, bracket)
+            canvas.drawLine(x, bottom, x + hook, bottom, bracket)
+        }
     }
 
     /**
@@ -377,17 +471,19 @@ class LogicGraphView @JvmOverloads constructor(
             val parent = parentRow.getOrNull(from.second) ?: parentRow.firstOrNull() ?: continue
             val x = (parent.rect.left + parent.rect.right) / 2f
             val top = parent.rect.bottom
-            var bottom = top
-            for (b in below) {
-                val head = rows.getOrNull(b)?.firstOrNull() ?: continue
-                bottom = max(bottom, (head.rect.top + head.rect.bottom) / 2f)
-            }
-            canvas.drawLine(x, top, x, bottom, fork)
-            for (b in below) {
-                val head = rows.getOrNull(b)?.firstOrNull() ?: continue
+            val heads = below.mapNotNull { rows.getOrNull(it)?.firstOrNull() }
+            if (heads.isEmpty()) continue
+            // 「向下后向右拐弯」（用户的原话）：主干不落在父方块正下方 —— 那会从中间穿过下面
+            // 那些行 —— 而是先在父方块底下横着挪到**每一支左边**的那条竖道，顺着竖道往下，
+            // 最后一支一支往右拐进去。分支缩进了 34dp，所以这条竖道正好落在它们左边。
+            val lane = minOf(x, heads.minOf { it.rect.left } - 10f * density)
+            val bottom = heads.maxOf { (it.rect.top + it.rect.bottom) / 2f }
+            canvas.drawLine(x, top, lane, top, fork)
+            canvas.drawLine(lane, top, lane, bottom, fork)
+            for (head in heads) {
                 val ty = (head.rect.top + head.rect.bottom) / 2f
                 val tx = head.rect.left
-                canvas.drawLine(x, ty, tx, ty, fork)
+                canvas.drawLine(lane, ty, tx, ty, fork)
                 canvas.drawLine(tx, ty, tx - 9f * density, ty - 5f * density, fork)
                 canvas.drawLine(tx, ty, tx - 9f * density, ty + 5f * density, fork)
             }

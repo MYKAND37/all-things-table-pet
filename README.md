@@ -106,7 +106,7 @@ app/src/main/java/dev/atp/pet/
   render/PartRenderer.kt / PartLibrary.kt / Particles.kt
   ui/SkeletonView.kt   骨骼可视化 + 拖拽 + 改骨骼
   ui/PartAlignView.kt  导入部位时的对位
-  ui/LogicGraphView.kt 规则图（方块 + 连接词 + "＋"模块 + 岔开的分支行）
+  ui/LogicGraphView.kt 规则图（方块 + 连接词 + "＋"模块 + 分支缩进一格、外面括一对括号）
   ui/PaintBoardView.kt 画板（粒子图案 / 拖尾 / 绳子图案共用）
   ui/PosePreview.kt    动作列表里的骨架缩略图（只用 spec，不加载图片）
   ui/DragDiagRecorder.kt    拖拽诊断记录（只在被要求时写文件）
@@ -121,6 +121,8 @@ tools/english_check.py       中英资源：键 / 占位符 / 还剩多少
   tools/anim_check.py          动画：插值 / 速度 / 循环 / 换图 / 多开关一帧 / 编辑器与播放器看同一个姿势
   tools/timeline_check.py      时间轴：关键帧与通道、缓动、烘培无损、播放头与菱形的几何、锚点的遍数
   tools/logic_check.py         规则引擎（含默认规则与代码的一致性、而且/或者、信号）
+tools/graph_layout_check.py  规则图的布局（缩进几格、括号括住哪几行、下面的行自己让开）
+tools/bubble_check.py        气泡的大小（折行、封顶、一张图、挂在头顶不探出画布）
 tools/drag_check.py          拖拽手感（倒吊、多指、甩出去）
 tools/carry_check.py         提起一条腿，整具身体会不会翻过来
 tools/rig_prop_check.py      道具物理、名字 → 位置（先骨头再节点）
@@ -156,14 +158,14 @@ docs/template_female_base.png
 这个仓库的规矩是**「有一条机器断言钉着它」**，不是「它一定对」。一条命令跑完全部：
 
 ```bash
-python3 tools/check_all.py         # 24 个检查，约 2 分钟
+python3 tools/check_all.py         # 25 个检查，约 3 分钟
 ```
 
 它把结果分成四种，**绿的 / 欠账的 / 环境缺东西跳过的 / 真红的** —— 欠账不算失败，但一定会被
 单独列出来（一笔不肯写在明面上的债是最糟的那种）：
 
 ```
-24 个检查：20 绿 · 3 欠账 · 1 跳过 · 0 红
+25 个检查：21 绿 · 3 欠账 · 1 跳过 · 0 红
 ```
 
 那 3 笔欠账是**求解器镜像**（`Ragdoll.kt` 与它的 Python 参考实现漂了），那 1 条跳过要 PIL。
