@@ -22,8 +22,18 @@ def report(label, ok, detail=""):
 
 # ------------------------------- mirror of Settings.kt -------------------------------
 
-MIN_GRAVITY = 0.2
+#: 重力那一档的上下限。**0 是允许的**：设置页第一个档位就是「零重力」。
+#:
+#: 这里原来是 0.2，和 Kotlin 一模一样 —— 于是两份都"对"，而**两份都错**：用户点「零重力」
+#: 存下 0，读回来被夹成 0.2，测试场用的是内存里那个 0（看着是好的）、桌面上那只重新读文件
+#: （读到 0.2），于是"桌面上打开无重力没效果"（1.35.0 修）。镜像忠实照抄了一个错误的决定，
+#: 所以它一直在说"一切正常" —— 这是这个仓库里"漂了的镜像比没有镜像更糟"的另一个方向：
+#: **没漂、但照着错的东西漂**。
+MIN_GRAVITY = 0.0
 MAX_GRAVITY = 3.0
+SETTINGS_KT = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "app/src/main/java/dev/atp/pet/data/Settings.kt")
 
 #: 背景图那两档的边界。0.85 之上等于把图藏起来了，不如直接去掉它。
 MIN_DIM = 0.0
@@ -120,8 +130,15 @@ def main():
         report("%-18s -> defaults" % (repr(junk)[:18]), got == DEFAULTS)
 
     print("\nnonsense values are clamped, not obeyed")
-    report("gravity below the floor", parse('{"gravityScale": 0}')["gravityScale"] == MIN_GRAVITY,
+    # 0 是**零重力**，不是"低于下限"（1.35.0 修的那条）：它有名字、有档位，读回来必须还是 0。
+    report("零重力（0）读回来还是 0", parse('{"gravityScale": 0}')["gravityScale"] == 0.0,
            str(parse('{"gravityScale": 0}')["gravityScale"]))
+    src = open(SETTINGS_KT, encoding="utf-8").read()
+    report("两边的下限是同一个数，而且就是 0（0.2 那个老下限会把这一档吃掉）",
+           MIN_GRAVITY == 0.0 and "const val MIN_GRAVITY = 0f" in src,
+           "Python %s / Kotlin %s" % (
+               MIN_GRAVITY,
+               "0f" if "const val MIN_GRAVITY = 0f" in src else "不是 0f"))
     report("gravity above the ceiling",
            parse('{"gravityScale": 99}')["gravityScale"] == MAX_GRAVITY)
     report("negative gravity is not anti-gravity",

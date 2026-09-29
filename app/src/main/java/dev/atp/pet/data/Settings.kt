@@ -77,7 +77,19 @@ data class Settings(
         const val VERSION = 1
 
         /** Below this a thrown pet hangs; above it, it drops like a stone. */
-        const val MIN_GRAVITY = 0.2f
+        /**
+         * 重力的下限，**0 是允许的**（1.35.0 修）。
+         *
+         * 这里原来是 0.2，而设置页那一排档位里**第一个就是 0**（「零重力」）—— 于是
+         * `gravityScale: 0` 存得下、**读回来被夹成 0.2**：用户报的「在桌面上打开无重力
+         * 没效果」就是这个。为什么只有桌面那只中招：测试场用的是内存里那个刚点下的 0
+         * （所以看着是好的），**桌面上那一只会重新读一遍文件**（`applyPetSettings`），
+         * 读到的是被夹过的那一个。
+         *
+         * 0.2 是"滑动条年代"的下限（那时 0 会让宠物永远浮着，没人想要）；现在 0 是一个
+         * **有名字的档位**，夹它就是把用户选的东西悄悄换掉。
+         */
+        const val MIN_GRAVITY = 0f
         const val MAX_GRAVITY = 3f
 
         /**
