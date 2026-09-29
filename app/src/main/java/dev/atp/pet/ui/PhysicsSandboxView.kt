@@ -827,7 +827,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         loadTrails()
         loadRopeArt()
         loadHoleArt()
-        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name }, callback = this)
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
             built,
@@ -842,7 +842,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         particles.setKinds(logic.particles)
         this.propSpecs = propSpecs
         propArt?.release()
-        propArt = propsDir?.let { PartLibrary.loadFree(it) }
+        propArt = propsDir?.let { PartLibrary.loadFree(it, callback = this) }
         world = PropWorld(parsed.floorY, parsed.worldWidth)
         fluid = Fluid(parsed.floorY, parsed.worldWidth)
         broken.clear()
@@ -922,7 +922,7 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val where = ragdoll?.rootPos
         val built = parsed.buildSkeleton()
         built.update()
-        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name }, callback = this)
 
         heldBones.clear()
         heldTargets.clear()

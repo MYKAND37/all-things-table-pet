@@ -7,7 +7,8 @@ drawn on top of it, so it is worth a test rather than a look.
 
     python3 tools/parts_check.py
 """
-import json, os, sys
+import json
+import re, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -145,6 +146,25 @@ def repair_plan(layers, folder_parts, global_ids):
             continue
         out.append(("!" if neg else "") + bone + ":" + bare)
     return out
+
+
+def code_only(text):
+    """去掉行注释（`//` 之后那半行）。
+
+    断言 grep 到注释是这个仓库踩过的老坑之一（JOURNAL「五、断言 grep 到了注释」）：这一条
+    要找的是"还有没有第二处按 .png 自己判"，而解释这件事的**注释**里就会写着 `.endsWith(".png")`。
+    """
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)     # 块注释（/** … */）也一起剥掉
+    return "\n".join(line.split("//")[0] for line in text.split("\n"))
+
+
+def part_stem(name):
+    """镜像 PartFiles.stem：去掉**最后一个点**之后的东西（不是去掉 ".png"）。
+
+    两种后缀都要对 —— 一个 GIF 的变体叫 `upperarm_L__机械臂.gif`，而去掉 ".png" 的写法
+    会把它整名留下（图在硬盘上、列表里也有，但那一层永远找不到它）。
+    """
+    return name.rsplit(".", 1)[0]
 
 
 def adopt_plan(layers, bones, drawings, folder_parts, global_ids):
@@ -431,6 +451,40 @@ def main():
     report("部位页那一行会说出「这个开关没人声明」（挂在没人开的开关上 = 图永远不画）",
            "private fun declaresNothing(" in activity
            and "declaresNothing(layer.state, declared)" in activity)
+
+    print("\n部位图也认 GIF（1.36.0）")
+    lib_kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/render/PartLibrary.kt"),
+                  encoding="utf-8").read()
+    renderer_kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/render/PartRenderer.kt"),
+                       encoding="utf-8").read()
+    # ① 后缀名单只有一份：问"这个文件是不是一张部位图"的地方有三处（扫描 parts 目录、
+    #    部位页列图、变体名解析），三处各写一遍就是下一次加格式时漏掉其中一处。
+    report("后缀名单只有一份（png / gif），目录扫描和部位页都用它",
+           'val EXTENSIONS = listOf("png", "gif")' in lib_kt
+           and "PartFiles.isPartFile(f)" in lib_kt
+           and "PartFiles.isPartFile(it)" in store_kt)
+    report("再没有第二处自己按 png 判（那是「下一版漏一处」的来源）",
+           code_only(lib_kt).count('endsWith(".png")') == 0
+           and code_only(store_kt).count('endsWith(".png")') == 0
+           and code_only(store_kt).count('removeSuffix(".png")') == 0)
+    report("变体名的解析对两种后缀都成立（去掉最后一个点，不是去掉 .png）",
+           part_stem("upperarm_L__机械臂.gif") == "upperarm_L__机械臂"
+           and part_stem("upperarm_L.png") == "upperarm_L"
+           and "f.name.substringBeforeLast('.')" in lib_kt)
+    # ② 动图怎么画：minSdk 26，而 AnimatedImageDrawable 是 28 的东西 —— 26/27 退回静态的
+    #    第一帧，不是"图不显示"（BitmapFactory 本来就会解出 GIF 的第一帧）。
+    report("API 28+ 才用 AnimatedImageDrawable，26/27 退回第一帧",
+           "VERSION.SDK_INT < android.os.Build.VERSION_CODES.P" in lib_kt
+           and "AnimatedImageDrawable" in lib_kt)
+    report("循环播放，而且**是靠 View 重画**的（drawable 自己不会 invalidate 一个 View）",
+           "REPEAT_INFINITE" in lib_kt and "animated.callback = callback" in lib_kt
+           and "callback: android.graphics.drawable.Drawable.Callback?" in lib_kt)
+    report("动图和 PNG 走**同一个矩阵**（两条路不可能画在两个地方）",
+           "canvas.concat(matrix)" in renderer_kt and "frame.draw(canvas)" in renderer_kt
+           and "canvas.drawBitmap(part.bitmap, matrix, paint)" in renderer_kt)
+    report("解不开就退回第一帧（坏 GIF 不该让宠物消失）",
+           "val animated = openAnimated(file, callback)" in lib_kt
+           and "if (animated != null)" in lib_kt)
 
     print("")
     if FAILURES:

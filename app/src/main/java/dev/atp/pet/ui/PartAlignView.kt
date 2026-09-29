@@ -112,7 +112,7 @@ class PartAlignView @JvmOverloads constructor(
         bone = built.find(boneName)
         saveKey = fileKey
 
-        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name })
+        val loaded = PartLibrary.load(folder.partsDir, parsed.bones.map { it.name }, callback = this)
         library = loaded
         renderer = if (loaded.isEmpty) null else PartRenderer(
             built,

@@ -363,7 +363,7 @@ class SkeletonView @JvmOverloads constructor(
         skeleton = built
 
         val loaded = library ?: folder?.let {
-            PartLibrary.load(it.partsDir, parsed.bones.map { b -> b.name })
+            PartLibrary.load(it.partsDir, parsed.bones.map { b -> b.name }, callback = this)
         }
         library = loaded
         renderer = if (loaded == null || loaded.isEmpty) null else PartRenderer(

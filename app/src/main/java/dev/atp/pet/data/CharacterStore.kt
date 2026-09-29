@@ -10,6 +10,7 @@ import dev.atp.pet.engine.logic.LogicSpec
 import dev.atp.pet.engine.logic.Subjects
 import dev.atp.pet.engine.prop.PropSpec
 import dev.atp.pet.engine.prop.PropSpecs
+import dev.atp.pet.render.PartFiles
 import dev.atp.pet.engine.skeleton.BoneSpec
 import dev.atp.pet.engine.skeleton.LayerSpec
 import dev.atp.pet.engine.skeleton.NodeSpec
@@ -943,11 +944,15 @@ class CharacterStore(private val context: Context) {
             // And the drawings for its states, which live beside it as from__state.png.
             val parts = folder.partsDir.listFiles() ?: emptyArray()
             for (f in parts) {
-                if (!f.isFile || !f.name.endsWith(".png")) continue
-                val stem = f.name.removeSuffix(".png")
+                // 用同一处判断和同一个取名的规矩（1.36.0）：原来这里自己写 `endsWith(".png")`
+                // 和 `removeSuffix(".png")`，于是**GIF 的变体扫不到、也不会跟着改名** ——
+                // 文件还叫老骨头名，图层却跟着骨头改了名，成了"图在、层找不到它"。
+                if (!PartFiles.isPartFile(f)) continue
+                val stem = PartFiles.stem(f)
                 if (!stem.startsWith(from + VARIANT_SEPARATOR)) continue
                 val state = stem.removePrefix(from + VARIANT_SEPARATOR)
-                f.renameTo(File(folder.partsDir, to + VARIANT_SEPARATOR + state + ".png"))
+                val renamed = PartFiles.withStem(f, to + VARIANT_SEPARATOR + state)
+                f.renameTo(File(folder.partsDir, renamed))
             }
         }
         return true
@@ -1726,8 +1731,10 @@ class CharacterStore(private val context: Context) {
     fun partDrawings(folder: CharacterFolder, bone: String): List<PartDrawing> {
         val files = folder.partsDir.listFiles() ?: return emptyList()
         return files
-            .filter { it.isFile && it.name.endsWith(".png") }
-            .map { PartDrawing(it.name.removeSuffix(".png"), it) }
+            // 后缀那张名单只有一份（PartFiles.EXTENSIONS）：下一版再加一种格式时，
+            // 漏掉这里就会变成"导入了但是部位页里没有"。
+            .filter { PartFiles.isPartFile(it) }
+            .map { PartDrawing(PartFiles.stem(it), it) }
             .filter { it.artKey == bone || it.artKey.startsWith(bone + VARIANT_SEPARATOR) }
             .sortedBy { it.artKey }
     }

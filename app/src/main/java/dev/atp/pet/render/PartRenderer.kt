@@ -347,6 +347,17 @@ class PartRenderer(
                 0f, 0f, 1f,
             )
         )
+        // 动图（1.36.0）：同一个矩阵下画**它现在这一帧**。drawable 画在自己的 bounds 里
+        // （整画布），所以矩阵压到画布上，而不是交给 drawBitmap —— 两条路的变换是同一个。
+        val frame = part.drawable
+        if (frame != null) {
+            canvas.save()
+            canvas.concat(matrix)
+            frame.setBounds(0, 0, part.bitmap.width, part.bitmap.height)
+            frame.draw(canvas)
+            canvas.restore()
+            return
+        }
         canvas.drawBitmap(part.bitmap, matrix, paint)
     }
 }

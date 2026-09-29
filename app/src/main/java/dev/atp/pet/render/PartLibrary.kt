@@ -14,7 +14,19 @@ import java.io.IOException
  * keeping a 1024x2048 bitmap per bone would mean drawing tens of megabytes of mostly
  * transparent pixels every frame. They are cropped on load and the offset remembered.
  */
-class Part(val bitmap: Bitmap, val offsetX: Float, val offsetY: Float)
+class Part(
+    val bitmap: Bitmap,
+    val offsetX: Float,
+    val offsetY: Float,
+    /**
+     * 动图（1.36.0）：这一节的图如果是 GIF，这里就是那个会自己走的 drawable；PNG 是 null。
+     *
+     * 两条路都留着，而不是"统一成 drawable"：PNG 那条路上有**裁剪**（只画非透明的那一块，
+     * 见 `alphaBounds`），那份偏移被画笔那边手算过（`paintAt` 里的 c/s/tx/ty），换成 drawable
+     * 就得把那套算法再写一遍。GIF 不裁剪（整画布画），所以它不需要那份偏移 —— 两条路各自简单。
+     */
+    val drawable: android.graphics.drawable.Drawable? = null,
+)
 
 /**
  * Every part image a character folder holds, keyed by bone name.
@@ -23,6 +35,35 @@ class Part(val bitmap: Bitmap, val offsetX: Float, val offsetY: Float)
  * artwork for the bone called upperarm_L. A bone with no file simply draws nothing,
  * which is what lets an artist draw one limb at a time and still see it working.
  */
+/**
+ * 哪些文件算"一张部位图"（1.36.0 加上了 GIF）。
+ *
+ * **只有这一处判断。** 问这句话的地方有三处 —— 扫描 parts 目录（这里）、部位页列出这一节
+ * 有哪些图（`CharacterStore.partDrawings`）、以及变体文件名的解析（`<骨头>__<状态>`）——
+ * 三处各写一遍，就是下一次加格式时漏掉其中一处，而症状是"导入了但是列表里没有"。
+ */
+object PartFiles {
+    /** 认识的图片后缀。顺序无关，但**只此一份**。 */
+    val EXTENSIONS = listOf("png", "gif")
+
+    fun isPartFile(f: File): Boolean =
+        f.isFile && EXTENSIONS.any { f.name.endsWith("." + it, ignoreCase = true) }
+
+    /** 文件名去掉后缀：`upperarm_L__机械臂.gif` → `upperarm_L__机械臂`。 */
+    fun stem(f: File): String = f.name.substringBeforeLast('.')
+
+    /**
+     * 换掉"名字"那一半，**后缀原样留着**（改骨骼名时用）：`old__机械臂.gif` 改成
+     * `new__机械臂.gif`。
+     *
+     * 这个名字得从**原来那个文件**上取，不能按 ".png" 拼出来 —— 改骨骼名那一段原来就是
+     * 自己拼的，于是它扫不到 GIF（`endsWith(".png")`），一个 GIF 的变体在改名之后就成了
+     * 孤儿：文件还在老名字下，图层却跟着骨头改了名。那正是 1.33.2 修过的那一类"图在、层
+     * 找不到它"。
+     */
+    fun withStem(f: File, stem: String): String = stem + "." + f.name.substringAfterLast('.')
+}
+
 class PartLibrary(val parts: Map<String, Part>) {
 
     val isEmpty: Boolean get() = parts.isEmpty()
@@ -36,13 +77,18 @@ class PartLibrary(val parts: Map<String, Part>) {
         /** Threshold below which a pixel counts as empty; avoids halos from soft edges. */
         private const val ALPHA_CUTOFF = 8
 
-        fun load(partsDir: File, boneNames: List<String>): PartLibrary {
+        fun load(
+            partsDir: File,
+            boneNames: List<String>,
+            /** 动图的每一帧要靠它重画（`View` 自己就是 `Drawable.Callback`）。没有就只画第一帧。 */
+            callback: android.graphics.drawable.Drawable.Callback? = null,
+        ): PartLibrary {
             val out = LinkedHashMap<String, Part>()
             val names = boneNames.toHashSet()
-            val files = partsDir.listFiles { f -> f.isFile && f.name.endsWith(".png") }
+            val files = partsDir.listFiles { f -> PartFiles.isPartFile(f) }
                 ?: return PartLibrary(out)
             for (file in files.sortedBy { it.name }) {
-                val stem = file.name.substringBeforeLast(".png")
+                val stem = PartFiles.stem(file)
                 // The bone's own drawing, and the drawings of its STATES.
                 //
                 // A state drawing is a second file for the same bone — <bone>__<state>, see
@@ -54,6 +100,14 @@ class PartLibrary(val parts: Map<String, Part>) {
                 // like importing a picture that goes nowhere, because that is what it was.
                 val belongs = stem in names || stem.substringBefore(VARIANT_SEPARATOR) in names
                 if (!belongs) continue
+                // 动图先试（1.36.0）：成了就是"会自己走的那一张"，整画布画、不裁剪；
+                // 不成（PNG / 老系统 / 坏文件）就退回老路 —— 第一帧 + 裁剪。
+                val animated = openAnimated(file, callback)
+                if (animated != null) {
+                    val first = open(file) ?: continue
+                    out[stem] = Part(first, 0f, 0f, animated)
+                    continue
+                }
                 val source = open(file) ?: continue
                 val part = crop(source) ?: continue
                 out[stem] = part
@@ -67,15 +121,53 @@ class PartLibrary(val parts: Map<String, Part>) {
          * Props are not attached to bones, so there is no naming contract to satisfy: the
          * file IS the thing, and where its pixels are is where it is drawn.
          */
-        fun loadFree(dir: File): PartLibrary {
+        fun loadFree(
+            dir: File,
+            callback: android.graphics.drawable.Drawable.Callback? = null,
+        ): PartLibrary {
             val out = LinkedHashMap<String, Part>()
-            val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".png") } ?: return PartLibrary(out)
+            val files = dir.listFiles { f -> PartFiles.isPartFile(f) } ?: return PartLibrary(out)
             for (file in files.sortedBy { it.name }) {
+                val stem = PartFiles.stem(file)
+                val animated = openAnimated(file, callback)
+                if (animated != null) {
+                    val first = open(file) ?: continue
+                    out[stem] = Part(first, 0f, 0f, animated)
+                    continue
+                }
                 val source = open(file) ?: continue
                 val part = crop(source)
-                if (part != null) out[file.name.substringBeforeLast(".png")] = part
+                if (part != null) out[stem] = part
             }
             return PartLibrary(out)
+        }
+
+        /**
+         * 一张 GIF：能走就走，不能走回 null（调用方退回第一帧）。
+         *
+         * `AnimatedImageDrawable` 是 API 28 的东西，而这个应用的 minSdk 是 26 —— 26/27 上
+         * 退回静态的第一帧，不是"图不显示"（`BitmapFactory` 本来就会解出 GIF 的第一帧）。
+         * 动画要靠 [callback] 重画：drawable 自己不会去 invalidate 一个 View。
+         */
+        private fun openAnimated(
+            file: File,
+            callback: android.graphics.drawable.Drawable.Callback?,
+        ): android.graphics.drawable.Drawable? {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) return null
+            if (!file.name.endsWith(".gif", ignoreCase = true)) return null
+            return try {
+                val source = android.graphics.ImageDecoder.createSource(file)
+                val decoded = android.graphics.ImageDecoder.decodeDrawable(source)
+                val animated = decoded as? android.graphics.drawable.AnimatedImageDrawable
+                    ?: return null
+                animated.repeatCount = android.graphics.drawable.AnimatedImageDrawable.REPEAT_INFINITE
+                animated.callback = callback
+                animated.start()
+                animated
+            } catch (e: Exception) {
+                // 坏 GIF、解码器不支持、内存不够 —— 都退回第一帧。一张图坏了不该让宠物消失。
+                null
+            }
         }
 
         /** Crop a decoded part to its ink and remember where that was. Recycles [source]. */
