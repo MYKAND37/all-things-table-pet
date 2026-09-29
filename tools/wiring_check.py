@@ -427,9 +427,13 @@ def main():
            "depthUnusedOnly" in activity and "depth_filter_unused" in activity)
     report("点它有得改（换状态 / 重建状态 / 导入图 / 删掉）",
            "private fun askFixLayer(" in activity and "private fun recreateState(" in activity)
-    # 最安静的一种是"行根本不在表里"：图画好了、有状态名，而这张表里没有它。
-    report("画好但没排进表的图会被列出来（变体图最容易这样）",
-           "store.partDrawings(folder, bone)" in activity and "d.state" in activity)
+    # 最安静的一种是"行根本不在表里"：图画好了、有状态名，而这张表里没有它。1.34.0 起这件事
+    # 不再是"这一页内存里补一行"（那时用户不按保存就没了，部位页上仍旧是一行「未使用」，
+    # 右边的「改成叠加」永远不出现）—— 现在按文件名**写回文件**，而且两页调同一个函数。
+    store_src = next((t2 for p2, t2 in files.items() if p2.endswith("data/CharacterStore.kt")), "")
+    report("画好但没排进表的图会被挂回去（部位页和图层与深度调的是同一个函数）",
+           "fun adoptOrphanDrawings(folder: CharacterFolder): Int" in store_src
+           and activity.count("adoptOrphanDrawings(folder)") == 3)
 
     print("== 哪一只在场上：是用户说了算 ==")
     # 「选择场上存在哪一只桌宠」这一版加的东西里，最容易被悄悄破坏的一条：复制一只、导入一个包、

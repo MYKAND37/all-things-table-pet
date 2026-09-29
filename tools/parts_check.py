@@ -147,6 +147,41 @@ def repair_plan(layers, folder_parts, global_ids):
     return out
 
 
+def adopt_plan(layers, bones, drawings, folder_parts, global_ids):
+    """镜像 CharacterStore.adoptOrphanDrawings（1.34.0）：图在硬盘上、层没了，怎么挂回去。
+
+    [drawings] 是每一节的图（`bone -> [artKey]`，**从目录读的**，所以没层的图也在里面 ——
+    `partDrawings` 就是这么读的）。返回要追加的那些层；空列表 = 没什么可修的，那个函数
+    因此一个字节都不写。
+
+    挂成**叠加**：一个字都不动底图 —— 找回一个丢了的层，不该顺手把底图关掉。落点和
+    addVariant 同一套规矩（贴着这一节"平时就画"的那一层，没有就全场最高 +10），权重 0。
+    """
+    top = max([l.get("z", 0) for l in layers] or [0])
+    added = []
+    for bone in bones:
+        own = [l for l in layers if l.get("bone") == bone]
+        known = set((l.get("art") or bone) for l in own)
+        base_z = max([l.get("z", 0) for l in own
+                      if not l.get("state", "").startswith("!")] or [None])
+        for art in drawings.get(bone, []):
+            if art in known:
+                continue
+            if art == bone:
+                added.append({"bone": bone, "z": 0})
+            else:
+                added.append({
+                    "bone": bone,
+                    "z": (top + 10) if base_z is None else base_z + 1,
+                    "state": variant_tag(folder_parts, global_ids, bone,
+                                         art.split("__", 1)[1]),
+                    "art": art,
+                    "prio": 0,
+                })
+            known.add(art)
+    return added
+
+
 def main():
     print("no state, or a state that is on or off")
     report("no tag always draws", visible("", {}) and visible("", {"x": False}))
@@ -357,6 +392,45 @@ def main():
     report("三处都走同一个判断，而判断只有一份（抄一遍就多一个会忘的参数）",
            store_kt.count("val tag = variantTag(folder, bone, state)") == 3
            and store_kt.count("?.states?.any { it.id == state }") == 1)
+
+    print("\n图在硬盘上、层没了：按文件名挂回去（1.34.0，用户报的「叠加不见了」）")
+    # 用户报的现场：`hand_L__出汗.png` 在目录里，而 layers 里没有任何一层指着它。部位页那一行
+    # 于是写「未使用」，右边那个「改成叠加 / 改成替换」也不出现 —— 它的判据正是"这一行落在哪一
+    # 层上"（叠加还是替换看的就是那层的 `!状态`），**没有层就没有判据**。用户看到的因此是
+    # "叠加这个功能被删了"，而唯一的出路是删掉重加（等于重画）。
+    orphan = [{"bone": "hand_L", "z": 10, "art": "", "state": ""}]
+    files = {"hand_L": ["hand_L", "hand_L__出汗"]}
+    added = adopt_plan(orphan, ["hand_L"], files, parts, [])
+    report("孤立的变体图挂回去了：图就是那个文件、状态带这一节的标签",
+           [a.get("art") for a in added] == ["hand_L__出汗"]
+           and [a.get("state") for a in added] == ["hand_L:出汗"])
+    report("挂成叠加：底图一个字都没动，所以两张都会画",
+           not [a for a in added if a.get("state", "").startswith("!")]
+           and visible("", {"hand_L:出汗": True}))
+    report("落点贴着这一节平时就画的那一层（和 addVariant 同一套规矩）",
+           bool(added) and added[0]["z"] == 11, str([a.get("z") for a in added]))
+    report("修两次和修一次一样（没有孤立的图就没有要写的）",
+           adopt_plan(orphan + added, ["hand_L"], files, parts, []) == [])
+    report("底图那一层整个没了的也补（`art` 空 = 就叫这根骨头的名字）",
+           adopt_plan([], ["hand_L"], {"hand_L": ["hand_L"]}, parts, [])[0]["z"] == 0)
+    report("骨架里没有这一节 → 不挂（挂上去也没人画）",
+           adopt_plan([], ["head"], {"hand_L": ["hand_L__出汗"]}, parts, []) == [])
+    report("修的是**文件**，而且只在真的有孤儿时才写盘",
+           "fun adoptOrphanDrawings(folder: CharacterFolder): Int" in store_kt
+           and "if (added > 0) {" in store_kt)
+    activity = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/MainActivity.kt"),
+                    encoding="utf-8").read()
+    report("部位页和图层与深度调的是同一个函数（同一件事写两遍，就是两处会各自漂）",
+           # 两页各一次，加上助手自己里面那一次（`store.adoptOrphanDrawings(folder)`）。
+           activity.count("adoptOrphanDrawings(folder)") == 3
+           and "private fun adoptOrphanDrawings(folder: CharacterFolder)" in activity
+           and "depthLayers.add(LayerSpec(bone, 0, state = d.state" not in activity)
+    report("声明名单也只有一份（「这个开关还在不在」两页问的是同一句话）",
+           activity.count("declaredStateTags(folder)") == 2
+           and "depthDeclared = declaredStateTags(folder)" in activity)
+    report("部位页那一行会说出「这个开关没人声明」（挂在没人开的开关上 = 图永远不画）",
+           "private fun declaresNothing(" in activity
+           and "declaresNothing(layer.state, declared)" in activity)
 
     print("")
     if FAILURES:

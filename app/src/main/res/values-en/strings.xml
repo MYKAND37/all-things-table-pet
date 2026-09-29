@@ -354,6 +354,7 @@
     <string name="paint_undo">Undo</string>
     <string name="paint_width">Brush width</string>
     <string name="part_state_tag_fixed">Fixed %1$d part-state drawing(s): they were attached to a global state (an old bug), so the switch lit up but the drawing never appeared. They now belong to their own part again.</string>
+    <string name="part_orphan_adopted">Fixed %1$d drawing(s) that were attached to no state at all: they are attached again by file name, so that row can choose Overlay / Replace now.</string>
     <string name="part_files_add">＋ Add an image</string>
     <string name="part_files_add_state">＋ Add an image for state \"%1$s\"</string>
     <string name="part_files_always">Always drawn</string>

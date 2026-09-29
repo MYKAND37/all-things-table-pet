@@ -2490,6 +2490,10 @@ class MainActivity : AppCompatActivity() {
         // 同一件事的第二个人口：用户是**先在这一页看到**"我那张图挂在出汗上"的，所以进来之前
         // 也得修一次 —— 不然这一页上写的还是那个错的键，看到的和实际画的又是两回事。
         repairPartStateTags(folder)
+        // 第三个人口：图在硬盘上、而**没有任何一层指着它**的，在这里按文件名挂回去（1.34.0）。
+        // 不挂回去，这一行就只能写「未使用」，右边的「改成叠加 / 改成替换」也就没有判据 ——
+        // 用户看到的是"叠加这个功能不见了"。
+        adoptOrphanDrawings(folder)
         partFilesList.removeAllViews()
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
@@ -2533,6 +2537,10 @@ class MainActivity : AppCompatActivity() {
         val layers = CharacterSpec.parseOrNull(folder.specText())
             ?.layers?.filter { it.bone == bone } ?: emptyList()
         fun layerOf(artKey: String) = layers.firstOrNull { it.artKey == artKey }
+
+        // 这一只身上所有开关的标签，**一趟读完**：每一行都要问它一次（"这张图等的那个开关
+        // 还在不在"），在循环里现读就是每行一次文件 IO。
+        val declared = declaredStateTags(folder)
 
         // Both levels: the character's own states, and the ones THIS part declares. A drawing
         // can be shown while "穿着" is on, or while this hand's own "出汗" is on -- and the
@@ -2597,6 +2605,14 @@ class MainActivity : AppCompatActivity() {
                 else -> getString(R.string.part_files_when_on, stateLabel(layer.state))
             }
             text.addView(label(whenText, 10f, MUTED))
+            // 挂是挂上了，可它等的那个开关**没人声明**：这一层永远不会被打开，画面上看就是
+            // "这张图没生效"。图层与深度那一页对同一件事有话说（[depthUnusedReason]），
+            // 这里也得说 —— 部位页才是用户找这张图的地方。
+            if (layer != null && declaresNothing(layer.state, declared)) {
+                text.addView(
+                    label(getString(R.string.depth_unused_state, stateLabel(layer.state)), 10f, WARN)
+                )
+            }
             row.addView(text)
 
             if (layer != null && layer.state == "" && states.isNotEmpty()) {
@@ -2922,36 +2938,17 @@ class MainActivity : AppCompatActivity() {
         val parsed = CharacterSpec.parseOrNull(folder.specText()) ?: return
         depthFolder = folder
 
-        depthLayers = parsed.layers.sortedBy { it.z }.toMutableList()
-        // A bone with artwork but no layer entry is never drawn at all. The shoulders were
-        // exactly that for a while, and "everything shows except these two" is a hard
-        // thing to guess from the code, so anything missing is appended at the front where
-        // it is at least visible.
-        for (b in parsed.bones.map { it.name }) {
-            if (depthLayers.none { it.bone == b } && folder.partFile(b).isFile) {
-                depthLayers.add(LayerSpec(b, 0))
-            }
-        }
-        // 画好了、却没在这张表里的图：变体最容易这样 —— `hand_L__mech.png` 在硬盘上、
-        // 在部位页里也看得见，而这张表里没有它的行，于是它从来没有被画过一次。文件名的
-        // 后半截就是它等的那个状态（`addVariant` 就是这么命名的），所以顺手把它填上：
-        // 这是「图层会不被使用」里最安静的一种，因为那一行根本不存在，连找都没得找。
-        for (bone in parsed.bones.map { it.name }) {
-            val known = depthLayers.filter { it.bone == bone }.map { it.artKey }.toSet()
-            for (d in store.partDrawings(folder, bone)) {
-                if (d.artKey in known) continue
-                depthLayers.add(LayerSpec(bone, 0, state = d.state, art = d.artKey))
-            }
-        }
+        // 硬盘上有、这张表里没有的图：**先写进文件里**（1.34.0），再读回来。
+        //
+        // 这一段原来在这里就地补行（1.26.0）：底图没层的补一层、变体没层的补一层 —— 可是
+        // 补的只是**这一页内存里的表**，用户不按保存就没了，而"这一张图没有层"在部位页上
+        // 仍然是一行「未使用」加一个永远不出现的「改成叠加」。现在两页调同一个函数：
+        // 它落盘、幂等，部位页进来时也会跑一遍。
+        adoptOrphanDrawings(folder)
+        depthLayers = (CharacterSpec.parseOrNull(folder.specText()) ?: parsed)
+            .layers.sortedBy { it.z }.toMutableList()
         depthStates = store.loadLogic(folder.id).states
-        val declared = mutableSetOf<String>()
-        for (s in depthStates) declared.add(s.id)
-        for ((subject, spec) in store.loadObjectLogic(folder)) {
-            if (!Subjects.isPart(subject)) continue
-            val bone = Subjects.partId(subject)
-            for (s in spec.states) declared.add(Subjects.stateTag(bone, s.id))
-        }
-        depthDeclared = declared
+        depthDeclared = declaredStateTags(folder)
         depthRules = parsed.swaps.toMutableList()
         depthFilter = null
         depthUnusedOnly = false
@@ -10504,6 +10501,52 @@ class MainActivity : AppCompatActivity() {
                 this, getString(R.string.part_state_tag_fixed, fixed), Toast.LENGTH_LONG,
             ).show()
         }
+    }
+
+    /**
+     * 硬盘上有、图层表里没有的图：进这两页之前各挂回去一次（1.34.0，用户报的「叠加不见了」）。
+     *
+     * 和 [repairPartStateTags] 同一个位置、同一个理由：坏掉的是**文件**，而用户是在**界面**
+     * 上看见它的 —— 不修的话部位页那一行永远写着「未使用」，而那一行右边本该有的
+     * 「改成叠加 / 改成替换」永远不出现，看起来就像功能被删了。
+     */
+    private fun adoptOrphanDrawings(folder: CharacterFolder) {
+        val adopted = store.adoptOrphanDrawings(folder)
+        if (adopted > 0) {
+            Toast.makeText(
+                this, getString(R.string.part_orphan_adopted, adopted), Toast.LENGTH_LONG,
+            ).show()
+        }
+    }
+
+    /**
+     * This pet's switches, every one of them, as the TAGS a layer writes: its own states by id,
+     * and each part's own tagged with the part (`hand_L:出汗`).
+     *
+     * Three places ask this question — 图层与深度 ("this layer can never draw"), the 部位 row
+     * below, and the chips on the bench — and it is the kind of answer that drifts when it is
+     * written three times. One function, so "declared" means the same thing everywhere.
+     */
+    private fun declaredStateTags(folder: CharacterFolder): Set<String> {
+        val out = mutableSetOf<String>()
+        for (s in store.loadLogic(folder.id).states) out.add(s.id)
+        for ((subject, spec) in store.loadObjectLogic(folder)) {
+            if (!Subjects.isPart(subject)) continue
+            for (s in spec.states) out.add(Subjects.stateTag(Subjects.partId(subject), s.id))
+        }
+        return out
+    }
+
+    /**
+     * A layer waiting for a switch nobody declares, so it can never be turned on.
+     *
+     * One state only: `a+b` names several, and a layer that waits for three switches is not
+     * "unused" just because one of them is gone — the honest thing to say about it is nothing.
+     * The stripped prefix is the same one [LayerSpec.visible] strips.
+     */
+    private fun declaresNothing(state: String, declared: Set<String>): Boolean {
+        val one = state.removePrefix("!")
+        return one.isNotEmpty() && !one.contains('+') && one !in declared
     }
 
     /** 「版本 1.12.4 · 构建 137」, read from the installed package. See buildSettingsPane. */

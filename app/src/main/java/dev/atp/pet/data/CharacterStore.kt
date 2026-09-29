@@ -1249,6 +1249,75 @@ class CharacterStore(private val context: Context) {
     }
 
     /**
+     * 硬盘上有、图层表里没有的图：按文件名把它们挂回去（1.34.0，用户报的「叠加不见了」）。
+     *
+     * 症状是部位页那一行写着**未使用**，右边也没有「改成叠加 / 改成替换」—— 那个按钮的判据
+     * 是"这一行落在哪一层上"（叠加还是替换，看的正是那一层的 `!状态` 标记），**没有层就没有
+     * 判据**，于是整件事看起来像功能被删掉了。而这一页没有"改这一张图挂哪个状态"这个动作，
+     * 用户唯一的出路是删掉重加 —— 那等于让他重画。
+     *
+     * 修的是**文件**，不是界面：`partDrawings` 是从目录读的，而文件名后半截（`hand_L__出汗`）
+     * 就是它等的那个状态（[addVariant] 就是这么命名的），所以"挂回去"有确定的答案。挂成
+     * **叠加**（一个字都不动底图 —— 找回一个丢了的层，不该顺手把底图关掉）、z 与 prio 按
+     * [addVariant] 同一套规矩落，状态用 [variantTag] 判层级。
+     *
+     * 幂等：没有孤立的图就一个字节都不写。图层与深度那一页原来自己抄了一份同样的遍历
+     * （1.26.0 补的），现在两页调的是同一个函数 —— 同一件事写两遍，就是两处各自会漂。
+     */
+    fun adoptOrphanDrawings(folder: CharacterFolder): Int {
+        if (!folder.specFile.isFile) return 0
+        return try {
+            val root = JSONObject(folder.specText())
+            val arr = root.optJSONArray("layers") ?: JSONArray()
+            val bones = root.optJSONArray("bones") ?: return 0
+            var top = 0
+            for (j in 0 until arr.length()) top = maxOf(top, arr.getJSONObject(j).optInt("z", 0))
+            var added = 0
+            for (i in 0 until bones.length()) {
+                val bone = bones.getJSONObject(i).optString("name", "")
+                if (bone.isEmpty()) continue
+                // 这一节自己的层：已知的图（`art` 空表示"就叫这根骨头的名字"），以及"平时就画"
+                // 的那一层有多高 —— 和 addVariant 落点用的是同一个数。
+                val known = HashSet<String>()
+                var baseZ = Int.MIN_VALUE
+                for (j in 0 until arr.length()) {
+                    val l = arr.getJSONObject(j)
+                    if (l.optString("bone") != bone) continue
+                    val art = l.optString("art", "")
+                    known.add(if (art.isEmpty()) bone else art)
+                    if (!l.optString("state", "").startsWith("!")) {
+                        baseZ = maxOf(baseZ, l.optInt("z", 0))
+                    }
+                }
+                for (d in partDrawings(folder, bone)) {
+                    if (d.artKey in known) continue
+                    val layer = JSONObject().put("bone", bone)
+                    if (d.artKey == bone) {
+                        // 底图这一层整个不在：那一节画不出来，和"变体丢了"是同一类事，一起补。
+                        layer.put("z", 0)
+                    } else {
+                        layer.put("z", if (baseZ == Int.MIN_VALUE) top + 10 else baseZ + 1)
+                        layer.put("state", variantTag(folder, bone, d.state))
+                        layer.put("art", d.artKey)
+                        layer.put("prio", 0)
+                    }
+                    arr.put(layer)
+                    known.add(d.artKey)
+                    added++
+                }
+            }
+            if (added > 0) {
+                root.put("layers", arr)
+                root.put("version", root.optInt("version", 0) + 1)
+                writeSpec(folder, root)
+            }
+            added
+        } catch (e: Exception) {
+            0
+        }
+    }
+
+    /**
      * 这一张变体图挂在哪个开关上：**这一节自己**声明的带骨头标签（`hand_L:出汗`），
      * 角色的全局状态就用 id。
      *
