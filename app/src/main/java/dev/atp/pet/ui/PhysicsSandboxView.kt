@@ -2110,6 +2110,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // readings of one joint instead of two readings of two. See Ragdoll.probeBone.
         val watched = heldBones.values.firstOrNull()
         rag.probeBone = watched
+        // 桌面那一只：它的活动范围就是**屏幕上看得见的那一块**（1.34.0，用户报的「有时候会
+        // 掉出屏幕外」）。每帧给一次而不是在建世界时算一次，因为"屏幕多大"要跟着视图走 ——
+        // 旋转、系统栏变化、双指缩放都会让这一块变，而它们都不该需要把宠物重建一遍。
+        // 测试场里这个世界就是角色自己那间屋子，一个数都不动。
+        if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)
         rag.step(dt, pins)
         // What that step was handed, and that there was one of it. Taken here rather than in
         // onDraw because this is the call the number is about: the panel prints the delta the

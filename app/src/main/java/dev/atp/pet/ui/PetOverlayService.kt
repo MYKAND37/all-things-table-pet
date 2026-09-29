@@ -157,7 +157,6 @@ class PetOverlayService : Service() {
             stopSelf()
             return
         }
-        val metrics = resources.displayMetrics
 
         val poses = store.loadPoses(folder)
         val animations = store.loadAnimations(folder)
@@ -184,11 +183,21 @@ class PetOverlayService : Service() {
         // "另起一只"：动作是眼睛看得见的那一部分，掉了最明显。
         rememberedPose(this)?.let { view.playPose(it, home = false) }
 
-        // 宠物那一层：满屏。世界就是屏幕 —— 它落在屏幕底边上，也会在整块屏幕里被拖来拖去。
+        // 宠物那一层：**满屏，而且是"系统说多大就多大"**（1.34.0，用户报的「有时候会掉出
+        // 屏幕外」）。
+        //
+        // 这里原来写的是 `resources.displayMetrics` 的宽高 —— 那是**服务起来那一刻**的一张
+        // 快照：屏幕转一下、系统栏收起/展开、分屏或折叠屏改变可用区域，窗口还是原来那个尺寸，
+        // 于是宠物站在"旧屏幕"的底边上，而那一条边已经在屏幕外面了。屏幕上什么都没有，和
+        // "它掉下去了"看起来是同一件事。
+        //
+        // MATCH_PARENT 把"屏幕多大"交回给系统：窗口跟着显示区域走，旋转之后自己就是新的
+        // 尺寸，视图再把它量给 PhysicsSandboxView（桌面那只的世界就是这一块，见 cageTo）。
+        // 一张快照回答不了一个会变的问题，这是这一版的全部意思。
         val petLayer = FrameLayout(this).apply { addView(view) }
         val p = WindowManager.LayoutParams(
-            metrics.widthPixels,
-            metrics.heightPixels,
+            WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             // NOT_FOCUSABLE 不抢键盘；NOT_TOUCH_MODAL 让这一层之外的触摸照样给下面的 App
             // （满屏时用不上，但加上它，将来窗口不占满时行为也是对的）。

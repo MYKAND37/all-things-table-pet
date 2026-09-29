@@ -106,6 +106,32 @@ class Camera:
     def set_root(self, root):
         self.root = root
 
+    # -- the desktop cage (1.34.0) -----------------------------------------
+
+    def cage(self, desktop, radius=26.0):
+        """Ragdoll.cageTo 的三个数：桌面那只的活动范围是屏幕上看得见的那一块。
+
+        `PhysicsSandboxView.simulate` 每帧给一次（`rag.cageTo(panX, panX + viewWidth(),
+        panY)`），`Ragdoll.walls` 里夹根节点用的就是它们。**地板不在里面**，这是有意的：
+        地板已经是屏幕底边，而且道具和液体落的是同一块地板 —— 搬它会让那些东西落在半空。
+        """
+        if not desktop:
+            return (0.0, self.spec["physics"]["worldWidth"],
+                    self.spec["physics"].get("ceilingY", 0.0))
+        return (self.pan_x, self.pan_x + self.view_width(), self.pan_y)
+
+    def clamp_root(self, root, walls, radius=26.0):
+        """Ragdoll.walls() 里夹根节点那一段（两堵墙 + 天花板）。"""
+        left, right, top = walls
+        x, y = float(root[0]), float(root[1])
+        if x - radius < left:
+            x = left + radius
+        elif x + radius > right:
+            x = right - radius
+        if y - radius < top:
+            y = top + radius
+        return (x, y)
+
     # -- keeping things on screen ------------------------------------------
 
     def on_draw(self, points, follow_on=True, panning=False, grip=None, holding_prop=False):
@@ -412,6 +438,53 @@ def main():
     report("spill point inside the window", cam.inside(spill),
            "spill %.0f,%.0f window y %.0f..%.0f"
            % (spill[0], spill[1], cam.pan_y, cam.pan_y + cam.view_height()))
+
+    # 8. 桌面那一只（1.34.0，用户报的「有时候会掉出屏幕外」）：出厂素体的世界是 6144 px 宽，
+    #    而一块屏幕只看得到其中 1/3 —— 桌面模式又不平移镜头，于是被扔出去/被规则推走的宠物
+    #    可以停在两千多像素之外。屏幕上什么都没有，和"它掉下去了"看起来是同一件事。
+    #    桌面那只的活动范围因此夹在**看得见的那一块**里；测试场一个数都不动。
+    print("== 8. 桌面：世界是三块屏幕宽，活动范围只有一块 ==")
+    for size in (TALL, SHORT):
+        cam = Camera(spec, size)
+        cam.set_root(root)
+        cam.on_size_changed()
+        r = 26.0
+        world = spec["physics"]["worldWidth"]
+        bench, desk = cam.cage(desktop=False), cam.cage(desktop=True)
+        report("%dx%d：这个世界确实比一块屏幕宽（%.0f 里看得见 %.0f）"
+               % (size[0], size[1], world, cam.view_width()),
+               world > cam.view_width() * 1.5)
+        # 被扔到世界最右边：测试场里它就停在那儿（看不见），桌面上被拉回视口里。
+        far = (world - r, floor - 200.0)
+        stayed = cam.clamp_root(far, bench, r)
+        pulled = cam.clamp_root(far, desk, r)
+        report("测试场：它停在右墙（那面墙在屏幕外，所以什么都看不见）",
+               stayed[0] > cam.pan_x + cam.view_width(), "x=%.0f" % stayed[0])
+        report("桌面：同一只被拉回看得见的那一块里",
+               cam.pan_x <= pulled[0] <= cam.pan_x + cam.view_width(),
+               "x=%.0f，视口 %.0f..%.0f" % (pulled[0], cam.pan_x, cam.pan_x + cam.view_width()))
+        # 往上扔也一样：屋子 -1600 的天花板在屏幕上面（视口顶边只有 %.0f）。
+        high = (cam.pan_x + 50.0, -1500.0)
+        report("往上扔也一样（天花板 = 视口顶边，不是 -1600）",
+               cam.clamp_root(high, bench, r)[1] < cam.pan_y
+               and cam.clamp_root(high, desk, r)[1] >= cam.pan_y,
+               "测试场 y=%.0f，桌面 y=%.0f，顶边 %.0f"
+               % (cam.clamp_root(high, bench, r)[1], cam.clamp_root(high, desk, r)[1], cam.pan_y))
+
+    text = kotlin()
+    ragdoll_kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/physics/Ragdoll.kt"),
+                      encoding="utf-8").read()
+    report("每帧给一次（旋转、系统栏、双指缩放都不用重建宠物）",
+           "if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)" in text
+           and text.count("rag.cageTo(") == 1)
+    # 地板不动的理由：道具和液体落的是同一块地板。所以 cageTo 只收三个数，没有 floor。
+    report("地板没有被搬走（道具和液体落的是同一块）",
+           "fun cageTo(left: Float, right: Float, top: Float)" in ragdoll_kt
+           and "floor" not in ragdoll_kt.split("fun cageTo(", 1)[1].split("}", 1)[0])
+    report("两堵墙和天花板是**能改的**（原来三个都是 val，桌面那一支改不动）",
+           "private var wallLeft" in ragdoll_kt
+           and "private var wallRight" in ragdoll_kt
+           and "private var ceiling" in ragdoll_kt)
 
     print()
     if FAILURES:

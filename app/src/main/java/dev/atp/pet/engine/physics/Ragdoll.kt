@@ -64,9 +64,10 @@ class Ragdoll(
 
     private val gravity = spec.gravity
     private val floor = spec.floorY
-    private val ceiling = spec.ceilingY
-    private val wallLeft = 0f
-    private val wallRight = spec.worldWidth
+    // 两堵墙和天花板：测试场里是角色自己那间屋子，桌面上会被搬到屏幕上（见 [cageTo]）。
+    private var ceiling = spec.ceilingY
+    private var wallLeft = 0f
+    private var wallRight = spec.worldWidth
     private val restitution = 0.2f
     private val groundFriction = 2.5f
 
@@ -563,6 +564,28 @@ class Ragdoll(
         if (rootVel.y > 0f) rootVel = Vec2(rootVel.x, -rootVel.y * restitution)
         rootVel = Vec2(rootVel.x * (1f - groundFriction * dt), rootVel.y)
         applyAngles()
+    }
+
+    /**
+     * 桌面模式：这一只能走到哪儿 —— 就是**屏幕上看得见的那一块**（1.34.0，用户报的
+     * 「有时候会掉出屏幕外」）。
+     *
+     * 出厂素体的 `worldWidth` 是画布宽的三倍（3072 px），而桌面上只有一个屏幕大、桌面模式
+     * 又不会平移镜头：被扔出去、被规则推走或者被拖到边上的宠物，可以停在两千多像素之外，
+     * 屏幕上什么都没有 —— 而"屏幕上什么都没有"和"它掉下去了"看起来是同一件事。往上扔也
+     * 一样：屋子的天花板在屏幕上面。
+     *
+     * **地板不动**，这是有意的：地板就是屏幕底边（桌面那一只整只装进屏幕高度，`framePet`
+     * 已经把 pan 对齐到它了），而且道具和液体落的是同一块地板 —— 把它也搬到屏幕上，那些
+     * 东西就会落在半空。要挪的只有"它能走多远"。
+     *
+     * 三个数是**世界坐标**（`panX` / `panX + viewWidth()` / `panY`），由调用方每帧给一次：
+     * 屏幕多大这件事因此只有视图自己量出来的那一个答案，旋转和双指缩放走的是同一条路。
+     */
+    fun cageTo(left: Float, right: Float, top: Float) {
+        wallLeft = left
+        wallRight = right
+        ceiling = top
     }
 
     private fun walls() {

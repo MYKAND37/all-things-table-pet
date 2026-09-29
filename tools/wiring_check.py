@@ -612,6 +612,21 @@ def main():
     #  2. 桌面上没有任何入口能摆动作（长按菜单里没有这一行）；
     #  3. 动作是**按骨骼套**存的，而桌面那一只开出来永远是默认那套身体，动作名自然对不上。
     overlay = next((t for p, t in files.items() if p.endswith("PetOverlayService.kt")), "")
+
+    print("== 桌面那只的窗口：屏幕多大由系统说了算（1.34.0） ==")
+    # 用户报「桌宠在桌面上时有时候会掉出屏幕外」。窗口尺寸原来写的是服务起来那一刻
+    # `resources.displayMetrics` 的宽高 —— 一张**快照**：屏幕转一下、系统栏收起/展开、
+    # 分屏改变可用区域，窗口还是旧尺寸，宠物就站在"旧屏幕"的底边上，而那一条边已经在屏幕
+    # 外面了。现在窗口满屏交给系统（MATCH_PARENT），视图再把它量给世界（Ragdoll.cageTo）。
+    rag_src = next((t2 for p2, t2 in files.items() if p2.endswith("physics/Ragdoll.kt")), "")
+    report("窗口是 MATCH_PARENT（不是那一瞬间的宽高快照）",
+           "WindowManager.LayoutParams.MATCH_PARENT" in overlay
+           and "metrics.widthPixels" not in overlay
+           and "val metrics = resources.displayMetrics" not in overlay)
+    report("桌面那只的世界跟着视图量出来的尺寸走（不是自己的画布）",
+           "if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)" in bench
+           and "fun cageTo(left: Float, right: Float, top: Float)" in rag_src)
+
     load_fn = bench[bench.find("fun load("):]
     load_fn = load_fn[:load_fn.find("): Boolean {")]
     report("动作是 load 的参数（没有默认值：忘了就编译不过）",
