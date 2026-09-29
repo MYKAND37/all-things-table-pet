@@ -483,14 +483,32 @@ class Engine:
         out.extend(self.fire(target, self.spec["rules"][target], ran))
         return out
 
+    def or_ons(self, rule):
+        """这条规则还能被哪些「当」叫醒：`orOns` 里那些。镜像 LogicSpec.readOrOns。
+
+        空的当直接丢掉、不是数组的一律读作空（Kotlin 那边 `optJSONArray` 对不是数组的东西
+        给 null）：一个空的当是一条永远不会醒的规则，而它不是用户写得出来的东西 ——
+        编辑器只会往里加真事件。
+        """
+        raw = rule.get("orOns", [])
+        if not isinstance(raw, list):
+            return []
+        return [t for t in raw if t]
+
     def resolve(self, event):
         out = []
         # 这一次事件里已经「开火」的规则。为什么标在 fire() 里而不是这里，见 fire()。
         ran = set()
         for index, rule in enumerate(self.spec["rules"]):
-            # 一条规则一个「当」（1.32.0 起「当」只有这一个）：并行分支那一版删掉了 ——
-            # 用户的原话是"跟新建一条规则没有区别"，而"另开一条规则"确实什么都做得到。
-            heard = (rule.get("on") == event.get("type")
+            # 「当」可以是好几个，之间是**或者**（1.35.0）：任意一个发生就算听到。并行分支
+            # 那一版（1.32.0）删掉了 —— 用户的原话是"跟新建一条规则没有区别"，而「或者 当」
+            # 不是那个东西：它在**同一条规则**里，共享这一条规则的如果 / 冷却 / 一次。
+            #
+            # 后面那两条（部位 / 是哪个道具）对每一个当都一样，所以留在外面 —— 如果 / 冷却 /
+            # 一次 同理（它们在 fire() 里），都是**这一条规则**的属性，不是某一个当的。
+            # 照 Kotlin RuleEngine.resolve 那一行写。
+            heard = ((rule.get("on") == event.get("type")
+                      or event.get("type") in self.or_ons(rule))
                      and self.touches(event, rule.get("part", ""))
                      and self.about_is(event, rule.get("about", "")))
             if heard:
@@ -1616,6 +1634,106 @@ def main():
            and 'optJSONArray("branches")' not in src
            and 'put("branches"' not in src
            and ".branches" not in src and ".branches" not in engine_src)
+
+    print("\n一条规则可以有好几个「当」，之间是或者（1.35.0）")
+    # 用户要的：「当」后面能再加一个「或者 当」。多个当之间是**或者** —— 任意一个发生，这一条
+    # 规则就按它**自己**的如果 / 冷却 / 一次算一遍。这和「如果」里那个「或者」是两件事：那个
+    # 说的是条件之间的关系，这个说的是"什么能叫醒它"。
+    #
+    # 最容易写错的是冷却那一条：好几个当**不是**"每条当各算一份冷却"，部位 / 是哪个道具 /
+    # 如果 / 冷却 / 一次 都是这一条规则的属性，对每一个当是同一份 —— Kotlin 那一行里它们
+    # 全在 `or` 的外面，下面这几条就是钉住这件事的。
+    def two_when(rule):
+        """一条规则、两个当（主当 click，第二个当 longPress）的引擎。"""
+        base = {"on": "click", "part": "", "if": [], "cooldown": 0.0,
+                "then": [{"kind": "say", "text": "叫醒了"}]}
+        base.update(rule)
+        return Engine({"stats": [{"id": "P", "name": "疼", "value": 0, "min": 0, "max": 100}],
+                       "states": [{"id": "dressed", "name": "穿着", "on": False}],
+                       "rules": [base]})
+
+    e = two_when({"orOns": ["longPress"]})
+    first = says(e.handle("click"))
+    report("主当发生 → 触发", first == ["叫醒了"], str(first))
+    second = says(e.handle("longPress"))
+    report("第二个当发生 → **也**触发", second == ["叫醒了"], str(second))
+    report("不相干的事件不触发（「或者」不是「任何事件都行」）",
+           two_when({"orOns": ["longPress"]}).handle("thrown") == [])
+
+    # 冷却长在**规则**上，不在「当」上：主当响过之后，第二个当不是另一条规则，
+    # 借不到第二次机会。
+    e = two_when({"orOns": ["longPress"], "cooldown": 5.0})
+    first = says(e.handle("click"))
+    second = says(e.handle("longPress"))
+    report("冷却没过，第二个当接着发生 → 不再触发（不是每个当各算一份冷却）",
+           first == ["叫醒了"] and second == [], "%s / %s" % (first, second))
+    e.clock += 6.0
+    report("冷却过去之后，换哪个当都能再叫醒它",
+           says(e.handle("longPress")) == ["叫醒了"])
+
+    once = two_when({"orOns": ["longPress"], "once": True})
+    first = says(once.handle("click"))
+    once.clock += 100.0
+    report("「一次」也是整条规则共享的：主当用掉之后，第二个当也唤不回来",
+           first == ["叫醒了"] and says(once.handle("longPress")) == [], str(first))
+
+    # 部位：两个当问的是同一个部位，不是"每个当自己带一个部位"。
+    ear = two_when({"on": "longPress", "orOns": ["click"], "part": "ear_L"})
+    report("部位过滤对每个当都一样：主当带对部位 → 触发",
+           says(ear.handle("longPress", part="ear_L")) == ["叫醒了"])
+    report("第二个当带着别的部位进来 → 不触发（部位不是某一个当的属性）",
+           ear.handle("click", part="ear_R") == [])
+    report("同一个第二个当、部位对了 → 照样触发（不是这个当根本不看部位）",
+           says(ear.handle("click", part="ear_L")) == ["叫醒了"])
+
+    # 如果：同上，一个「如果」管所有的当。
+    gated = two_when({"orOns": ["longPress"],
+                      "if": [{"kind": "stat", "stat": "P", "op": ">=", "value": 50}]})
+    report("「如果」也共享：条件不成立时主当不响", gated.handle("click") == [])
+    report("换成第二个当进来，同一个「如果」照样不成立",
+           gated.handle("longPress") == [])
+    gated.value["P"] = 80.0
+    report("条件成立之后，第二个当一样叫得醒它",
+           says(gated.handle("longPress")) == ["叫醒了"])
+
+    # 老文件不变：只有 on、没有 orOns 的规则，行为和以前一模一样（上面那些老断言就是这一条，
+    # 这里再点一次名 —— 缺键 = 没有「或者」，不是"人人都算一个当"）。
+    old = two_when({})
+    first = says(old.handle("click"))
+    report("只有 on、没有 orOns 的老规则：主当照旧触发", first == ["叫醒了"], str(first))
+    report("别的当叫不醒它（缺键读作空表）", old.handle("longPress") == [])
+    report("出货文件里没有一条规则用过 orOns（老文件不长出新键）",
+           not any("orOns" in r for r in default["rules"]))
+
+    # 文件形状：读的一半、写的一半、字段的默认值，三条一起钉住 —— 少一条就是"我加了好几个当，
+    # 存一次就少一个"这种只在保存之后才看得见的毛病（这个项目在别的键上踩过一次）。
+    report("解析：或者的当从 orOns 读进来，走 readOrOns（空串丢掉）",
+           'orOns = readOrOns(r.optJSONArray("orOns"))' in src
+           and "fun readOrOns(arr: JSONArray?): List<String>" in src
+           and ".filter { it.isNotEmpty() }" in src)
+    report("落盘：或者的当写回 orOns，而且**有才写**（没选过的东西不长出一个键）",
+           re.search(r'if \(r\.orOns\.isNotEmpty\(\)\) \{\s*put\("orOns"', src) is not None
+           and "r.orOns.forEach { put(it) }" in src)
+    report("字段有默认值 = emptyList()：老文件读进来是空的",
+           "val orOns: List<String> = emptyList()" in src)
+    report("引擎那一行：任意一个当发生都算听到，部位 / 是哪个道具留在 or 的外面",
+           "(rule.on == event.type.id || rule.orOns.contains(event.type.id))" in engine_src
+           and "event.touches(rule.part)" in engine_src
+           and "event.aboutIs(rule.about)" in engine_src)
+    # 镜像自己那一半也要钉住：上面几条量的是**这份镜像**，Kotlin 那一行单独量。两句话都要有，
+    # 否则"改了 Kotlin 没改镜像"（或者反过来）总有一边是绿的。只搜 `def main()` 之前那一半，
+    # 不然这几行断言自己就把要找的字符串带进来了。反向验证时把镜像的 or 半边去掉，红的正是它。
+    me = open(os.path.abspath(__file__), encoding="utf-8").read()
+    mirror_only = me[:me.index("def main():")]
+    report("镜像的 resolve 和 Kotlin 那一行是同一个形状（漂了会红）",
+           'or event.get("type") in self.or_ons(rule)' in mirror_only
+           and 'self.touches(event, rule.get("part", ""))' in mirror_only)
+    # 反向验证过一次（1.35.0）：把镜像里那半边 `or event.get("type") in self.or_ons(rule)`
+    # 删掉、只留主当，红的是五条 —— 「第二个当发生 → **也**触发」「冷却过去之后，换哪个当都能
+    # 再叫醒它」「同一个第二个当、部位对了 → 照样触发」「条件成立之后，第二个当一样叫得醒它」，
+    # 加上最后这条镜像形状断言（5 FAILED、exit 1）；改回来即全绿。反面那几条（不相干事件不
+    # 触发、冷却没过不再触发、带错部位不触发）**故意**不红：它们说的是"不该响"，只认主当时
+    # 当然也不响 —— 红的正是"该响没响"，这正是要验的那一半。
 
     print("")
     if FAILURES:

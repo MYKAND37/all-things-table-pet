@@ -233,6 +233,10 @@
     <string name="logic_module_action">Add an action</string>
     <string name="logic_module_else_if">+ Else if</string>
     <string name="logic_module_alt">+ Or</string>
+    <string name="logic_module_when">+ When</string>
+    <string name="logic_when_or_title">When #%1$d</string>
+    <string name="logic_when_or_remove">Remove this when</string>
+    <string name="logic_when_or_dup">That event is already one of the whens</string>
     <string name="logic_else">Else</string>
     <string name="logic_else_if_n">Else if %1$d</string>
     <string name="logic_else_hint">Taken when every level above it fails. It has no condition of its own — that is exactly what it means.</string>

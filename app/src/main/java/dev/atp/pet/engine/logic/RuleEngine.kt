@@ -232,7 +232,9 @@ class RuleEngine(val spec: LogicSpec, seed: Long = 20260915L) {
         for ((index, rule) in spec.rules.withIndex()) {
             // 一个规则一个「当」（1.32.0 起「当」只有这一个）：并行分支那一版删掉了 ——
             // 用户的原话是"跟新建一条规则没有区别"，而"另开一条规则"确实什么都做得到。
-            val heard = rule.on == event.type.id &&
+            // 「当」可以是好几个，之间是**或者**（1.35.0）：任意一个发生就算听到。
+            // 后面那两条（部位 / 是哪个道具）对每一个当都一样，所以留在外面。
+            val heard = (rule.on == event.type.id || rule.orOns.contains(event.type.id)) &&
                 event.touches(rule.part) &&
                 // WHICH prop or particle. Two rules can otherwise be identical on the screen
                 // and behave differently for reasons nobody can see. See RuleSpec.about.

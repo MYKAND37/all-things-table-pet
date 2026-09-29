@@ -777,6 +777,11 @@
     <string name="logic_module_action">加一个动作</string>
     <string name="logic_module_else_if">＋ 否则如果</string>
     <string name="logic_module_alt">＋ 或者</string>
+    <string name="logic_module_when">＋ 当</string>
+    <string name="logic_when_or_title">第 %1$d 个「当」</string>
+    <string name="logic_when_or_remove">删掉这一个当</string>
+    <string name="logic_when_or_dup">这个事件已经是一个「当」了</string>
+    <string name="logic_when_or_hint">多个「当」之间是「或者」：任意一个发生，这一条规则就按它自己的如果 / 冷却 / 一次算一遍。这和「如果」里那个「或者」不是一回事 —— 那个说的是条件之间的关系。</string>
     <string name="logic_else">否则</string>
     <string name="logic_else_if_n">否则如果 %1$d</string>
     <string name="logic_else_hint">上面每一级都不成立时走这一支。它自己没有「如果」—— 那正是它的意思。</string>

@@ -1401,15 +1401,35 @@ def main():
     report("「否则」那一行不画如果 / ＋如果（画了就是两个点不动的方块）",
            "if (step.kind != Step.ELSE) {" in builder
            and "editConditions(rule, step).orEmpty()" in builder)
-    # ADD_ACTION 是那个兜底分支（它加的就是一个动作），另外四种必须点名。
-    report("每一个「＋」方块加什么，addModule 都要管（四种点名 + 动作那种兜底）",
+    # ADD_ACTION 是那个兜底分支（它加的就是一个动作），另外几种必须点名。
+    report("每一个「＋」方块加什么，addModule 都要管（五种点名 + 动作那种兜底）",
            all(("Node." + k) in add_module for k in
-               ["ADD_CONDITION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT"])
+               ["ADD_CONDITION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT", "ADD_OR_ON"])
            and re.search(r"else -> \{\s*\n\s*val actions = \(editTarget\(rule, step\)",
                          add_module) is not None)
-    report("而画出来的「＋」也就这五种（多画一种就会没人管）",
+    report("而画出来的「＋」也就这六种（多画一种就会没人管）",
            set(re.findall(r"LogicGraphView\.Node\.(ADD_[A-Z_]+)", builder))
-           <= {"ADD_CONDITION", "ADD_ACTION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT"})
+           <= {"ADD_CONDITION", "ADD_ACTION", "ADD_ELSE", "ADD_ELSE_IF", "ADD_ALT", "ADD_OR_ON"})
+
+    print("== 一条规则好几个「当」，之间是「或者」（1.35.0）==")
+    # 用户的原话是「一条规则可以加多个『当』之间用或者链接」。图上每一个额外的当占**自己的
+    # 一行**（和「或者」那一支同一个画法：向下的一行），因为"是第几个当"这件事一行里的盒子
+    # 说不清 —— 点它要落到那一个当上。
+    report("额外的「当」一行一个，吊在主行那个当盒子底下",
+           "for ((oi, ev) in rule.orOns.withIndex())" in builder
+           and "LogicGraphView.Drop(mainRow, 0)" in builder)
+    report("那一行只有「或者」+ 当盒子（没有如果、没有就）",
+           "LogicGraphView.Node.OR, listOf(Labels.join(this, Joins.OR))" in builder
+           and "Step.orOn(oi)" in builder)
+    report("点当盒子分得清「主行那个」和「额外的那个」",
+           "if (step.kind == Step.OR_ON) askOrOn(rule, node.index) else askRuleSettings(rule)"
+           in activity)
+    report("额外的当没有「就」（不返回 null 就会落到否则的动作表上）",
+           "Step.OR_ON -> null" in activity)
+    report("改了/删了都写回文件，而且删到只剩一个当就回到老样子",
+           "fun orOn(i: Int) = Step(OR_ON, i)" in activity
+           and "putRule(index, rule.copy(orOns = ons))" in activity
+           and "onDelete = {" in activity)
 
     print("== 行号 ≠ 规则号：图上点一个方块要落到**那一条规则**上（1.32.1）==")
     # 用户报的是"给第 1 条规则加『就』，结果加到第 2 条上；给最后一条加否则如果，结果加到第

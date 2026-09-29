@@ -547,7 +547,10 @@ class MainActivity : AppCompatActivity() {
             val rule = where.first
             val step = where.second
             when (node.role) {
-                LogicGraphView.Node.WHEN -> askRuleSettings(rule)
+                // 当盒子：主行那个是"这一条规则的设置"（事件 / 部位 / 是哪个道具 / 冷却都在
+                // 那儿），额外的那些各管自己一个事件（1.35.0）。
+                LogicGraphView.Node.WHEN ->
+                    if (step.kind == Step.OR_ON) askOrOn(rule, node.index) else askRuleSettings(rule)
                 LogicGraphView.Node.IF -> askCondition(rule, node.index, step)
                 LogicGraphView.Node.CONNECTOR -> flipJoin(rule, node.index, step)
                 LogicGraphView.Node.ADD -> addModule(rule, node.index, step)
@@ -5458,6 +5461,8 @@ class MainActivity : AppCompatActivity() {
 
             val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
             val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
+            // 主行在图上占第几行：下面那些额外的「当」要吊在它那个当盒子底下。
+            val mainRow = graph.size
             val (mainIf, _) = addRow(
                 Step.MAIN_STEP,
                 LogicGraphView.Drop.NONE,
@@ -5469,6 +5474,29 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
                 },
             )
+
+            // 额外的「当」：一行一个，吊在主行那个「当」盒子底下（1.35.0）。
+            //
+            // 和「或者」那一支同一个画法（都是"向下的一行"），因为它们是同一件事：这一条规则
+            // 还有**另一种被叫醒的方式**。行里只有「或者」+ 一个当盒子；点那个盒子改它或者
+            // 删掉它。[mainRow] 就是上面那一行，0 是它的当盒子（`head` 永远是第一个）。
+            for ((oi, ev) in rule.orOns.withIndex()) {
+                val row = mutableListOf<LogicGraphView.Node>()
+                val rowIndex = graph.size
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.OR, listOf(Labels.join(this, Joins.OR)), oi, rowIndex,
+                    )
+                )
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.WHEN,
+                        listOf(Labels.event(this, EventType.of(ev)) + who + where),
+                        oi, rowIndex,
+                    )
+                )
+                logicPushRow(row, LogicGraphView.Drop(mainRow, 0), ri, Step.orOn(oi))
+            }
 
             // 向下的行：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行的如果**
             // 底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
@@ -5553,6 +5581,17 @@ class MainActivity : AppCompatActivity() {
                         LogicGraphView.Node.ADD_ALT, rowIndex,
                     )
                 )
+                // 主行再多一个「＋当」：一条规则可以被好几个事件叫醒（之间是「或者」）。
+                // 它排在行尾 —— 插在当盒子后面会把**同一行里后面那些盒子的位置**挪一格，
+                // 而「或者」那一支的挂点是按位置记的（Drop(row, 第几个盒子)）。
+                if (step.kind == Step.MAIN) {
+                    row.add(
+                        LogicGraphView.Node(
+                            LogicGraphView.Node.ADD, listOf(getString(R.string.logic_module_when)),
+                            LogicGraphView.Node.ADD_OR_ON, rowIndex,
+                        )
+                    )
+                }
                 graph[rowIndex] = row
             }
         }
@@ -9126,6 +9165,14 @@ class MainActivity : AppCompatActivity() {
                 askStep(index, Step.elseIf(at.coerceIn(0, steps.size - 1)))
             }
 
+            LogicGraphView.Node.ADD_OR_ON -> {
+                // 再挂一个「当」：先放一个默认事件（点一下是最常见的那一个），马上问是哪个 ——
+                // 和"加一个动作"同一套：加一个模块和说它是什么，在用户那儿是一件事。
+                val ons = rule.orOns + EventType.CLICK.id
+                putRule(index, rule.copy(orOns = ons))
+                askOrOn(index, ons.size - 1)
+            }
+
             LogicGraphView.Node.ADD_ALT -> {
                 // 再挂一支「或者」：默认权重 1，动作一句占位。加完就问它做什么。
                 val alt = ActionAlt(weight = 1, actions = listOf(ActionSpec("say", text = "……")))
@@ -10079,9 +10126,19 @@ class MainActivity : AppCompatActivity() {
             const val MAIN = 0
             const val ELSE_IF = 1
             const val ELSE = 2
+
+            /**
+             * 一个**额外的「当」**（1.35.0）：[index] 是第几个额外的当（0 对应
+             * `RuleSpec.orOns[0]`）。
+             *
+             * 这一行只有「或者」和一个当盒子 —— 没有如果、没有就：那些属于整条规则，不属于
+             * 某一个当。它也因此不需要别的东西来定位（不像「或者」那一支要记住"哪一级的第几支"）。
+             */
+            const val OR_ON = 3
             val MAIN_STEP = Step(MAIN)
             fun elseIf(i: Int) = Step(ELSE_IF, i)
             val ELSE_STEP = Step(ELSE)
+            fun orOn(i: Int) = Step(OR_ON, i)
         }
 
         /** 同一级的第几支「就」：0 是主「就」，1.. 是「或者」。 */
@@ -10109,6 +10166,9 @@ class MainActivity : AppCompatActivity() {
 
     /** Which action list an edit is about: one step's, one of its 「或者」, or the 否则's. */
     private fun editTarget(rule: RuleSpec, step: Step): List<ActionSpec>? = when (step.kind) {
+        // 额外的「当」那一行**没有就**：不返回 null 的话它会落到最后那个 `else ->`（也就是
+        // 「否则」的动作表）上 —— 一条只有"或者 被点一下"的行会长出一个「否则」的动作。
+        Step.OR_ON -> null
         Step.MAIN -> if (step.alt == 0) rule.actions else rule.alts.getOrNull(step.alt - 1)?.actions
         Step.ELSE_IF -> {
             val s = rule.elseIfs.getOrNull(step.index)
@@ -10189,6 +10249,41 @@ class MainActivity : AppCompatActivity() {
      * 没有「当」：那两样属于它挂着的那一步。挑中的那一支做，别的支不做，权重决定谁更容易被
      * 挑中（相对值，不用凑总数）。
      */
+    /**
+     * 一个**额外的「当」**：改它，或者删掉它（1.35.0）。
+     *
+     * 和「或者」那一支同一套（[pickList] 自己那个 onDelete 就是"删掉这一行"）：
+     * 删到只剩主那个当时，规则退回老样子 —— 文件里那个键也跟着消失（`toJson` 只在真用上时写）。
+     *
+     * [at] 是第几个额外的当（0 起）。同一个事件不许挂两次：那不是"或者"，是同一件事说两遍，
+     * 所以撞了就当场说一声、不关窗（让人接着挑）。
+     */
+    private fun askOrOn(index: Int, at: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        val current = rule.orOns.getOrNull(at) ?: return
+        pickList(
+            title = getString(R.string.logic_when_or_title, at + 2),
+            options = EventType.values().map { it.id to Labels.event(this, it) },
+            hint = getString(R.string.logic_when_or_hint),
+            current = current,
+            onDelete = {
+                val ons = rule.orOns.toMutableList()
+                if (at in ons.indices) ons.removeAt(at)
+                putRule(index, rule.copy(orOns = ons))
+            },
+        ) { picked ->
+            val ons = rule.orOns.toMutableList()
+            if (picked != current && picked in ons) {
+                Toast.makeText(this, R.string.logic_when_or_dup, Toast.LENGTH_SHORT).show()
+                false
+            } else {
+                ons[at] = picked
+                putRule(index, rule.copy(orOns = ons))
+                true
+            }
+        }
+    }
+
     private fun askAlt(index: Int, step: Step, at: Int) {
         val rule = logicRules.getOrNull(index) ?: return
         val alts = when (step.kind) {

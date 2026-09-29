@@ -331,6 +331,18 @@ data class ElseIfSpec(
 
 data class RuleSpec(
     val on: String,
+    /**
+     * 同一个「当」的**或者**（1.35.0）：这一条规则还能被哪些事件叫醒。
+     *
+     * 写成一个**额外的表**而不是把 [on] 改成数组，是同一个理由的第三次应用（「就」+「或者」、
+     * 「如果」+「否则如果」）：老文件里那里就是一个字符串，而"一个当"和"好几个当"如果在文件里
+     * 长得不一样，读的那一半就得分两种写法。多出来的这一个键，**老版本读到只会少认几个当** ——
+     * 规则变窄，不会变成另一条规则（把 on 改成数组的话，老版本读到的是一个"tick"）。
+     *
+     * 多个当之间是**或者**：任意一个发生，这一条规则就按它自己的如果 / 冷却 / 一次算一遍。
+     * 这和「如果」里那个「或者」不是一回事：那个说的是条件之间的关系，这个说的是"什么能叫醒它"。
+     */
+    val orOns: List<String> = emptyList(),
     val part: String,
     val conditions: List<ConditionSpec>,
     val actions: List<ActionSpec>,
@@ -714,6 +726,13 @@ class LogicSpec(
             // Same argument as actionsOf, one box up the chain: the 否则如果 steps each carry an
             // 如果, which would have been the second place that knows how a condition is written
             // down.
+            // 「或者」的当：一张事件 id 的表。空串读作"没写"，直接丢掉 —— 一个空的当是
+            // 一条永远不会醒的规则，而它不是用户写得出来的东西（编辑器只会往里加真事件）。
+            fun readOrOns(arr: JSONArray?): List<String> =
+                (0 until (arr?.length() ?: 0))
+                    .map { k -> arr!!.optString(k, "") }
+                    .filter { it.isNotEmpty() }
+
             fun condsOf(arr: JSONArray?): List<ConditionSpec> =
                 (0 until (arr?.length() ?: 0)).map { j ->
                     val c = arr!!.getJSONObject(j)
@@ -750,6 +769,7 @@ class LogicSpec(
                     }
                 RuleSpec(
                     on = r.optString("on", "tick"),
+                    orOns = readOrOns(r.optJSONArray("orOns")),
                     part = r.optString("part", ""),
                     // A file that says nothing gets "any of them", which is what every rule
                     // meant before this existed.
@@ -901,6 +921,12 @@ class LogicSpec(
                         // key that says "anything", and a rule with no 或者 does not grow an
                         // empty alternatives list.
                         .apply { if (r.about.isNotEmpty()) put("about", r.about) }
+                        // 多个「当」的「或者」，同上：没写过的规则不长这个键。
+                        .apply {
+                            if (r.orOns.isNotEmpty()) {
+                                put("orOns", JSONArray().apply { r.orOns.forEach { put(it) } })
+                            }
+                        }
                         .apply { if (r.thenWeight != 1) put("thenWeight", r.thenWeight) }
                         .apply { if (r.alts.isNotEmpty()) put("alts", altsJson(r.alts)) }
                         .apply { if (r.elseIfs.isNotEmpty()) put("elseIfs", elseIfs) }
