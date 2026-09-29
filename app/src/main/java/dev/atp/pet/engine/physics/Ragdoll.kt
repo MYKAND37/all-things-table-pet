@@ -63,8 +63,8 @@ class Ragdoll(
     private val byName: Map<String, Bone> = bones.associateBy { it.name }
 
     private val gravity = spec.gravity
-    private val floor = spec.floorY
-    // 两堵墙和天花板：测试场里是角色自己那间屋子，桌面上会被搬到屏幕上（见 [cageTo]）。
+    // 地板 / 两堵墙 / 天花板：测试场里是角色自己那间屋子，桌面上会被搬到屏幕上（见 [cageTo]）。
+    private var floor = spec.floorY
     private var ceiling = spec.ceilingY
     private var wallLeft = 0f
     private var wallRight = spec.worldWidth
@@ -575,17 +575,20 @@ class Ragdoll(
      * 屏幕上什么都没有 —— 而"屏幕上什么都没有"和"它掉下去了"看起来是同一件事。往上扔也
      * 一样：屋子的天花板在屏幕上面。
      *
-     * **地板不动**，这是有意的：地板就是屏幕底边（桌面那一只整只装进屏幕高度，`framePet`
-     * 已经把 pan 对齐到它了），而且道具和液体落的是同一块地板 —— 把它也搬到屏幕上，那些
-     * 东西就会落在半空。要挪的只有"它能走多远"。
+     * **地板从前不在这里**（1.33.2 有意留的）：那时地板正好就是屏幕底边，而道具和液体落的是
+     * 同一块，搬它会让那些东西落在半空。1.35.1 起地板也一起搬 —— 但搬的是**三样一起**
+     * （这一只 + `PropWorld` + `Fluid`），所以"脚踩的那条线"和"东西落的那条线"仍然是同一条。
+     * 这才是"活动范围 = 屏幕"的完整意思：不只是"它能走多远"，也包括"它站在哪儿"。
      *
-     * 三个数是**世界坐标**（`panX` / `panX + viewWidth()` / `panY`），由调用方每帧给一次：
-     * 屏幕多大这件事因此只有视图自己量出来的那一个答案，旋转和双指缩放走的是同一条路。
+     * 四个数是**世界坐标**（`panX` / `panX + viewWidth()` / `panY` / `panY + viewHeight()`），
+     * 由调用方每帧给一次：屏幕多大这件事因此只有视图自己量出来的那一个答案，旋转和双指缩放
+     * 走的是同一条路。
      */
-    fun cageTo(left: Float, right: Float, top: Float) {
+    fun cageTo(left: Float, right: Float, top: Float, bottom: Float) {
         wallLeft = left
         wallRight = right
         ceiling = top
+        floor = bottom
     }
 
     private fun walls() {

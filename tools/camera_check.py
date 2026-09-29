@@ -38,6 +38,8 @@ FOLLOW_MARGIN = 0.10
 FOLLOW_EASE = 0.10
 
 VIEW = os.path.join(REPO, "app/src/main/java/dev/atp/pet/ui/PhysicsSandboxView.kt")
+PROP_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/prop/PropWorld.kt")
+FLUID_KT = os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/fluid/Fluid.kt")
 
 
 def kotlin():
@@ -109,20 +111,26 @@ class Camera:
     # -- the desktop cage (1.34.0) -----------------------------------------
 
     def cage(self, desktop, radius=26.0):
-        """Ragdoll.cageTo 的三个数：桌面那只的活动范围是屏幕上看得见的那一块。
+        """Ragdoll.cageTo 的四个数：桌面那只的活动范围是屏幕上看得见的那一块。
 
         `PhysicsSandboxView.simulate` 每帧给一次（`rag.cageTo(panX, panX + viewWidth(),
-        panY)`），`Ragdoll.walls` 里夹根节点用的就是它们。**地板不在里面**，这是有意的：
-        地板已经是屏幕底边，而且道具和液体落的是同一块地板 —— 搬它会让那些东西落在半空。
+        panY, panY + viewHeight())`），`Ragdoll.walls` 里夹根节点用的就是它们。
+
+        **1.35.1 起地板也在里面**（用户要的"不穿模"）。上一版它不在，理由是"地板正好就是
+        屏幕底边"——那时靠的是 `framePet` 把 pan 对齐过去的一个巧合；房间比视口矮的时候
+        它就不成立了（宠物会站在屏幕中间偏上，东西落在它下面）。现在地板是**算出来的**，
+        而且 `PropWorld` / `Fluid` 拿的是同一组数：脚踩的那条线和东西落的那条线是同一条。
         """
         if not desktop:
             return (0.0, self.spec["physics"]["worldWidth"],
-                    self.spec["physics"].get("ceilingY", 0.0))
-        return (self.pan_x, self.pan_x + self.view_width(), self.pan_y)
+                    self.spec["physics"].get("ceilingY", 0.0),
+                    self.spec["physics"]["floorY"])
+        return (self.pan_x, self.pan_x + self.view_width(), self.pan_y,
+                self.pan_y + self.view_height())
 
     def clamp_root(self, root, walls, radius=26.0):
-        """Ragdoll.walls() 里夹根节点那一段（两堵墙 + 天花板）。"""
-        left, right, top = walls
+        """Ragdoll.walls() 里夹根节点那一段（两堵墙 + 天花板；地板那一条在别处）。"""
+        left, right, top = walls[0], walls[1], walls[2]
         x, y = float(root[0]), float(root[1])
         if x - radius < left:
             x = left + radius
@@ -474,17 +482,25 @@ def main():
     text = kotlin()
     ragdoll_kt = open(os.path.join(REPO, "app/src/main/java/dev/atp/pet/engine/physics/Ragdoll.kt"),
                       encoding="utf-8").read()
+    prop_kt = open(PROP_KT, encoding="utf-8").read()
+    fluid_kt = open(FLUID_KT, encoding="utf-8").read()
     report("每帧给一次（旋转、系统栏、双指缩放都不用重建宠物）",
-           "if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)" in text
-           and text.count("rag.cageTo(") == 1)
-    # 地板不动的理由：道具和液体落的是同一块地板。所以 cageTo 只收三个数，没有 floor。
-    report("地板没有被搬走（道具和液体落的是同一块）",
-           "fun cageTo(left: Float, right: Float, top: Float)" in ragdoll_kt
-           and "floor" not in ragdoll_kt.split("fun cageTo(", 1)[1].split("}", 1)[0])
-    report("两堵墙和天花板是**能改的**（原来三个都是 val，桌面那一支改不动）",
-           "private var wallLeft" in ragdoll_kt
-           and "private var wallRight" in ragdoll_kt
-           and "private var ceiling" in ragdoll_kt)
+           "if (desktop) {" in text and text.count("rag.cageTo(") == 1
+           and "rag.cageTo(left, right, top, bottom)" in text)
+    # 1.35.1：地板**也在笼子里**了（用户要的"不穿模"）。这一条不再问"搬没搬地板"，而是问
+    # **三样是不是同一组数** —— 那才是"脚踩的那条线 = 东西落的那条线"的判据。
+    report("地板跟着搬，而且是三样一起（宠物 / 道具 / 液体拿同一组数）",
+           "fun cageTo(left: Float, right: Float, top: Float, bottom: Float)" in ragdoll_kt
+           and "world?.setBounds(bottom, right)" in text
+           and "fluid?.setBounds(bottom, right)" in text
+           and "fun setBounds(floor: Float, width: Float)" in prop_kt
+           and "fun setBounds(floor: Float, width: Float)" in fluid_kt)
+    report("桌面那只的底边 = 视口底边（不是角色自己那间屋子的地板）",
+           all(cam.cage(desktop=True)[3] == cam.pan_y + cam.view_height()
+               for cam in [Camera(spec, TALL)]))
+    report("两堵墙、天花板、地板都是**能改的**（原来四个里三个是 val，桌面那一支改不动）",
+           all(("private var " + k) in ragdoll_kt
+               for k in ("wallLeft", "wallRight", "ceiling", "floor")))
 
     print()
     if FAILURES:

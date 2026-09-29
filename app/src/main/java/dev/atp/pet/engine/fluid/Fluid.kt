@@ -136,7 +136,17 @@ class Drop(
  *
  * Mirrored in tools/fluid_check.py, which carries the numbers and the tests.
  */
-class Fluid(private val floorY: Float, private val worldWidth: Float) {
+class Fluid(private var floorY: Float, private var worldWidth: Float) {
+
+    /**
+     * 把地板和墙搬到别处（1.35.1，桌面那只：世界就是屏幕）。理由和
+     * [dev.atp.pet.engine.prop.PropWorld.setBounds] 一模一样：这三个（这一只、道具、液体）
+     * 必须用**同一组数**，"脚踩的那条线"才是"东西落的那条线"。
+     */
+    fun setBounds(floor: Float, width: Float) {
+        floorY = floor
+        worldWidth = width
+    }
 
     val drops = ArrayList<Drop>()
 

@@ -2204,7 +2204,18 @@ class PhysicsSandboxView @JvmOverloads constructor(
         // 掉出屏幕外」）。每帧给一次而不是在建世界时算一次，因为"屏幕多大"要跟着视图走 ——
         // 旋转、系统栏变化、双指缩放都会让这一块变，而它们都不该需要把宠物重建一遍。
         // 测试场里这个世界就是角色自己那间屋子，一个数都不动。
-        if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)
+        //
+        // 1.35.1 起**地板也一起搬**（用户报的"不穿模"）：脚踩的那条线和东西落的那条线是同
+        // 一条，所以这三样必须拿到同一组数 —— 少搬一个，宠物就会站在半空、或者陷进地板。
+        if (desktop) {
+            val left = panX
+            val right = panX + viewWidth()
+            val top = panY
+            val bottom = panY + viewHeight()
+            rag.cageTo(left, right, top, bottom)
+            world?.setBounds(bottom, right)
+            fluid?.setBounds(bottom, right)
+        }
         rag.step(dt, pins)
         // What that step was handed, and that there was one of it. Taken here rather than in
         // onDraw because this is the call the number is about: the panel prints the delta the

@@ -160,7 +160,19 @@ class Prop(
  * bone is and what to do when something hits one, so this file can be reasoned about (and
  * tested) without a body attached.
  */
-class PropWorld(private val floorY: Float, private val worldWidth: Float) {
+class PropWorld(private var floorY: Float, private var worldWidth: Float) {
+
+    /**
+     * 把地板和墙搬到别处（1.35.1，桌面那只：世界就是屏幕）。
+     *
+     * 和 [dev.atp.pet.engine.physics.Ragdoll.cageTo] 必须**同时**被调用，否则道具会落在
+     * 半空、或者落进地板里面 —— "脚踩的那条线"和"东西落的那条线"是同一条，这不是巧合，
+     * 是两边用同一组数。
+     */
+    fun setBounds(floor: Float, width: Float) {
+        floorY = floor
+        worldWidth = width
+    }
 
     val live = mutableListOf<Prop>()
 

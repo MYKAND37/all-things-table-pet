@@ -624,8 +624,12 @@ def main():
            and "metrics.widthPixels" not in overlay
            and "val metrics = resources.displayMetrics" not in overlay)
     report("桌面那只的世界跟着视图量出来的尺寸走（不是自己的画布）",
-           "if (desktop) rag.cageTo(panX, panX + viewWidth(), panY)" in bench
-           and "fun cageTo(left: Float, right: Float, top: Float)" in rag_src)
+           "rag.cageTo(left, right, top, bottom)" in bench
+           and "fun cageTo(left: Float, right: Float, top: Float, bottom: Float)" in rag_src)
+    # 1.35.1：地板也搬，而且**三样一起** —— 少搬一个，宠物就站在半空或者陷进地板。
+    report("地板/墙搬的是同一组数（宠物 + 道具 + 液体）",
+           "world?.setBounds(bottom, right)" in bench
+           and "fluid?.setBounds(bottom, right)" in bench)
 
     load_fn = bench[bench.find("fun load("):]
     load_fn = load_fn[:load_fn.find("): Boolean {")]
