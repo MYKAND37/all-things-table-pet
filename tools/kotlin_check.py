@@ -631,6 +631,39 @@ def check_types_imported():
            not bad, "; ".join(bad[:6]))
 
 
+#: 平台类型的裸名字：文件没有 import 它的时候，必须写全名。
+#:
+#: 1.34.0 的镜筒红在 `Path()` 上：`PhysicsSandboxView` 不 import `android.graphics.Path`
+#: （那个文件里的 ropePath 一直是全名写的），而 `Path` 在 java.nio 里另有一个同名类 ——
+#: 编译器只说 `Unresolved reference: Path`，看起来像少了一行 import，其实是撞上了另一个包。
+#: 本地没有编译器，所以按形状钉一条：**这个文件里 `Path(` 只能写成 `android.graphics.Path(`**。
+QUALIFIED_NAMES = {
+    "ui/PhysicsSandboxView.kt": ["Path"],
+}
+
+
+def check_qualified_platform_names():
+    """见 [QUALIFIED_NAMES]：撞名的平台类型要写全名。"""
+    bad = []
+    for path in kotlin_files():
+        rel = "/".join(path.replace("\\", "/").split("/")[-2:])
+        names = QUALIFIED_NAMES.get(rel)
+        if not names:
+            continue
+        code = strip_keep_lines(open(path, encoding="utf-8").read())
+        imports = re.findall(r"^import\s+([\w.]+)", code, re.M)
+        for name in names:
+            if any(i.endswith("." + name) for i in imports):
+                continue                      # 这个文件 import 了它，裸名字没问题
+            for m in re.finditer(r"(?<![\w.])" + name + r"\s*\(", code):
+                if code[max(0, m.start() - 17):m.start()] == "android.graphics.":
+                    continue
+                line = code.count("\n", 0, m.start()) + 1
+                bad.append("%s:%d 裸的 %s(...)（要写全名：android.graphics.%s）"
+                           % (os.path.basename(path), line, name, name))
+    report("撞名的平台类型写了全名（`Path` 这种只有编译器看得见的错）", not bad, "; ".join(bad[:4]))
+
+
 def check_lambda_labels():
     """
     `return@name` 里的 name 必须是**真的存在**的标签。
@@ -1089,6 +1122,7 @@ def main():
     check_folder_constants_qualified()
     check_object_imports()
     check_types_imported()
+    check_qualified_platform_names()
     check_lambda_labels()
     check_upper_case_names()
     check_local_function_scope()

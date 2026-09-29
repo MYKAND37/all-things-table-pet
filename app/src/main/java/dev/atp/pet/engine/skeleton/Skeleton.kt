@@ -193,8 +193,17 @@ class Skeleton(val root: Bone) {
             } else {
                 val px = ax - from.x
                 val py = ay - from.y
+                // 两个参数都从"射线 = 骨头"这一个方程里解出来：
+                //     from + t·u = a + s·e   →   t·u − s·e = p
+                // 两边各叉乘一次：t = (p×e)/(u×e)、s = (p×u)/(u×e)。
+                // **两个分母是同一个数**（`denom` = u×e），s 那个**不带负号** —— 第一版在这里
+                // 多写了一个负号，于是 s 成了真值取负：横在正前方的骨头（s≈0.5）算出 −0.5，
+                // 被下面那一关丢掉，一枪打不中任何正对着的骨头；反过来"头端往后"的位置倒会被
+                // 判成命中。它一直没发作，是因为这段代码从写出来到狙击镜接上（1.34.0）没有
+                // 任何调用点 —— 是 tools/scope_check.py 的镜像把它抓出来的（11 条红，同一个
+                // 根因）。别把那个负号加回来。
                 t = (px * ey - py * ex) / denom
-                s = (px * uy - py * ux) / -denom
+                s = (px * uy - py * ux) / denom
             }
             if (t < 0f || t > reach) continue
             if (s < 0f || s > 1f) continue

@@ -4,7 +4,7 @@
     python3 tools/scope_check.py
 
 用户要的是「第一人称视角的射击道具：点击道具就像打开一个狙击镜」，于是这一枪是**立刻**结算的
-（hitscan）：没有飞出去的东西，所以"打中了"这件事只发生在 `Skeleton.rayHit` 那一段纯几何里 ——
+（hitscan）：没有飞出去的东西，所以「打中了」这件事只发生在 `Skeleton.rayHit` 那一段纯几何里 ——
 从枪口沿瞄准方向发一条射线，命中**最近的**一根挡在路上的骨头（骨头是一段线段），返回骨头名和
 命中点，没打中返回 null。
 
@@ -16,29 +16,32 @@
      照样全绿，只有手机上那只宠物打不中。所以下面第 0 节把判据原文和两个 epsilon 从源码里
      **读出来**逐条比；
   3. **接线**：判据再对，接错线也白搭 —— 开火必须走 `sk.rayHit` 并把求解器的碰撞半径当宽容度
-     递进去（"打得中"和"撞得上"因此是同一个宽度），而且这一版**没有飞行中的子弹**。
+     递进去（「打得中」和「撞得上」因此是同一个宽度），而且这一版**没有飞行中的子弹**。
 
-判据自己是"笨办法"验的（第 3 节）：沿射线密集采样、逐点量到每根线段的距离，和镜像里那套
-"两条直线求交"是两套完全不同的算法 —— 两边算出同一个答案才算数。
+判据自己是「笨办法」验的（第 3 节）：沿射线密集采样、逐点量到每根线段的距离，和镜像里那套
+「两条直线求交」是两套完全不同的算法 —— 两边算出同一个答案才算数。
 
-## 如果这一份是红的：只可能是 s 的分母（1.34.0 写完那天发现的）
+## 这一份第一次跑起来就抓到了一个真 bug（1.34.0，s 的分母）
 
-`Skeleton.kt` 里 s 的分母写成了 `-denom`：
+第一版镜像照抄的是当时 `Skeleton.kt` 里那一行，跑出来 **11 条红、同一个根因**：
 
-    s = (px * uy - py * ux) / -denom        // 现在是这个
-    s = (px * uy - py * ux) / denom         // 几何上该是这个
+    s = (px * uy - py * ux) / -denom        // 当时是错的
+    s = (px * uy - py * ux) / denom         // 几何上该是这个（现在两边都是这个）
 
-解一遍就知道：射线 `O + t*u` 与骨头 `A + s*e` 相交，`t` 和 `s` 是
+解一遍就知道：射线 `O + t*u` 与骨头 `A + s*e` 相交，两个参数是
 
     t = (p × e) / (u × e)        s = (p × u) / (u × e)        p = A - O
 
-而 `denom` 就是 `u × e`、`p × u` 就是 `px*uy - py*ux` —— 分母没有负号。符号一反，算出来的 s 是
-**真值取负**：一根横在正前方的骨头（真值 +0.5）算出 -0.5，被 `s < 0f` 那一关丢掉，**打不中**。
-反过来，交点落在骨头头端往后那一小段里的，倒会被当成命中（那是这个符号的**镜像**，不是"射线到
-线段的距离"）。所以宽容度 `slackOf` 现在只在平行那一支里真的有用。
+而 `denom` 就是 `u × e`、`p × u` 就是 `px*uy - py*ux` —— **同一个分母，s 那个不带负号**。符号一
+反，算出来的 s 是**真值取负**：一根横在正前方的骨头（真值 +0.5）算出 −0.5，被 `s < 0f` 那一关
+丢掉 —— 也就是**一枪打不中任何正对着的骨头**；反过来，交点落在骨头头端"往后"那一小段里的，
+倒会被当成命中。这在屏幕上只表现为"打不中"，眼睛看不出为什么。
 
-一个字符的事：`/-denom` → `/denom`。改完这一份**一个字都不用动**就会全绿 —— 第 1 节和第 3 节
-红的那几条钉的就是它，红在哪一条，就是哪一面没对上。
+它一直没发作，是因为那段代码从写出来到狙击镜接上（1.34.0）**一个调用点都没有**：纯几何函数，
+测试也还没有。这正是这个仓库要镜像的理由 —— 不是"再验一遍已经对的东西"，而是**给没有调用点
+的代码留一个会说话的证人**。
+
+现在两边都改对了，下面第 0 节反过来钉住它：**Kotlin 里不许再出现 `/-denom`**（写回去立刻红）。
 """
 import json, math, os, random, re, sys
 
@@ -66,7 +69,7 @@ SIGNATURE = ("fun rayHit( from: Vec2, dir: Vec2, reach: Float,"
 #: 笨办法沿射线采多少个点。
 SAMPLES = 2001
 
-#: 随机对照时递给两边的那点宽容度（不是 0，见第 3 节：0 会让"命中"取决于浮点恰好相等）。
+#: 随机对照时递给两边的那点宽容度（不是 0，见第 3 节：0 会让「命中」取决于浮点恰好相等）。
 FUZZ_SLACK = 1e-3
 
 
@@ -93,7 +96,7 @@ def code_only(text):
     """把注释和字符串抠掉（换成长度相同的空格），只看真代码。
 
     括号配对找函数体时，注释里的一个 `}` 会把函数截断；断言也不该误命中注释里的一句话 ——
-    这一版恰好把"没有飞出去的子弹"写在了注释里。
+    这一版恰好把「没有飞出去的子弹」写在了注释里。
     """
     out = list(text)
     i, n = 0, len(text)
@@ -202,7 +205,7 @@ def bone(name, head, deg, length):
 def ray_hit(bones, origin, direction, reach, slack_of=None):
     """Skeleton.rayHit 的镜像（1.34.0）：最近的**一根**骨头，或 None。
 
-    [slack_of] 是那个按骨头问的 lambda：拿一根骨头，回它"擦过去也算"的宽度。默认 0，
+    [slack_of] 是那个按骨头问的 lambda：拿一根骨头，回它「擦过去也算」的宽度。默认 0，
     和 Kotlin 的默认参数一样。
 
     返回 (骨头名, 命中点)，命中点用元组当 Vec2 —— 它是**射线上**参数 t 处的那个点。
@@ -232,10 +235,10 @@ def ray_hit(bones, origin, direction, reach, slack_of=None):
             px, py = ax - origin[0], ay - origin[1]
             t = (px * ey - py * ex) / denom
             # 几何上这里是 / denom：s = (p × u) / (u × e)。写成 / -denom 会把 s 变成真值取负，
-            # 于是"横在路上的骨头"被 s < 0f 丢掉 —— 见文件开头，这条镜像照抄 Kotlin，红的。
-            s = (px * uy - py * ux) / -denom
+            # 于是「横在路上的骨头」被 s < 0f 丢掉 —— 见文件开头，这条镜像照抄 Kotlin，红的。
+            s = (px * uy - py * ux) / denom
         # 反向验证过（1.34.0）：把这一行的 `t < 0.0` 改成 `t < -reach`（背后的骨头也算），
-        # 第 1 节的「骨头在起点背后 → 打不中」和「方向反了」立刻变红；改回来就绿。
+        # 第 1 节的「骨头在起点背后（t = -100 < 0）→ 打不中」立刻由绿转红；改回来就绿。
         if t < 0.0 or t > reach:
             continue
         if s < 0.0 or s > 1.0:
@@ -243,6 +246,7 @@ def ray_hit(bones, origin, direction, reach, slack_of=None):
         hx, hy = origin[0] + ux * t, origin[1] + uy * t
         cx, cy = ax + ex * s, ay + ey * s
         d = math.hypot(hx - cx, hy - cy)
+        # 同一套反向验证：这一行的 `<=` 改成 `<`，「宽容度正好等于距离（30）→ 算命中」由绿转红。
         if d <= slack_of(b) and t < best_dist:
             best_dist = t
             best = b.name
@@ -255,7 +259,7 @@ def ray_hit(bones, origin, direction, reach, slack_of=None):
 # ── 另一把尺子：点到线段的距离，笨办法用 ────────────────────────────────────
 
 def dist_point_segment(p, a, b):
-    """点到**线段**的距离。和上面那套"两条直线求交"毫无关系。"""
+    """点到**线段**的距离。和上面那套「两条直线求交」毫无关系。"""
     dx, dy = b[0] - a[0], b[1] - a[1]
     l2 = dx * dx + dy * dy
     if l2 <= 0.0:
@@ -288,9 +292,9 @@ def scan_hit(bones, origin, direction, reach, slack=0.0,
              samples=SAMPLES, subsamples=2001):
     """笨办法：从起点往外一点一点走，每一点量它到每根骨头的距离。
 
-    走到"贴上来了"（距离 ≤ 半步长）就把这一小段再**细走一遍**：
+    走到「贴上来了」（距离 ≤ 半步长）就把这一小段再**细走一遍**：
 
-      * 细走之后距离塌到 ≈ 0 → 这一根真的被穿过了，那就是它（从起点往外走，所以是最近的）；
+      * 细走之后距离塌到 ≈ slack → 这一根真的被穿过了，那就是它（从起点往外走，所以是最近的）；
       * 细走之后距离还是明显大于 slack → 只是**擦过去**（骨头的一头离射线很近，但身子没横在
         上面），继续往外走；
       * 卡在中间说不清的返回 "?"，调用方跳过这一个用例 —— 采样法本来就有这么一条缝，宁可少
@@ -301,14 +305,19 @@ def scan_hit(bones, origin, direction, reach, slack=0.0,
     ln = math.hypot(direction[0], direction[1])
     if ln < EPS_DIR or reach <= 0.0 or not bones:
         return None
+    slack = max(slack, 0.0)
     ux, uy = direction[0] / ln, direction[1] / ln
     step = reach / (samples - 1)
     tol = step * 0.5 + 1e-9
     i = 0
+    refines = 0
     while i < samples:
         t = i * step
         p = (origin[0] + ux * t, origin[1] + uy * t)
         if min([dist_point_segment(p, b.head(), b.tail()) for b in bones]) <= tol:
+            refines += 1
+            if refines > 500:
+                return "?"              # 有一根骨头跟射线几乎平行地贴着：这一例不判
             lo, hi = max(0.0, t - step), min(reach, t + step)
             best = None
             for k in range(subsamples + 1):
@@ -318,27 +327,38 @@ def scan_hit(bones, origin, direction, reach, slack=0.0,
                     d = dist_point_segment(ps, b.head(), b.tail())
                     if best is None or d < best[0]:
                         best = (d, b.name, ts)
-            if best[0] <= max(slack, 0.0) + 1e-3:
+            if best[0] <= slack + 1e-4:
                 ts = best[2]
                 return (best[1], (origin[0] + ux * ts, origin[1] + uy * ts), ts)
-            if best[0] < 1e-2:
+            if best[0] < slack + 1e-2:
                 return "?"
-            i += 3                      # 只是擦过去：这一小段已经细看过了，往外走
+            # 这一小段（±一个步长）刚被细看过了，没有命中；再往前走**一个**窗口 —— 跳两个
+            # 采样点，窗口首尾相接，整条射线仍然被盖满（跳三个会漏掉中间那个窗口里的交点）。
+            i += 2
         else:
             i += 1
     return None
 
 
 def random_case(rng):
-    """随机骨头 + 随机射线：骨头撒在一个 900x900 的方格里，射线从左边瞄进去。"""
+    """随机骨头 + 随机射线：骨头撒在一个 700x700 的方格里，射线从左边打进去。
+
+    有一半瞄着某根骨头的中点（差一点），另一半随便瞄 —— 前者把「路上有好几根、打最近的那根」
+    这一条压出来，后者留着打空的例子。角度、长度、位置全是随机的。
+    """
     bones = []
-    for k in range(rng.randint(4, 6)):
+    for k in range(rng.randint(5, 7)):
         bones.append(bone("b%d" % k,
-                          (rng.uniform(0.0, 900.0), rng.uniform(0.0, 900.0)),
+                          (rng.uniform(0.0, 700.0), rng.uniform(0.0, 700.0)),
                           rng.uniform(0.0, 360.0),
-                          rng.uniform(40.0, 220.0)))
-    origin = (rng.uniform(-150.0, 150.0), rng.uniform(100.0, 800.0))
-    aim = (rng.uniform(0.0, 900.0), rng.uniform(0.0, 900.0))
+                          rng.uniform(50.0, 240.0)))
+    origin = (rng.uniform(-150.0, 150.0), rng.uniform(100.0, 700.0))
+    if rng.random() < 0.5:
+        mid = bones[rng.randrange(len(bones))]
+        aim = ((mid.head()[0] + mid.tail()[0]) / 2.0 + rng.uniform(-60.0, 60.0),
+               (mid.head()[1] + mid.tail()[1]) / 2.0 + rng.uniform(-60.0, 60.0))
+    else:
+        aim = (rng.uniform(0.0, 700.0), rng.uniform(0.0, 700.0))
     dx, dy = aim[0] - origin[0], aim[1] - origin[1]
     ln = math.hypot(dx, dy)
     return bones, origin, (dx / ln, dy / ln), rng.uniform(500.0, 1500.0)
@@ -392,11 +412,10 @@ def main():
                  "bestDist = t",
                  "return name to Vec2(from.x + ux * bestAt, from.y + uy * bestAt)"):
         report("判据原文还在：%s" % want, want in kbody)
-    # s 的分母：几何上该是 +denom（见文件开头）。这一条现在红，改一个字符就绿。
-    report("s 的分母是 denom（写成 -denom 会把 s 变成真值取负 → 横在路上的骨头打不中）",
-           "s = (px * uy - py * ux) / denom" in kbody,
-           "Kotlin 里是 `s = (px * uy - py * ux) / -denom`")
-
+    # s 的分母：几何上该是 +denom（见文件开头）。这一条现在红；它和镜像里照抄的那一行一起改。
+    report("s 的分母是 denom（不许再写成 -denom：那会把 s 变成真值取负，正对着的骨头全打不中）",
+           "s = (px * uy - py * ux) / denom" in kbody
+           and "-denom" not in kbody)
     print("== 1. 一枪打到的是最近的哪一根 ==")
     origin, east = (0.0, 0.0), (1.0, 0.0)
     # 横在正前方的一根骨头：交点在它自己身上（真值 s = +0.5，t = 50）。
@@ -489,25 +508,30 @@ def main():
            per is not None and per[0] == "torso", str(per))
     report("宽容度是按骨头问的：两根都被问过，各问各的（不是一发子弹一个数）",
            asked == ["hand_L", "torso"], str(asked))
-    # 头端离射线很近、但身子没横在射线上：判据是"两条直线交在骨头上"，s 越界就丢 —— 所以
-    # "射线到线段的距离"这句 shorthand 只对穿过射线的骨头成立。这一条钉住它（宽容度再大也一样）。
+    # 头端离射线很近、但身子没横在射线上：判据是「两条直线交在骨头上」，s 越界就丢 —— 所以
+    # 「射线到线段的距离」这句 shorthand 只对穿过射线的骨头成立。这一条钉住它（宽容度再大也一样）。
     stub = bone("stub", (400.0, 5.0), 90.0, 100.0)
     report("骨头的一头离射线只有 5（在宽容度 20 之内）、但没穿过它 → 不算命中",
            ray_hit([stub], origin, east, 1000.0, lambda b: 20.0) is None,
            "s 真值是 -0.05，越界")
 
     print("== 3. 独立参照：沿射线密集采样（笨办法），随机 40 例 ==")
+    # 两边都给 FUZZ_SLACK（1e-3）那么宽的宽容度，而不是默认的 0：
+    #   * 给 0 的话，「命中」就要求镜像里那两个点（两条不同公式各算一遍）**浮点恰好相等**，
+    #     而它们通常差 ~1e-13 —— 那是浮点噪声，不是判据；
+    #   * 给大了（比如几十像素）就会碰上「骨头的一头离射线很近、但身子没横在上面」的用例，
+    #     那一条归 s 越界管（第 2 节最后一条），不该混进来。
     rng = random.Random(1340)
     compared = skipped = ref_hits = ref_misses = 0
     bad = []
     points = []
     for _ in range(40):
         bones, o, d, reach = random_case(rng)
-        ref = scan_hit(bones, o, d, reach)
+        ref = scan_hit(bones, o, d, reach, FUZZ_SLACK)
         if ref == "?":
             skipped += 1
             continue
-        mine = ray_hit(bones, o, d, reach)
+        mine = ray_hit(bones, o, d, reach, lambda b: FUZZ_SLACK)
         compared += 1
         if ref is None:
             ref_misses += 1
@@ -530,7 +554,7 @@ def main():
            ref_hits >= 5 and ref_misses >= 5 and compared >= 30,
            "%d 例可判定：参照 %d 中 / %d 空，%d 例擦边说不清被跳过"
            % (compared, ref_hits, ref_misses, skipped))
-    report("每一个随机命中点都落在那条射线上",
+    report("随机用例里镜像打中的点都落在那条射线上（一个都没中 = 上一条那个原因）",
            bool(points) and all(on_ray(p, o, d, r) for p, o, d, r in points),
            "%d 个命中点" % len(points))
 

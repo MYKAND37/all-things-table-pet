@@ -5033,10 +5033,12 @@ class PhysicsSandboxView @JvmOverloads constructor(
         val cx = width / 2f
         val cy = height / 2f
         val r = min(cx, cy) - SCOPE_RIM_DP * density
-        val mask = Path().apply {
-            fillType = Path.FillType.EVEN_ODD
-            addRect(0f, 0f, width.toFloat(), height.toFloat(), Path.Direction.CW)
-            addCircle(cx, cy, r, Path.Direction.CW)
+        // 全名写出来（这个文件不 import Path，别处那个 ropePath 也是这么写的）：
+        // `Path` 在 java.nio 里是另一个东西，撞上了编译器只说"找不到"。
+        val mask = android.graphics.Path().apply {
+            fillType = android.graphics.Path.FillType.EVEN_ODD
+            addRect(0f, 0f, width.toFloat(), height.toFloat(), android.graphics.Path.Direction.CW)
+            addCircle(cx, cy, r, android.graphics.Path.Direction.CW)
         }
         canvas.drawPath(mask, scopeMaskPaint)
         canvas.drawCircle(cx, cy, r, scopeRingPaint)
