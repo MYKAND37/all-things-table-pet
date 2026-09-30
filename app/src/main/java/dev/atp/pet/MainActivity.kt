@@ -390,6 +390,14 @@ class MainActivity : AppCompatActivity() {
     /** 正在等一张「发图片」用的图的那一只宠物（1.37.0）。 */
     private var awaitingImage: String? = null
 
+    /**
+     * 正在等一张图的那一格动作（规则号, 第几个动作，1.39.0）。
+     *
+     * 和 [awaitingImage] 一起用：那个说"图给哪一只宠物"，这个说"图是给哪一格动作挑的" ——
+     * 从规则里按「上传一张图」进来的，导完就直接填进那一格，不用再回去挑一遍。
+     */
+    private var awaitingImageForAction: Pair<Int, Int>? = null
+
     /** The summoned character's rules, as edited. Rebuilt on every change; saved on every change. */
     private var logicStats: MutableList<StatSpec> = mutableListOf()
     private var logicRules: MutableList<RuleSpec> = mutableListOf()
@@ -455,6 +463,12 @@ class MainActivity : AppCompatActivity() {
         sandboxPane = findViewById(R.id.sandboxPane)
         sandboxView = findViewById(R.id.sandboxView)
         petChooser = findViewById(R.id.petChooser)
+        // 顶部那排 chip（哪只桌宠 / 刚度 / 动作 / 道具 / 状态）有多高：喂给测试场，镜筒的遮罩和
+        // 两个按钮都从那下面开始（1.39.0，用户报的"打开狙击镜后部分UI有遮挡" —— 那一排是压在
+        // 测试场上面的另一个 View，遮罩从 0 铺下来就把它压成一片黑，按钮还画在它上面）。
+        (petChooser.parent as? View)?.addOnLayoutChangeListener { v, _, top, _, bottom, _, _, _, _ ->
+            sandboxView.hudTopInset = (bottom - top).toFloat()
+        }
         petListScroll = findViewById(R.id.petListScroll)
         petList = findViewById(R.id.petList)
         partListScroll = findViewById(R.id.partListScroll)
@@ -5285,7 +5299,9 @@ class MainActivity : AppCompatActivity() {
     /** 一张「发图片」用的图选好了：解码 → 问名字 → 存进这一只的 images/。 */
     private fun onImagePickedForRules(uri: Uri?) {
         val id = awaitingImage ?: return
+        val forAction = awaitingImageForAction
         awaitingImage = null
+        awaitingImageForAction = null
         if (uri == null) return
         val folder = store.folder(id) ?: return
         val bitmap = decodeForAlign(uri)
@@ -5302,7 +5318,15 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(
                     this, getString(R.string.pet_images_saved, name), Toast.LENGTH_SHORT,
                 ).show()
-                askImages(folder)
+                // 从规则里上传的那一张：直接填进那一格动作，并把动作编辑器重新打开（不然用户
+                // 看到的是"什么都没发生"，还得自己回去再挑一次）。别处上传的还是回那张管理表。
+                if (forAction != null) {
+                    val (ri, ai) = forAction
+                    putAction(ri, ai, ActionSpec(ActionKind.SHOW_IMAGE.id, text = name))
+                    askAction(ri, ai, editingStep)
+                } else {
+                    askImages(folder)
+                }
             } else {
                 Toast.makeText(this, R.string.rig_save_failed, Toast.LENGTH_SHORT).show()
             }
@@ -5434,7 +5458,6 @@ class MainActivity : AppCompatActivity() {
             // 这一条规则的行：主行在最前，后面跟着向下的行（否则如果一级一行、最后否则一行、
             // 每一支或者一行）。
             val steps = mutableListOf<Pair<Step, Int>>()   // 步 + 它那一行的图行号
-            val thenAtOf = mutableListOf<Int>()
 
             /**
              * 造一行：这一步的骨架（当 / 如果 / ＋否则 / 就 / ＋）。
@@ -5541,85 +5564,17 @@ class MainActivity : AppCompatActivity() {
                 if (thenAt < 0) thenAt = row.size - 1
                 logicPushRow(row, drop, ri, step)
                 steps.add(step to rowIndex)
-                thenAtOf.add(thenAt)
                 return ifAt to thenAt
             }
 
-            val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
-            val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
-            // 主行在图上占第几行：下面那些额外的「当」要吊在它那个当盒子底下。
-            val mainRow = graph.size
-            val (mainIf, _) = addRow(
-                Step.MAIN_STEP,
-                LogicGraphView.Drop.NONE,
-                listOf(Labels.event(this, EventType.of(rule.on)) + who + where),
-                // 一个字配一件事：没有级的时候它是"加兜底"，有级的时候它是"在这一级后面插一级"。
-                if (rule.elseIfs.isEmpty() && rule.elseActions.isEmpty()) {
-                    getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
-                } else {
-                    getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
-                },
-            )
-
-            // 额外的「当」：一行一个，吊在主行那个「当」盒子底下（1.35.0）。
-            //
-            // 和「或者」那一支同一个画法（都是"向下的一行"），因为它们是同一件事：这一条规则
-            // 还有**另一种被叫醒的方式**。行里只有「或者」+ 一个当盒子；点那个盒子改它或者
-            // 删掉它。[mainRow] 就是上面那一行，0 是它的当盒子（`head` 永远是第一个）。
-            for ((oi, ev) in rule.orOns.withIndex()) {
-                val row = mutableListOf<LogicGraphView.Node>()
-                val rowIndex = graph.size
-                row.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.OR, listOf(Labels.join(this, Joins.OR)), oi, rowIndex,
-                    )
-                )
-                row.add(
-                    LogicGraphView.Node(
-                        LogicGraphView.Node.WHEN,
-                        listOf(Labels.event(this, EventType.of(ev)) + who + where),
-                        oi, rowIndex,
-                    )
-                )
-                logicPushRow(row, LogicGraphView.Drop(mainRow, 0), ri, Step.orOn(oi))
-            }
-
-            // 向下的行：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行的如果**
-            // 底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
-            //
-            // 起点是**这一条规则的主行**（[mainRow]），不是 0：`graph` 是所有规则共用的一份
-            // 名单，写死 0 会让第二条规则往后的「否则如果」全都吊到**第一条规则**的当盒子
-            // 底下 —— 1.38.0 给分支画缩进和括号时才看出来（在那之前它只是画错一条连接线，
-            // 现在它会顺手把整条阶梯缩进错、再括进别人的块里）。
-            var fromRow = mainRow
-            var fromIf = mainIf
-            for ((si, _) in rule.elseIfs.withIndex()) {
-                // 最后一级：这一格是**兜底**（＋否则）；不是最后一级：它是**插一级**（＋否则如果）。
-                val last = si == rule.elseIfs.size - 1 && rule.elseActions.isEmpty()
-                val (ifAt, _) = addRow(
-                    Step.elseIf(si),
-                    LogicGraphView.Drop(fromRow, fromIf),
-                    null,
-                    if (last) {
-                        getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
-                    } else {
-                        getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
-                    },
-                )
-                fromRow = graph.size - 1
-                fromIf = ifAt
-            }
-            if (rule.elseActions.isNotEmpty() || rule.elseIfs.isNotEmpty()) {
-                // 最后那一行是兜底的「否则」，它后面没有"再否则"可加（所以那一格是 null）。
-                addRow(
-                    Step.ELSE_STEP,
-                    LogicGraphView.Drop(fromRow, fromIf),
-                    null,
-                    null,
-                )
-            }
-
-            // 每一支「或者」一行，吊在**它自己那一步的就**底下。
+            /**
+             * 每一支「或者」一行，挂在**它自己那一步的就**底下。
+             *
+             * 调用点在**它那一步那一行的紧后面**（1.39.0 挪的）：这样每一行的后代在图上就是
+             * 连着的几行，于是"括号括住的那个区间里全是它的后代"这件事才成立 —— 原来所有
+             * 「或者」都堆在整条规则的末尾，于是「否则」那一段的括号会顺手把「就」的并行
+             * 一起括进来（用户报的"两边的并行糊在一起"）。
+             */
             fun altRows(step: Step, rowOf: Int, thenAt: Int) {
                 val alts = when (step.kind) {
                     Step.MAIN -> rule.alts
@@ -5655,10 +5610,84 @@ class MainActivity : AppCompatActivity() {
                     logicPushRow(row, LogicGraphView.Drop(rowOf, thenAt), ri, step.alt(ai + 1))
                 }
             }
-            for ((i, pair) in steps.toList().withIndex()) {
-                val (step, rowIndex) = pair
-                if (step.alt != 0 || i >= thenAtOf.size) continue
-                altRows(step, rowIndex, thenAtOf[i])
+
+            val where = if (rule.part.isEmpty()) "" else " · " + partText(rule.part)
+            val who = if (rule.about.isEmpty()) "" else " · " + aboutText(rule.about)
+            // 主行在图上占第几行：下面那些额外的「当」要吊在它那个当盒子底下。
+            val mainRow = graph.size
+            val (mainIf, mainThen) = addRow(
+                Step.MAIN_STEP,
+                LogicGraphView.Drop.NONE,
+                listOf(Labels.event(this, EventType.of(rule.on)) + who + where),
+                // 一个字配一件事：没有级的时候它是"加兜底"，有级的时候它是"在这一级后面插一级"。
+                if (rule.elseIfs.isEmpty() && rule.elseActions.isEmpty()) {
+                    getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
+                } else {
+                    getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
+                },
+            )
+
+            // 额外的「当」：一行一个，吊在主行那个「当」盒子底下（1.35.0）。
+            //
+            // 和「或者」那一支同一个画法（都是"向下的一行"），因为它们是同一件事：这一条规则
+            // 还有**另一种被叫醒的方式**。行里只有「或者」+ 一个当盒子；点那个盒子改它或者
+            // 删掉它。[mainRow] 就是上面那一行，0 是它的当盒子（`head` 永远是第一个）。
+            for ((oi, ev) in rule.orOns.withIndex()) {
+                val row = mutableListOf<LogicGraphView.Node>()
+                val rowIndex = graph.size
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.OR, listOf(Labels.join(this, Joins.OR)), oi, rowIndex,
+                    )
+                )
+                row.add(
+                    LogicGraphView.Node(
+                        LogicGraphView.Node.WHEN,
+                        listOf(Labels.event(this, EventType.of(ev)) + who + where),
+                        oi, rowIndex,
+                    )
+                )
+                logicPushRow(row, LogicGraphView.Drop(mainRow, 0), ri, Step.orOn(oi))
+            }
+
+            // 这一条规则主「就」的「或者」：紧跟主行（和它那些额外的当）后面。
+            altRows(Step.MAIN_STEP, mainRow, mainThen)
+
+            // 向下的行：一级「否则如果」一行、最后的「否则」一行。它们依次从**上一行的如果**
+            // 底下吊下来 —— 一条阶梯读起来正是"这些都不成立时，再问下一句"。
+            //
+            // 起点是**这一条规则的主行**（[mainRow]），不是 0：`graph` 是所有规则共用的一份
+            // 名单，写死 0 会让第二条规则往后的「否则如果」全都吊到**第一条规则**的当盒子
+            // 底下 —— 1.38.0 给分支画缩进和括号时才看出来（在那之前它只是画错一条连接线，
+            // 现在它会顺手把整条阶梯缩进错、再括进别人的块里）。
+            var fromRow = mainRow
+            var fromIf = mainIf
+            for ((si, _) in rule.elseIfs.withIndex()) {
+                // 最后一级：这一格是**兜底**（＋否则）；不是最后一级：它是**插一级**（＋否则如果）。
+                val last = si == rule.elseIfs.size - 1 && rule.elseActions.isEmpty()
+                val (ifAt, thenAt) = addRow(
+                    Step.elseIf(si),
+                    LogicGraphView.Drop(fromRow, fromIf),
+                    null,
+                    if (last) {
+                        getString(R.string.logic_module_else) to LogicGraphView.Node.ADD_ELSE
+                    } else {
+                        getString(R.string.logic_module_else_if) to LogicGraphView.Node.ADD_ELSE_IF
+                    },
+                )
+                altRows(Step.elseIf(si), graph.size - 1, thenAt)
+                fromRow = graph.size - 1
+                fromIf = ifAt
+            }
+            if (rule.elseActions.isNotEmpty() || rule.elseIfs.isNotEmpty()) {
+                // 最后那一行是兜底的「否则」，它后面没有"再否则"可加（所以那一格是 null）。
+                val (_, thenAt) = addRow(
+                    Step.ELSE_STEP,
+                    LogicGraphView.Drop(fromRow, fromIf),
+                    null,
+                    null,
+                )
+                altRows(Step.ELSE_STEP, graph.size - 1, thenAt)
             }
 
             // 每一行末尾那一个「＋或者」：给这一行的「就」再加一支备选。
@@ -9426,6 +9455,18 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * 删掉兜底那一支「否则」（1.39.0，用户报的"否则的分支没有删除按钮"）。
+     *
+     * 删的是**那一支自己的动作**（和它的权重），`elseIfs` 一级都不动：还有「否则如果」的时候，
+     * 那一行末尾的格子退回「＋否则」（它本来就是"加兜底"的意思），一个级都没有的规则则回到
+     * 老样子 —— 和 1.32.2 那一版"空口袋不留洞"是同一条规矩。
+     */
+    private fun removeElse(index: Int) {
+        val rule = logicRules.getOrNull(index) ?: return
+        putRule(index, rule.copy(elseActions = emptyList(), elseWeight = 1))
+    }
+
+    /**
      * 图上**每一行**是"第几条规则的哪一步"，下标就是图的行号。
      *
      * 和 [buildLogicPane] 建的图**同生同死**：它由那一段里唯一的 [logicPushRow] 一起追加，
@@ -9987,20 +10028,38 @@ class MainActivity : AppCompatActivity() {
                 }
                 // 发一张图（1.37.0）：从**这一只宠物**的 images/ 里挑一个名字。
                 // 图是宿主那边的文件，引擎只拿到一个名字 —— 和道具、粒子、液体同一种身份。
+                //
+                // 列表**第一行是"上传一张图"**（1.39.0，用户报的"规则里发一张图没有上传图片这个
+                // 选项"）：图原来只能在**另一页**（桌宠管理那张卡上的「图片」）导进来，从写规则
+                // 这儿看过去就是"这个动作没法用" —— 一只还没有图的宠物更是只剩一句提示。上传完
+                // 直接就是这一格要发的那张图（[awaitingImageForAction]），不用再回来挑一遍。
                 "showImage" -> {
-                    val images = editingFolder()?.let { store.imageFiles(it) }.orEmpty()
-                    if (images.isEmpty()) {
-                        Toast.makeText(this, R.string.logic_image_none, Toast.LENGTH_SHORT).show()
-                    } else {
-                        pickList(
-                            getString(R.string.logic_pick_image),
-                            images.map {
-                                dev.atp.pet.render.PartFiles.stem(it) to
-                                    dev.atp.pet.render.PartFiles.stem(it)
-                            },
-                            getString(R.string.logic_image_hint),
-                            existing?.text,
-                        ) { picked ->
+                    val folder = editingFolder()
+                    val images = folder?.let { store.imageFiles(it) }.orEmpty()
+                    val upload = getString(R.string.logic_image_upload) to IMAGE_UPLOAD
+                    pickList(
+                        getString(R.string.logic_pick_image),
+                        listOf(upload) + images.map {
+                            val name = dev.atp.pet.render.PartFiles.stem(it)
+                            name to name
+                        },
+                        // 一只图都还没有的时候，那一行提示换成"这里可以直接传一张"（原来那句
+                        // 只说"去桌宠管理里加"，而现在这儿就有入口）。
+                        if (images.isEmpty()) getString(R.string.logic_image_none)
+                        else getString(R.string.logic_image_hint),
+                        existing?.text,
+                    ) { picked ->
+                        if (picked == IMAGE_UPLOAD) {
+                            if (folder == null) {
+                                Toast.makeText(this, R.string.logic_image_no_pet, Toast.LENGTH_SHORT).show()
+                                false
+                            } else {
+                                awaitingImage = folder.id
+                                awaitingImageForAction = index to actionIndex
+                                pickImage.launch(arrayOf("image/*"))
+                                true
+                            }
+                        } else {
                             putAction(index, actionIndex, ActionSpec(kind.id, text = picked))
                             true
                         }
@@ -10516,6 +10575,14 @@ class MainActivity : AppCompatActivity() {
             if (step.kind == Step.ELSE_IF) {
                 dialogRow(box, getString(R.string.logic_else_if_remove)) {
                     removeStep(index, step.index)
+                    dialog.dismiss()
+                }
+            }
+            // 兜底那一支也要能删（1.39.0，用户报的"否则的分支没有删除按钮"）：「否则如果」一直
+            // 有「删掉这一级」，而最后那一支「否则」**没有出口** —— 加出来就只能一直挂着。
+            if (step.kind == Step.ELSE) {
+                dialogRow(box, getString(R.string.logic_else_remove)) {
+                    removeElse(index)
                     dialog.dismiss()
                 }
             }

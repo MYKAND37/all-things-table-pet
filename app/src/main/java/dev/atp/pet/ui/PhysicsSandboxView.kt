@@ -3549,7 +3549,11 @@ class PhysicsSandboxView @JvmOverloads constructor(
             lines = Bubble.fit(text.orEmpty(), measure)
             size = Bubble.textSize(lines, measure)
         }
-        val box = Bubble.box(x, y, size, s.canvasWidth)
+        // 夹在**看得见的那一块世界**里（不是角色那张画的画布 —— 那只有 1024 宽，宠物走出去
+        // 气泡就不跟了，用户 1.39.0 报的正是这个）。
+        val viewLeft = panX
+        val viewRight = panX + width / viewScale
+        val box = Bubble.box(x, y, size, viewLeft, viewRight)
         val rect = RectF(box[0], box[1], box[2], box[3])
         worldPaint.style = Paint.Style.FILL
         worldPaint.color = 0xF2FFFFFF.toInt()
@@ -5108,9 +5112,30 @@ class PhysicsSandboxView @JvmOverloads constructor(
 
     /** 退出按钮。画和点用的是同一个矩形 —— 两份坐标就是两个会漂的东西。 */
     private fun scopeExit(): RectF = RectF(
-        width - 64f * density - 12f * density, 12f * density,
-        width - 12f * density, 12f * density + 30f * density,
+        width - 64f * density - 12f * density, scopeTop() + 12f * density,
+        width - 12f * density, scopeTop() + 42f * density,
     )
+
+    /**
+     * 顶部让出来多少（像素）：那一排 chip（哪只桌宠 / 刚度 / 动作 / 道具 / 状态）是**压在
+     * 测试场上面的另一个 View**，镜筒这一层管不着它 —— 1.39.0 之前遮罩从 0 开始铺，于是
+     * 那排 chip 的半透明底被压成一片黑，镜筒自己那两个按钮还正好画在它上面（用户报的
+     * "打开狙击镜后部分UI有遮挡"）。这块高度由宿主按那一排的实际高度喂进来（[hudTopInset]）。
+     */
+    private fun scopeTop(): Float = hudTopInset
+
+    /**
+     * 顶部那排 chip 有多高（像素，宿主设置）。
+     *
+     * 镜筒的遮罩、圆心、按钮都以它为界：**遮罩从那排 chip 下面开始**，按钮也排在那下面 ——
+     * 镜筒要吃掉的是"世界"，不是工具栏。
+     */
+    var hudTopInset: Float = 0f
+        set(value) {
+            if (field == value) return
+            field = value
+            invalidate()
+        }
 
     /** 擦掉印子，和退出并排。 */
     private fun scopeWipe(): RectF {
@@ -5129,14 +5154,16 @@ class PhysicsSandboxView @JvmOverloads constructor(
      */
     private fun drawScope(canvas: Canvas) {
         val prop = scope ?: return
+        // 圆心和半径都按"让开顶部那排 chip 之后剩下的那一块"算：镜筒该罩住的是世界。
+        val top = scopeTop()
         val cx = width / 2f
-        val cy = height / 2f
-        val r = min(cx, cy) - SCOPE_RIM_DP * density
+        val cy = top + (height - top) / 2f
+        val r = min(cx, (height - top) / 2f) - SCOPE_RIM_DP * density
         // 全名写出来（这个文件不 import Path，别处那个 ropePath 也是这么写的）：
         // `Path` 在 java.nio 里是另一个东西，撞上了编译器只说"找不到"。
         val mask = android.graphics.Path().apply {
             fillType = android.graphics.Path.FillType.EVEN_ODD
-            addRect(0f, 0f, width.toFloat(), height.toFloat(), android.graphics.Path.Direction.CW)
+            addRect(0f, top, width.toFloat(), height.toFloat(), android.graphics.Path.Direction.CW)
             addCircle(cx, cy, r, android.graphics.Path.Direction.CW)
         }
         canvas.drawPath(mask, scopeMaskPaint)

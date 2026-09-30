@@ -98,10 +98,10 @@ def image_size(w, h):
     return (w * k + PAD_X * 2, h * k + PAD_Y * 2)
 
 
-def box(x, y, size, canvas_width):
-    """镜像 Bubble.box：以头顶那一点为底边中点向上长，左右夹在画布内。"""
+def box(x, y, size, view_left, view_right):
+    """镜像 Bubble.box：以头顶那一点为底边中点向上长，左右夹在**看得见的那一块**里。"""
     half = size[0] / 2
-    left = min(max(x - half, 0.0), max(canvas_width - size[0], 0.0))
+    left = min(max(x - half, view_left), max(view_right - size[0], view_left))
     bottom = y - GAP
     return (left, bottom - size[1], left + size[0], bottom)
 
@@ -156,15 +156,26 @@ def main():
            abs((a - PAD_X * 2) / (b - PAD_Y * 2) - 2.0) < 0.01)
     report("尺寸是 0 也不崩（给一个能看的默认）", image_size(0, 0)[0] > 0)
 
-    print("\n== 5. 框挂在宠物头顶，而且不探出画布 ==")
+    print("\n== 5. 框挂在宠物头顶，而且夹在**看得见的那一块**里 ==")
     size = text_size(["你好"])
-    bx = box(500, 900, size, 1024)
+    bx = box(500, 900, size, 0, 1024)
     report("底边在头顶上方 %d（不是压在头上）" % GAP, abs(bx[3] - (900 - GAP)) < 0.01)
     report("左右居中（框的中点就是那一点）", abs((bx[0] + bx[2]) / 2 - 500) < 0.01)
-    edge = box(10, 900, size, 1024)
-    report("贴着左边缘时不探出画布（探出去就是「这句话没说全」）", edge[0] >= 0, "%.0f" % edge[0])
-    wide = box(500, 900, (2000.0, 100.0), 1024)
-    report("比画布还宽的框至少从 0 开始（夹得住，不崩）", wide[0] == 0)
+    edge = box(10, 900, size, 0, 1024)
+    report("贴着左边缘时不探出去（探出去就是「这句话没说全」）", edge[0] >= 0, "%.0f" % edge[0])
+    wide = box(500, 900, (2000.0, 100.0), 0, 1024)
+    report("比看得见的那块还宽的框至少从左边缘开始（夹得住，不崩）", wide[0] == 0)
+    # 1.39.0：夹的必须是**看得见的那一块**，不是角色那张画的画布 —— 用户报的"悬浮气泡被限定
+    # 在了一个区域内，没有跟着角色走"就是这条：宠物走出那 1024 宽的带子，气泡钉在带子边上。
+    follow = box(3000, 900, size, 2400, 3400)
+    report("宠物走到 x=3000 时气泡跟着走到 3000（不是钉在 1024 的带子边上）",
+           abs((follow[0] + follow[2]) / 2 - 3000) < 0.01, "%.0f" % ((follow[0] + follow[2]) / 2))
+    far = box(5200, 900, size, 2400, 3400)
+    report("走出看得见的那一块时才夹住（夹在右边缘，不是夹在画布边）",
+           abs(far[2] - 3400) < 0.01, "右边 %.0f" % far[2])
+    pan = box(500, 900, size, 0, 1024)
+    report("画布边界（1024）不再参与夹取 —— 同一个 x、窗口不同，结果不同",
+           pan[0] != follow[0] and abs(pan[0] - follow[0]) > 100)
 
     print("\n== 6. 视图那边真的用它（不然这些算术只是好看的函数）==")
     report("画气泡走的是 Bubble 的三个函数",
@@ -175,6 +186,12 @@ def main():
     report("图也走同一个气泡（说话和发图是同一件事的两半）",
            "bubbleArt" in view and "IMAGE_BUBBLE_SECONDS" in view
            and "imageArt[a.text]" in view)
+    # 1.39.0：夹的是**看得见的那一块**，不是角色那张画的画布（用户报的"被限定在了一个区域
+    # 内、没有跟着角色走"）。
+    report("调用点传的是视口（panX / viewScale），不是 s.canvasWidth",
+           "Bubble.box(x, y, size, viewLeft, viewRight)" in view
+           and "val viewRight = panX + width / viewScale" in view
+           and "Bubble.box(x, y, size, s.canvasWidth)" not in view)
 
     print("")
     if FAILURES:

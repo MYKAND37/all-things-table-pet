@@ -126,13 +126,15 @@ class LogicGraphView @JvmOverloads constructor(
     private val rows = mutableListOf<MutableList<Placed>>()
 
     /**
-     * 每一行缩进几格（一条规则的主行是 0，吊在它下面的行是 1、再下面 2……）。
+     * 每一行从哪个 x 开始（1.39.0）。
      *
-     * 用户的原话是「他的分支不会与其他规则并列在开头，而是直接向下后向右拐弯」—— "并列在
-     * 开头"就是所有行都从 x=0 开始，于是一条规则的三支和三条规则长得一模一样。缩进把
-     * "它属于上面那一条"画出来的一半，另一半是下面那个括号。
+     * 用户的原话是「并行规则栏最开头的那个方块应该在开启并行的方块正下方，然后向右加新
+     * 方块」—— 所以挂点不只是"画一条线从哪儿来"，它就是这一行的**列**：第一个方块居中落在
+     * 挂点那个方块底下（宽窄不一样时至少不让它探到挂点左边去）。于是「就」的并行落在「就」
+     * 底下、「否则」的并行落在那一行自己的「就」底下 —— 两条竖线天然不在一个 x 上，不会再
+     * 糊成一根（用户报的第二件事）。
      */
-    private val depths = mutableListOf<Int>()
+    private val rowLefts = mutableListOf<Float>()
 
     /**
      * 一条规则在图上占的**块**：主行的下标 .. 它最后一个后代的下标。
@@ -140,6 +142,10 @@ class LogicGraphView @JvmOverloads constructor(
      * 判据是那些挂点（[Drop]）：每一行都指回"我挂在哪一行上"，所以"哪些行是同一条规则的"
      * 不用另外传进来 —— 顺着挂点往上走，走到根（`parent < 0`）就是同一条。三个画法（否则
      * 如果一级、或者一支、额外的当一行）用的都是这个结构，所以这里不需要知道它们是哪一种。
+     *
+     * 建图那一边把每一步的「或者」**紧跟在那一步后面**推（1.39.0），所以一个挂点下面那几行
+     * 是连着的：括号括住的那个下标区间里，每一行都真的是它的后代（不然括号会顺手把隔壁
+     * 那一支也括进来 —— 用户报的"两边的并行糊在一起"）。
      */
     private val blocks = mutableListOf<IntRange>()
     private val placed = mutableListOf<Placed>()
@@ -173,10 +179,18 @@ class LogicGraphView @JvmOverloads constructor(
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
     /**
-     * 吊在别人下面的行，往右挪这么宽（一格）。嵌套（「或者」里再挂「或者」）就一格一格往里。
-     * 34dp 是"看得出来是一层、又不至于把一条长链挤出屏幕"的那个数。
+     * 块的括号站在这一列的左边多少。12dp 是"看得出括号和方块是两件事、又不占掉半格"的那个数。
      */
-    private val INDENT_DP = 34f
+    private val BRACKET_DP = 12f
+
+    /**
+     * 分支行至少往里挪这么多（就算挂点在 x=0）：一条分支和一条规则的开头**必须看得出来
+     * 不是一回事**（1.38.0 用户报的"并列在开头"）。
+     */
+    private val MIN_BRANCH_DP = 26f
+
+    /** 挂线站在这一列的左边往里多少（贴着方块左边那道色条，又不在它上面）。 */
+    private val TRUNK_DP = 6f
 
     /**
      * 块的括号：左边一根竖线，上下各一个小横钩，把"这几行是同一条规则的几支"括起来
@@ -290,21 +304,11 @@ class LogicGraphView @JvmOverloads constructor(
     private fun layout() {
         placed.clear()
         rows.clear()
-        depths.clear()
+        rowLefts.clear()
         blocks.clear()
-        // 缩进几格：顺着挂点往上走。走不通（坏数据、自己指自己）就当 0 格 —— 一个画不出来
-        // 的图比一个缩进不对的图糟得多。
-        for (i in rules.indices) {
-            var depth = 0
-            var at = drops.getOrNull(i)?.parent ?: -1
-            while (at in rules.indices && at < i && depth <= rules.size) {
-                depth++
-                at = drops.getOrNull(at)?.parent ?: -1
-            }
-            depths.add(depth)
-        }
         // 块：每个有后代的行的下标 .. 它最后一个后代的下标（行的顺序就是建图那一边给的顺序：
-        // 父在前、它在下面吊着的那几行紧跟在后）。
+        // 父在前、它在下面吊着的那几行紧跟在后）。区间里每一行都真的是它的后代 —— 建图那边
+        // 把每一步的「或者」紧跟在那一步后面推，就是为了这件事。
         for (parent in rules.indices) {
             var last = -1
             for (i in parent + 1 until rules.size) {
@@ -323,21 +327,44 @@ class LogicGraphView @JvmOverloads constructor(
         }
         var y = 0f
         for ((ruleIndex, rule) in rules.withIndex()) {
-            var x = depths.getOrElse(ruleIndex) { 0 } * INDENT_DP * density
+            val x = columnOf(ruleIndex)
+            rowLefts.add(x)
+            var at = x
             var tallest = 0f
             val row = mutableListOf<Placed>()
             for (node in rule) {
                 val w = nodeWidth(node)
                 val h = nodeHeight(node)
-                val box = Placed(node, ruleIndex, RectF(x, y, x + w, y + h))
+                val box = Placed(node, ruleIndex, RectF(at, y, at + w, y + h))
                 row.add(box)
                 placed.add(box)
-                x += w + GAP * density
+                at += w + GAP * density
                 tallest = max(tallest, h)
             }
             rows.add(row)
             y += tallest + ROW_GAP * density
         }
+    }
+
+    /**
+     * 这一行从哪个 x 开始：**挂点那个方块的左边缘**（1.39.0）。
+     *
+     * 用户的原话是「并行规则栏最开头的那个方块应该在开启并行的方块正下方，然后向右加新方
+     * 块」：挂点不只是"画一条线从哪儿来"，它就是这一行的**列**。左边缘对齐而不是居中 —— 两个
+     * 宽窄不同的方块很容易**中点撞在一起**（"就 说 哎哟"和"就 说 嗯"这两个就是这样），那样
+     * 两组的竖线还是会糊成一根，正是用户报的那件事；左边缘则只会在方块真的对得整整齐齐时
+     * 才重合。
+     *
+     * [MIN_BRANCH_DP] 那条下限是 1.38.0 的要求（"分支不与其他规则并列在开头"）：额外的「当」
+     * 挂在主行的**当**方块底下，而那个方块就在 x=0 —— 不留这条下限，那一行会和规则的开头
+     * 齐平。挂点指不到（坏数据、越界）就退回最左边，一个画得不对的图好过一个画不出来的图。
+     */
+    private fun columnOf(ruleIndex: Int): Float {
+        val d = drops.getOrNull(ruleIndex) ?: return 0f
+        if (d.parent !in 0 until ruleIndex) return 0f
+        val parentRow = rows.getOrNull(d.parent) ?: return 0f
+        val parent = parentRow.getOrNull(d.box) ?: parentRow.firstOrNull() ?: return 0f
+        return parent.rect.left.coerceAtLeast(MIN_BRANCH_DP * density)
     }
 
     private fun contentBounds(): RectF {
@@ -414,17 +441,19 @@ class LogicGraphView @JvmOverloads constructor(
             }
         }
 
+        // 挂线在方块**下面**（1.39.0 改的）：挂点下面隔着别的行时（主行的「就」和它的
+        // 「或者」之间还夹着「否则如果」那几行），这条线要从那些行后面穿过去 —— 压着卡片
+        // 画过去比藏起来难看得多。括号也在这下面，它本来就是个"底下那一层"的记号。
         drawBlocks(canvas)
+        drawDrops(canvas)
         for (p in placed) {
             drawNode(canvas, p)
         }
-        // The forks last, on top: a line the boxes hide under is a line nobody sees.
-        drawDrops(canvas)
         canvas.restore()
     }
 
     /**
-     * 每一块的括号：竖线立在**挂点行的左边缘**往里 6dp 那一列，上下带钩。
+     * 每一块的括号：竖线立在这一块**那一列的左边** 12dp，上下带钩。
      *
      * 只括"吊在下面的那几行"，不含它所属的那条主行 —— 括号的意思是"下面这些是一组"，
      * 而主行本来就是它们上面的那一行。
@@ -436,11 +465,9 @@ class LogicGraphView @JvmOverloads constructor(
         for (range in blocks) {
             val first = rows.getOrNull(range.first + 1)?.firstOrNull() ?: continue
             val last = rows.getOrNull(range.last)?.firstOrNull() ?: continue
-            // 括号贴着**挂点行的左边缘**往里一点点（不是"离分支半格"）：1.38.0 给挂线也
-            // 找了一条竖道（[drawDrops] 里那一条，在每一支左边 10dp），两条竖线挨太近就看成
-            // 一根了 —— 一个说"这是谁的分支"，一个说"从哪儿下来"，得看得出来是两件事。
-            val depth = depths.getOrElse(range.first) { 0 }
-            val x = depth * INDENT_DP * density + 6f * density
+            // 挂在同一个方块下面的那几行从同一个 x 开始（见 [columnOf]），所以"这一块的左边"
+            // 就是紧接着的那一行的左边 —— 括号站在它左边 12dp，不压住任何一个方块。
+            val x = (rowLefts.getOrNull(range.first + 1) ?: 0f) - BRACKET_DP * density
             val top = first.rect.top - 4f * density
             val bottom = last.rect.bottom + 4f * density
             canvas.drawLine(x, top, x, bottom, bracket)
@@ -451,42 +478,29 @@ class LogicGraphView @JvmOverloads constructor(
     }
 
     /**
-     * 向下挂的行：从上面那个方块底下吊一根线，拐进这一行的第一个方块（箭头指过去）。
+     * 向下挂的行：从挂点那个方块底边**这一列的位置**一条竖线下来，落进第一个方块的上边。
      *
      * 「否则」吊在**如果**底下（"这些如果都不成立时"），「或者」吊在**就**底下（"这一支的
-     * 备选"）—— 挂在哪一个方块下面 therefore 是有意思的，不是排版细节：用户看图的时候，
-     * 线的起点就是他问的问题。同一个方块下面挂好几行时，线会**并成一条主干再分叉**：
-     * 各画各的会得到一捆看不出关系的斜线。
+     * 备选"），额外的「当」吊在主行那个当底下 —— 挂在哪一个方块下面 therefore 是有意思的，
+     * 不是排版细节：用户看图的时候，线的起点就是他问的问题。而且现在这一行**就长在那个方块
+     * 底下**（[columnOf]），所以这条线是笔直的一条：挂点不同的两组分支，竖线也天然不在一
+     * 个 x 上（用户报的"「就」的并行和「否则」的并行共用一条线"就是这个）。
+     *
+     * 画在方块**下面**（见 [onDraw] 里的顺序）：挂点下面隔着一行（比如主行的「就」和它的
+     * 「或者」之间还夹着「否则如果」那几行）时，这条线会从别的行后面穿过去 —— 压着卡片画
+     * 过去比藏起来难看得多。
      */
     private fun drawDrops(canvas: Canvas) {
-        // 先按"从哪个方块下来"归堆，再一堆画一根主干。
-        val groups = LinkedHashMap<Pair<Int, Int>, MutableList<Int>>()
         for ((i, d) in drops.withIndex()) {
             if (d.parent < 0 || d.parent >= rows.size) continue
             if (i >= rows.size || i == d.parent) continue
-            groups.getOrPut(d.parent to d.box) { mutableListOf() }.add(i)
-        }
-        for ((from, below) in groups) {
-            val parentRow = rows.getOrNull(from.first) ?: continue
-            val parent = parentRow.getOrNull(from.second) ?: parentRow.firstOrNull() ?: continue
-            val x = (parent.rect.left + parent.rect.right) / 2f
-            val top = parent.rect.bottom
-            val heads = below.mapNotNull { rows.getOrNull(it)?.firstOrNull() }
-            if (heads.isEmpty()) continue
-            // 「向下后向右拐弯」（用户的原话）：主干不落在父方块正下方 —— 那会从中间穿过下面
-            // 那些行 —— 而是先在父方块底下横着挪到**每一支左边**的那条竖道，顺着竖道往下，
-            // 最后一支一支往右拐进去。分支缩进了 34dp，所以这条竖道正好落在它们左边。
-            val lane = minOf(x, heads.minOf { it.rect.left } - 10f * density)
-            val bottom = heads.maxOf { (it.rect.top + it.rect.bottom) / 2f }
-            canvas.drawLine(x, top, lane, top, fork)
-            canvas.drawLine(lane, top, lane, bottom, fork)
-            for (head in heads) {
-                val ty = (head.rect.top + head.rect.bottom) / 2f
-                val tx = head.rect.left
-                canvas.drawLine(lane, ty, tx, ty, fork)
-                canvas.drawLine(tx, ty, tx - 9f * density, ty - 5f * density, fork)
-                canvas.drawLine(tx, ty, tx - 9f * density, ty + 5f * density, fork)
-            }
+            val parentRow = rows.getOrNull(d.parent) ?: continue
+            val parent = parentRow.getOrNull(d.box) ?: parentRow.firstOrNull() ?: continue
+            val head = rows.getOrNull(i)?.firstOrNull() ?: continue
+            // 竖线站在**这一列**里（= 挂点方块的左边缘 + 6dp），不是挂点方块的中点：中点会
+            // 让两个宽窄不同的挂点撞到同一个 x 上（见 [columnOf]）。
+            val x = (rowLefts.getOrNull(i) ?: 0f) + TRUNK_DP * density
+            canvas.drawLine(x, parent.rect.bottom, x, head.rect.top, fork)
         }
     }
 

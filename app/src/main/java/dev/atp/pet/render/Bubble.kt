@@ -81,12 +81,18 @@ object Bubble {
     /**
      * 框的四条边：以"宠物头顶那一点"为底边中点，**向上**长。
      *
-     * 返回 [left, top, right, bottom]。夹在画布左右之内（`0..canvasWidth`）：气泡探出画布
-     * 一半在屏幕外，是"这句话没说全"的另一种样子。
+     * 返回 [left, top, right, bottom]。夹在**看得见的那一块世界**（`viewLeft..viewRight`）里：
+     * 气泡探出屏幕一半，是"这句话没说全"的另一种样子。
+     *
+     * 夹的是"看得见的那一块"，不是"角色那张画的画布"（1.39.0，用户报的"悬浮气泡被限定在了
+     * 一个区域内，没有跟着角色走"）：那只宠物的画布是 1024 宽，而它能在整块屏幕（测试场里是
+     * 6144 宽的世界）上走 —— 按画布夹，宠物一走出那 1024 的带子，气泡就**钉在带子边上不动
+     * 了**。区域本来就该是"你现在看得见的那一块"。
      */
-    fun box(x: Float, y: Float, size: Pair<Float, Float>, canvasWidth: Float): FloatArray {
+    fun box(x: Float, y: Float, size: Pair<Float, Float>, viewLeft: Float, viewRight: Float): FloatArray {
         val half = size.first / 2f
-        val left = (x - half).coerceIn(0f, (canvasWidth - size.first).coerceAtLeast(0f))
+        val rightMost = (viewRight - size.first).coerceAtLeast(viewLeft)
+        val left = (x - half).coerceIn(viewLeft, rightMost)
         val bottom = y - GAP
         return floatArrayOf(left, bottom - size.second, left + size.first, bottom)
     }

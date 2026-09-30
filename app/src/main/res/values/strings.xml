@@ -787,6 +787,7 @@
     <string name="logic_else_hint">上面每一级都不成立时走这一支。它自己没有「如果」—— 那正是它的意思。</string>
     <string name="logic_else_if_hint">第 %1$d 级「否则如果」：上面几级都不成立时才轮到问它。</string>
     <string name="logic_else_if_remove">删掉这一级「否则如果」</string>
+    <string name="logic_else_remove">删掉这一支「否则」</string>
     <string name="logic_alt_title">或者 %1$d</string>
     <string name="logic_alt_hint">「就」的一支备选。同一级的几支里**只挑一支做**，谁被挑中按权重算 —— 权重是相对值（1 / 2 / 3 就是 1:2:3 的机会），不用凑总数，填 0 就是这一支永远不挑。</string>
     <string name="logic_alt_weight">权重：%1$d</string>
@@ -813,6 +814,8 @@
     <string name="vocab_action_showImage">发一张图</string>
     <string name="logic_pick_image">发哪张图</string>
     <string name="logic_image_none">这一只还没有图。去「桌宠管理」里那一张卡上的「图片」加几张</string>
+    <string name="logic_image_upload">＋ 上传一张图</string>
+    <string name="logic_image_no_pet">现在编辑的不是某一只桌宠，图得存在桌宠自己的文件夹里</string>
     <string name="logic_image_hint">图存在这一只宠物自己的 images/ 文件夹里，名字就是规则里写的那个 —— 换骨骼套也还在。</string>
     <string name="pet_images_title">图片 · %1$s</string>
     <string name="pet_images_hint">规则「发一张图」用的图。名字就是你等下在规则里挑的那个 —— 取个短一点的，比如「生气」「比心」。</string>

@@ -242,6 +242,7 @@
     <string name="logic_else_hint">Taken when every level above it fails. It has no condition of its own — that is exactly what it means.</string>
     <string name="logic_else_if_hint">Else-if level %1$d: asked only when the levels above it all failed.</string>
     <string name="logic_else_if_remove">Delete this else-if level</string>
+    <string name="logic_else_remove">Delete this else branch</string>
     <string name="logic_alt_title">Or %1$d</string>
     <string name="logic_alt_hint">One alternative for this action list. Only ONE of the alternatives at a level is taken, chosen by weight — weights are relative (1 / 2 / 3 means 1:2:3 odds), they do not have to add up, and 0 means this one is never taken.</string>
     <string name="logic_alt_weight">Weight: %1$d</string>
@@ -272,6 +273,8 @@
     <string name="logic_pick_event">What happens</string>
     <string name="vocab_action_showImage">Send a picture</string>
     <string name="logic_pick_image">Which picture</string>
+    <string name="logic_image_upload">+ Upload an image</string>
+    <string name="logic_image_no_pet">This is not a single pet\'s rules — images live in a pet\'s own folder</string>
     <string name="pet_images_title">Pictures · %1$s</string>
     <string name="pet_images_add">+ Import picture</string>
     <string name="pet_images">Pictures</string>

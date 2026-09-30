@@ -1771,6 +1771,36 @@ def main():
            "val base = existing ?: AnimationSpec(id, name)" in activity
            and "base.copy(" in activity)
 
+    # 1.39.0，用户报的两件事：兜底那一支「否则」没有删除按钮、规则里"发一张图"没有上传入口。
+    print("== 兜底那一支「否则」也能删（用户报的）==")
+    report("弹窗里有一条「删掉这一支否则」，而且只在兜底那一支上出现",
+           "R.string.logic_else_remove" in activity
+           and "if (step.kind == Step.ELSE) {" in activity)
+    report("删的是那一支自己的动作（elseIfs 一级都不动，最后一行退回「＋否则」）",
+           "private fun removeElse(index: Int)" in activity
+           and "rule.copy(elseActions = emptyList(), elseWeight = 1)" in activity)
+    report("文案两种语言都有",
+           "logic_else_remove" in open(os.path.join(RES, "values/strings.xml"), encoding="utf-8").read()
+           and "logic_else_remove" in open(
+               os.path.join(RES, "values-en/strings.xml"), encoding="utf-8").read())
+
+    print("== 规则里「发一张图」能当场传一张（用户报的）==")
+    report("挑图那个列表第一行是「上传一张图」（不是「没有图就只说一声」）",
+           "R.string.logic_image_upload" in activity
+           and "listOf(upload) + images.map" in activity)
+    report("它有自己的一条路：导入完直接填进那一格动作（不用回来再挑一遍）",
+           "awaitingImageForAction = index to actionIndex" in activity
+           and "putAction(ri, ai, ActionSpec(ActionKind.SHOW_IMAGE.id, text = name))" in activity)
+    report("从别处（桌宠管理那张卡）传的还是回那张管理表，两条路分得清",
+           "if (forAction != null)" in activity and "askImages(folder)" in activity)
+    report("还没有图的时候，提示换成「这里就能传一张」（不是把人支使到另一页）",
+           "if (images.isEmpty()) getString(R.string.logic_image_none)" in activity)
+    report("文案两种语言都有",
+           all(k in open(os.path.join(RES, "values/strings.xml"), encoding="utf-8").read()
+               for k in ("logic_image_upload", "logic_image_no_pet"))
+           and all(k in open(os.path.join(RES, "values-en/strings.xml"), encoding="utf-8").read()
+                   for k in ("logic_image_upload", "logic_image_no_pet")))
+
     print()
     if FAILURES:
         print("%d failure(s)" % len(FAILURES))

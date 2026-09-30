@@ -603,7 +603,28 @@ def main():
            % world_width, consts.get("SCOPE_REACH", 0.0) >= world_width,
            "SCOPE_REACH = %s" % consts.get("SCOPE_REACH"))
 
-    print("== 6. 没有飞行中的子弹（hitscan 之后就没有了）==")
+    print("== 6. 镜筒让开顶部那排 chip（1.39.0，用户报的「部分UI有遮挡」）==")
+    main_kt = read(os.path.join(JAVA_DIR, "dev/atp/pet/MainActivity.kt"))
+    scope_top = kotlin_function(view, "scopeTop")
+    draw_scope = kotlin_function(view, "drawScope")
+    exit_rect = kotlin_function(view, "scopeExit")
+    report("顶部让出来的那一块是个字段（宿主按那排 chip 的实际高度喂进来）",
+           "var hudTopInset: Float = 0f" in view
+           and "private fun scopeTop(): Float = hudTopInset" in flat(scope_top))
+    report("遮罩从那一块**下面**开始（不是从 0 铺下来把那排 chip 压黑）",
+           "addRect(0f, top, width.toFloat(), height.toFloat()" in flat(draw_scope),
+           "遮罩的矩形：addRect(0f, top, …)")
+    report("圆心和半径也按「让开之后剩下的那一块」算（圆不会被工具栏切掉）",
+           "val cy = top + (height - top) / 2f" in flat(draw_scope)
+           and "min(cx, (height - top) / 2f) - SCOPE_RIM_DP * density" in flat(draw_scope))
+    report("两个按钮（擦掉印子 / 退出）排在那块**下面**，不压在 chip 上",
+           "scopeTop() + 12f * density" in flat(exit_rect)
+           and "scopeTop() + 42f * density" in flat(exit_rect))
+    report("宿主真的喂了：那一排 chip 的高度 → hudTopInset（布局变了会重新喂）",
+           "sandboxView.hudTopInset = (bottom - top).toFloat()" in flat(main_kt)
+           and "addOnLayoutChangeListener" in main_kt)
+
+    print("== 7. 没有飞行中的子弹（hitscan 之后就没有了）==")
     prop = "\n".join(read(os.path.join(PROP_DIR, n))
                      for n in sorted(os.listdir(PROP_DIR)) if n.endswith(".kt"))
     report("引擎里没有 bullet()（PropSpec / PropWorld 都算上）", "bullet(" not in prop.lower())
