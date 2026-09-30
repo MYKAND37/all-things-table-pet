@@ -296,6 +296,50 @@ def check_upper_case_names():
            not bad, "; ".join(bad[:5]))
 
 
+#: 全大写、但**不是本树声明的**名字：框架自带的那几个。子类可以裸写父类的静态常数，
+#: 所以它们一定找得到，而它们不在任何 .kt 里 —— 一条一个理由，加新的要写清楚。
+FRAMEWORK_CONSTANTS = {
+    "START_STICKY", "START_NOT_STICKY",        # Service 的返回值（PetOverlayService 裸写）
+    "NOTIFICATION_SERVICE",                    # Context 的系统服务名
+}
+
+
+def check_upper_case_declared():
+    """
+    一条全大写的名字**整棵树都没有声明**，就是编译不过 —— 1.39.0 又交了一次学费。
+
+    写「从规则里上传一张图」那一版时，常量名想好了、声明那一行忘了加：`IMAGE_UPLOAD` 用了
+    两次，`private const val IMAGE_UPLOAD` 一行都没写。本地 25 个检查全绿（Python 不看
+    Kotlin 的引用），CI 编不过 —— `Unresolved reference: IMAGE_UPLOAD`。
+
+    上面那条"离本树的某个名字只差一两个字母"抓不到它：`IMAGE_UPLOAD` 离谁都远，因为它压根
+    不存在。所以这一条问的是另一个问题：**这个名字在树里吗**。字符串与注释先剥掉（颜色写成
+    `"#FF171528"`、文件名写成 `"DISCLAIMER.md"` 都不算用了常数）。
+    """
+    declared = set()
+    files = list(kotlin_files())
+    for path in files:
+        text = open(path, encoding="utf-8").read()
+        declared |= set(re.findall(r"\b(?:const )?val ([A-Z][A-Z0-9_]*)\b", text))
+        declared |= set(re.findall(r"\b(?:object|class) ([A-Z][A-Z0-9_]*)\b", text))
+        declared |= set(re.findall(r"\bfun ([A-Z][A-Z0-9_]*)\b", text))
+        for body in re.findall(r"enum class \w+[^{]*\{([^}]*)\}", text, re.S):
+            declared |= set(re.findall(r"([A-Z][A-Z0-9_]*)\s*[,()\n]", body))
+    missing = []
+    for path in files:
+        text = open(path, encoding="utf-8").read()
+        imported = set(re.findall(r"^import\s+[\w.]*\b([A-Z][A-Z0-9_]*)\s*$", text, re.M))
+        for i, line in enumerate(strip_keep_lines(text).split("\n"), 1):
+            for m in re.finditer(r"(?<![\w.])[A-Z][A-Z0-9_]{2,}\b", line):
+                name = m.group(0)
+                if name in declared or name in imported or name in FRAMEWORK_CONSTANTS:
+                    continue
+                missing.append("%s:%d 用了 %s，整棵树里没有这个名字"
+                               % (os.path.basename(path), i, name))
+    report("全大写名字都真的存在（用了没声明的名字，CI 才会告诉你）",
+           not missing, "; ".join(sorted(set(missing))[:4]))
+
+
 def check_local_function_scope():
     """
     A function declared INSIDE another function cannot be called from a member function.
@@ -1125,6 +1169,7 @@ def main():
     check_qualified_platform_names()
     check_lambda_labels()
     check_upper_case_names()
+    check_upper_case_declared()
     check_local_function_scope()
     check_enum_when_exhaustive()
     report_hardcoded_text()

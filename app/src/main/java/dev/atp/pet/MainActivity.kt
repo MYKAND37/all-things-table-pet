@@ -10938,6 +10938,13 @@ class MainActivity : AppCompatActivity() {
          */
         const val REPO_URL = "https://github.com/MYKAND37/all-things-table-pet"
 
+        /**
+         * 「＋ 上传一张图」那一行在挑图列表里的 id（1.39.0）。
+         *
+         * 它不会和一张真图撞名：NUL 打不进文件名，而文件名正是列表里那些 id（`PartFiles.stem`）。
+         */
+        const val IMAGE_UPLOAD = "\u0000upload"
+
         /** The stick figure in an action-list row: solid when it is the one being held. */
         /** The colours a liquid can be. A palette, not a picker: nine swatches is a
          *  decision, a colour wheel is a hobby. White is in it because milk, cloud and

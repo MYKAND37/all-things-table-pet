@@ -406,6 +406,15 @@ TimelineView 里，而且那一段里同时出现 `hypot` 和这个常数）、�
 `scopeTop()` / `addRect(0f, top` / `hudTopInset` / `logic_else_remove` / `logic_image_upload` /
 `awaitingImageForAction`）都在**旧代码里找不到** —— 一条条对过，所以它们是真的能红。
 
+**这一版 CI 红了一次，于是本地多一条**（`tools/kotlin_check.py`）：我写了 `IMAGE_UPLOAD` 这个
+名字、忘了写它的声明，本地 25 个检查全绿（Python 不看 Kotlin 的引用），CI 编不过
+（`Unresolved reference: IMAGE_UPLOAD`）。上面那条"全大写名字离本树某个名字只差一两个字母"
+抓不到它 —— 它离谁都远，因为它压根不存在。新加的那条问的是另一个问题：**一条裸的全大写名字
+是不是整棵树都没有**（字符串和注释先剥掉，"#FF171528" 和 "DISCLAIMER.md" 不算用了常数；
+框架自带的那三个 —— `Service.START_STICKY` / `START_NOT_STICKY` / `Context.NOTIFICATION_SERVICE`
+—— 写在一份一条一个理由的名单里）。加完先拿**当时那段真代码**跑了一遍：它报的正是
+`MainActivity.kt:10039 用了 IMAGE_UPLOAD，整棵树里没有这个名字`，别的一个都没误报。
+
 ## 规则图的缩进与括号（1.38.0）
 
 **镜像**（`tools/graph_layout_check.py`，新，40 句 —— 头 7 句是把常数从源码里读出来比）：缩进（主行从 0、每一条分支比它挂的那一
